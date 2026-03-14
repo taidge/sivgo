@@ -1,0 +1,43 @@
+﻿<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+     xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.0.dtd"
+     width="400" height="300" viewBox="0 0 400 300">
+  <title>Inkscape-Specific Features</title>
+
+  <sodipodi:namedview
+     inkscape:document-units="px"
+     inkscape:zoom="1"
+     inkscape:cx="200"
+     inkscape:cy="150">
+    <inkscape:page x="0" y="0" width="400" height="300" inkscape:label="Page 1"/>
+  </sodipodi:namedview>
+
+  <defs>
+    <linearGradient id="lg1" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ff6b6b"/>
+      <stop offset="1" stop-color="#feca57"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Layer 1 -->
+  <g inkscape:groupmode="layer" inkscape:label="Background" id="layer1">
+    <rect width="400" height="300" fill="#f5f6fa"/>
+  </g>
+
+  <!-- Layer 2 -->
+  <g inkscape:groupmode="layer" inkscape:label="Shapes" id="layer2">
+    <rect x="50" y="50" width="120" height="80" fill="url(#lg1)" rx="8"/>
+
+    <circle cx="300" cy="90" r="40" fill="#48dbfb" stroke="#0abde3" stroke-width="2"/>
+
+    <!-- Use/clone -->
+    <use href="#layer2" x="0" y="150" opacity="0.3" transform="scale(0.5)"/>
+  </g>
+
+  <!-- Layer 3 -->
+  <g inkscape:groupmode="layer" inkscape:label="Text" id="layer3">
+    <text x="50" y="250" font-family="sans-serif" font-size="24" fill="#2c3e50" font-weight="bold">Sivgo Editor</text>
+    <text x="50" y="275" font-family="sans-serif" font-size="12" fill="#7f8c8d">Inkscape-compatible SVG editor in Rust</text>
+  </g>
+</svg>

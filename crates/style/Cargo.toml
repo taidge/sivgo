@@ -1,0 +1,8 @@
+﻿[package]
+name = "sivgo-style"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+sivgo-math = { workspace = true }
+sivgo-dom = { workspace = true }

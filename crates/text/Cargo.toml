@@ -1,0 +1,10 @@
+﻿[package]
+name = "sivgo-text"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+sivgo-math = { workspace = true }
+cosmic-text = { workspace = true }
+swash = { workspace = true }
+log = { workspace = true }

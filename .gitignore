@@ -1,0 +1,53 @@
+# Build artifacts
+**/target/
+**/*.rs.bk
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Environment & secrets
+.env
+.env.*
+*.pem
+*.key
+credentials.json
+
+# OS files
+*.pid
+*.seed
+*.log
+
+# Rust specific
+*.d
+*.rlib
+*.dylib
+*.so
+*.dll
+*.exe
+
+# Fuzz corpus (can be large)
+fuzz/corpus/
+fuzz/artifacts/
+
+# Database
+*.sqlite
+*.sqlite3
+*.db
+
+# Coverage
+lcov.info
+tarpaulin-report.html
+coverage/
+
+# Node / WASM build (if applicable)
+node_modules/
+dist/
+pkg/
+*.wasm.map

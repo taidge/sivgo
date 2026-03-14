@@ -1,0 +1,10 @@
+﻿[package]
+name = "sivgo-path-ops"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+sivgo-math = { workspace = true }
+sivgo-dom = { workspace = true }
+i_overlay = { workspace = true }
+kurbo = { workspace = true }

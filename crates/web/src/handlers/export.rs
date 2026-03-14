@@ -1,0 +1,116 @@
+﻿//! Server-side SVG export handler.
+//!
+//! Accepts SVG content, parses it with `sivgo-dom`, renders it with
+//! `sivgo-render`, and returns the result as PNG bytes or as cleaned SVG.
+
+use std::io::BufWriter;
+
+use salvo::prelude::*;
+
+use crate::errors::ApiError;
+use crate::models::*;
+
+/// `POST /api/v1/export`
+///
+/// Renders SVG content to the requested format and returns the result as
+/// a binary response. The request body is JSON:
+///
+/// ```json
+/// {
+///   "svg_content": "<svg ...>...</svg>",
+///   "format": "Png",
+///   "width": 800,
+///   "height": 600
+/// }
+/// ```
+#[handler]
+pub async fn export_document(req: &mut Request, res: &mut Response) {
+    let body: ExportRequest = match req.parse_json().await {
+        Ok(b) => b,
+        Err(e) => {
+            ApiError::bad_request(format!("Invalid request body: {e}")).write_to(res);
+            return;
+        }
+    };
+
+    // Parse the SVG content using sivgo-dom.
+    let doc = match sivgo_dom::parse_svg(&body.svg_content) {
+        Ok(d) => d,
+        Err(e) => {
+            ApiError::bad_request(format!("Invalid SVG: {e}")).write_to(res);
+            return;
+        }
+    };
+
+    match body.format {
+        ExportFormat::Svg => {
+            // Re-serialize the parsed SVG (this normalises it).
+            let xml = sivgo_dom::serialize_svg(&doc);
+            res.headers_mut()
+                .insert("content-type", "image/svg+xml".parse().unwrap());
+            res.headers_mut().insert(
+                "content-disposition",
+                "attachment; filename=\"export.svg\"".parse().unwrap(),
+            );
+            res.render(xml);
+        }
+        ExportFormat::Png => {
+            let width = body.width.unwrap_or(800);
+            let height = body.height.unwrap_or(600);
+
+            if width == 0 || height == 0 || width > 8192 || height > 8192 {
+                ApiError::bad_request("width and height must be 1..8192").write_to(res);
+                return;
+            }
+
+            // Render to premultiplied RGBA.
+            let premultiplied = sivgo_render::render_document_to_pixmap(&doc, width, height);
+
+            // Un-premultiply alpha for PNG.
+            let mut pixels = premultiplied;
+            for chunk in pixels.chunks_exact_mut(4) {
+                let a = chunk[3] as u16;
+                if a == 0 {
+                    chunk[0] = 0;
+                    chunk[1] = 0;
+                    chunk[2] = 0;
+                } else if a < 255 {
+                    chunk[0] = ((chunk[0] as u16 * 255 + a / 2) / a).min(255) as u8;
+                    chunk[1] = ((chunk[1] as u16 * 255 + a / 2) / a).min(255) as u8;
+                    chunk[2] = ((chunk[2] as u16 * 255 + a / 2) / a).min(255) as u8;
+                }
+            }
+
+            // Encode as PNG into an in-memory buffer.
+            let mut png_buf: Vec<u8> = Vec::new();
+            {
+                let buf_writer = BufWriter::new(&mut png_buf);
+                let mut encoder = png::Encoder::new(buf_writer, width, height);
+                encoder.set_color(png::ColorType::Rgba);
+                encoder.set_depth(png::BitDepth::Eight);
+                encoder.set_compression(png::Compression::Balanced);
+
+                let mut writer = match encoder.write_header() {
+                    Ok(w) => w,
+                    Err(e) => {
+                        ApiError::internal(format!("PNG encode error: {e}")).write_to(res);
+                        return;
+                    }
+                };
+
+                if let Err(e) = writer.write_image_data(&pixels) {
+                    ApiError::internal(format!("PNG write error: {e}")).write_to(res);
+                    return;
+                }
+            }
+
+            res.headers_mut()
+                .insert("content-type", "image/png".parse().unwrap());
+            res.headers_mut().insert(
+                "content-disposition",
+                "attachment; filename=\"export.png\"".parse().unwrap(),
+            );
+            res.body(png_buf);
+        }
+    }
+}

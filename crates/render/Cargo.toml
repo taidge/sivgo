@@ -1,0 +1,16 @@
+﻿[package]
+name = "sivgo-render"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+sivgo-math = { workspace = true }
+sivgo-dom = { workspace = true }
+sivgo-text = { path = "../text" }
+sivgo-filters = { path = "../filters" }
+tiny-skia = { workspace = true }
+tiny-skia-path = { workspace = true }
+log = { workspace = true }
+png = { workspace = true }
+base64 = { workspace = true }
+jpeg-decoder = { workspace = true }

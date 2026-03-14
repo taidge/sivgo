@@ -1,0 +1,21 @@
+﻿[package]
+name = "sivgo-io"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+sivgo-math = { workspace = true }
+sivgo-dom = { workspace = true }
+sivgo-render = { workspace = true }
+png = { workspace = true }
+log = { workspace = true }
+thiserror = { workspace = true }
+flate2 = "1"
+jpeg-encoder = "0.7"
+image = { workspace = true }
+base64 = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

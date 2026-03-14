@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300" viewBox="0 0 400 300">
+  <title>Gradients and Patterns</title>
+  <defs>
+    <!-- Linear gradient -->
+    <linearGradient id="grad1" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#e74c3c"/>
+      <stop offset="50%" stop-color="#f39c12"/>
+      <stop offset="100%" stop-color="#2ecc71"/>
+    </linearGradient>
+
+    <!-- Radial gradient -->
+    <radialGradient id="grad2" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#3498db"/>
+      <stop offset="100%" stop-color="#2c3e50"/>
+    </radialGradient>
+
+    <!-- Pattern -->
+    <pattern id="pat1" width="20" height="20" patternUnits="userSpaceOnUse">
+      <rect width="10" height="10" fill="#ecf0f1"/>
+      <rect x="10" y="10" width="10" height="10" fill="#ecf0f1"/>
+    </pattern>
+
+    <!-- Gradient with opacity stops -->
+    <linearGradient id="grad3" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#9b59b6" stop-opacity="1"/>
+      <stop offset="100%" stop-color="#9b59b6" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Linear gradient fill -->
+  <rect x="10" y="10" width="180" height="60" fill="url(#grad1)" stroke="#333" stroke-width="1"/>
+
+  <!-- Radial gradient fill -->
+  <circle cx="300" cy="40" r="40" fill="url(#grad2)"/>
+
+  <!-- Pattern fill -->
+  <rect x="10" y="90" width="180" height="60" fill="url(#pat1)" stroke="#bdc3c7" stroke-width="1"/>
+
+  <!-- Gradient with opacity -->
+  <rect x="210" y="90" width="180" height="60" fill="url(#grad3)" stroke="#8e44ad" stroke-width="1"/>
+
+  <!-- Gradient on stroke -->
+  <circle cx="100" cy="220" r="50" fill="none" stroke="url(#grad1)" stroke-width="6"/>
+
+  <!-- Multiple gradients -->
+  <ellipse cx="300" cy="220" rx="70" ry="40" fill="url(#grad2)" stroke="url(#grad1)" stroke-width="3"/>
+</svg>

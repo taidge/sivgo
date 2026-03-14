@@ -1,0 +1,25 @@
+﻿[package]
+name = "sivgo-desktop"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "sivgo"
+path = "src/main.rs"
+
+[dependencies]
+sivgo-dom = { workspace = true }
+sivgo-render = { workspace = true }
+sivgo-io = { workspace = true }
+sivgo-math = { workspace = true }
+sivgo-core = { workspace = true }
+sivgo-ui = { workspace = true }
+dioxus = { workspace = true }
+dioxus-desktop = { workspace = true }
+rfd = { workspace = true }
+clap = { workspace = true }
+env_logger = { workspace = true }
+log = { workspace = true }
+base64 = { workspace = true }
+png = { workspace = true }
+arboard = { workspace = true }

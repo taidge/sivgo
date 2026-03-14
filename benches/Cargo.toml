@@ -1,0 +1,12 @@
+﻿[package]
+name = "sivgo-benches"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[dependencies]
+sivgo-dom = { path = "../crates/dom" }
+
+[[bin]]
+name = "render_bench"
+path = "render_bench.rs"

@@ -1,0 +1,12 @@
+﻿[package]
+name = "sivgo-dom"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+sivgo-math = { workspace = true }
+roxmltree = { workspace = true }
+xmlwriter = { workspace = true }
+uuid = { workspace = true }
+thiserror = { workspace = true }
+log = { workspace = true }
