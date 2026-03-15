@@ -7,7 +7,9 @@ use sivgo_core::ToolId;
 struct ToolEntry {
     id: ToolId,
     icon: &'static str,
+    #[allow(dead_code)]
     label: &'static str,
+    #[allow(dead_code)]
     shortcut: &'static str,
     tooltip: &'static str,
 }
@@ -225,23 +227,14 @@ pub fn Toolbar(active_tool: ToolId, on_tool_change: EventHandler<ToolId>) -> Ele
 
     rsx! {
         div { class: "toolbar",
-            for (group_label, entries) in groups {
+            for (_group_label, entries) in groups {
                 div { class: "toolbar-group",
-                    div { class: "toolbar-group-label", "{group_label}" }
                     for entry in entries {
                         button {
                             class: if active_tool == entry.id { "tool-btn active" } else { "tool-btn" },
                             title: "{entry.tooltip}",
                             onclick: move |_| on_tool_change.call(entry.id),
-                            div { class: "tool-btn-main",
-                                span { class: "tool-icon", "{entry.icon}" }
-                                div { class: "tool-meta",
-                                    span { class: "tool-label", "{entry.label}" }
-                                    if !entry.shortcut.is_empty() {
-                                        span { class: "tool-shortcut", "{entry.shortcut}" }
-                                    }
-                                }
-                            }
+                            span { class: "tool-icon", "{entry.icon}" }
                         }
                     }
                 }

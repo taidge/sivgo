@@ -129,8 +129,15 @@ impl ToolManager {
     }
 
     /// Switch to a different tool.
+    ///
+    /// If the target tool has not been registered, the switch is silently
+    /// ignored so that the engine never enters a state where the active
+    /// tool id has no backing implementation.
     pub fn switch_to(&mut self, id: ToolId) {
         if id == self.active {
+            return;
+        }
+        if !self.tools.contains_key(&id) {
             return;
         }
         if let Some(tool) = self.tools.get_mut(&self.active) {

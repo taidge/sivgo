@@ -56,11 +56,9 @@ pub fn LayersPanel(layers: Vec<LayerEntry>, on_action: EventHandler<LayerAction>
         div { class: "layers-panel",
             div { class: "panel-header",
                 div { class: "panel-title-wrap",
-                    span { class: "panel-kicker", "Structure" }
                     h3 { class: "panel-title", "Layers" }
-                    p { class: "panel-meta", "Visibility, locking, blend mode, and stacking order for the document tree." }
                 }
-                span { class: "panel-badge", "{layers.len()} items" }
+                span { class: "panel-badge", "{layers.len()}" }
             }
             div { class: "layers-list",
                 for (idx, entry) in layers.iter().enumerate() {
@@ -162,8 +160,8 @@ pub fn LayersPanel(layers: Vec<LayerEntry>, on_action: EventHandler<LayerAction>
                 }
                 if layers.is_empty() {
                     div { class: "layer-empty",
-                        span { class: "empty-title", "No layers yet" }
-                        span { "As objects and named layers appear in the document, this stack becomes the primary place to manage order and visibility." }
+                        span { class: "empty-title", "No layers" }
+                        span { "Add objects to the canvas to populate the layer list." }
                     }
                 }
             }

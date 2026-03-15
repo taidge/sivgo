@@ -151,9 +151,7 @@ pub fn PropertiesPanel(
             div { class: "properties-panel",
                 div { class: "panel-header",
                     div { class: "panel-title-wrap",
-                        span { class: "panel-kicker", "Inspector" }
                         h3 { class: "panel-title", "Fill & Stroke" }
-                        p { class: "panel-meta", "Color, opacity, stroke profile, and marker controls for the active object." }
                     }
                     div { class: "panel-swatch-pair",
                         span { class: "panel-swatch", style: fill_preview_style.clone() }
@@ -161,8 +159,8 @@ pub fn PropertiesPanel(
                     }
                 }
                 div { class: "prop-empty",
-                    span { class: "empty-title", "Select an object to inspect it" }
-                    span { "The fill, stroke, and marker controls appear here as soon as the canvas has an active selection." }
+                    span { class: "empty-title", "No selection" }
+                    span { "Select an object to edit its properties." }
                 }
             }
         };
@@ -178,9 +176,7 @@ pub fn PropertiesPanel(
         div { class: "properties-panel",
             div { class: "panel-header",
                 div { class: "panel-title-wrap",
-                    span { class: "panel-kicker", "Inspector" }
                     h3 { class: "panel-title", "Fill & Stroke" }
-                    p { class: "panel-meta", "Fine-tune paint, stroke weight, line endings, and SVG markers in one place." }
                 }
                 div { class: "panel-swatch-pair",
                     span { class: "panel-swatch", style: fill_preview_style }
@@ -192,7 +188,6 @@ pub fn PropertiesPanel(
             div { class: "prop-section",
                 div { class: "prop-section-header-row",
                     div { class: "prop-section-header", "Fill" }
-                    span { class: "panel-badge", "Primary paint" }
                 }
 
                 // Paint type tabs
@@ -269,7 +264,6 @@ pub fn PropertiesPanel(
             div { class: "prop-section",
                 div { class: "prop-section-header-row",
                     div { class: "prop-section-header", "Stroke" }
-                    span { class: "panel-badge", "Edge profile" }
                 }
 
                 // Paint type tabs
@@ -444,7 +438,6 @@ pub fn PropertiesPanel(
             div { class: "prop-section",
                 div { class: "prop-section-header-row",
                     div { class: "prop-section-header", "Markers" }
-                    span { class: "panel-badge", "Directional cues" }
                 }
 
                 div { class: "prop-row",
