@@ -1,4 +1,4 @@
-﻿//! `sivgo` -- Sivgo SVG vector graphics editor (desktop application).
+//! `sivgo` -- Sivgo SVG vector graphics editor (desktop application).
 //!
 //! Supports two modes:
 //!
@@ -38,22 +38,29 @@ const CANVAS_HEIGHT: u32 = 600;
 /// Embedded CSS for the desktop editor chrome.
 const CSS: &str = r#"
 :root {
-    --bg-0: #091318;
-    --bg-1: #102027;
-    --bg-2: #162d36;
-    --panel: rgba(14, 28, 35, 0.8);
-    --panel-strong: rgba(11, 24, 30, 0.94);
+    --bg-0: #061218;
+    --bg-1: #0b1c23;
+    --bg-2: #122730;
+    --panel: rgba(9, 22, 28, 0.78);
+    --panel-strong: rgba(7, 18, 24, 0.92);
     --panel-edge: rgba(255, 255, 255, 0.08);
-    --ink-0: #eff6f3;
-    --ink-1: #bfd1cb;
-    --ink-2: #87a39f;
+    --panel-edge-strong: rgba(255, 255, 255, 0.14);
+    --ink-0: #edf7f3;
+    --ink-1: #c0d4cd;
+    --ink-2: #8ca8a0;
+    --ink-3: #6b8680;
     --accent: #ff8a5b;
-    --accent-strong: #ff6d3f;
+    --accent-strong: #ff6b3d;
     --accent-soft: rgba(255, 138, 91, 0.16);
-    --teal-soft: rgba(112, 198, 187, 0.18);
+    --accent-outline: rgba(255, 138, 91, 0.34);
+    --teal: #74d0c4;
+    --teal-soft: rgba(116, 208, 196, 0.14);
     --canvas-surface: #f3eadb;
-    --shadow-lg: 0 18px 44px rgba(0, 0, 0, 0.32);
-    --shadow-xl: 0 28px 80px rgba(0, 0, 0, 0.42);
+    --canvas-edge: rgba(12, 24, 28, 0.22);
+    --shadow-lg: 0 20px 48px rgba(0, 0, 0, 0.34);
+    --shadow-xl: 0 28px 84px rgba(0, 0, 0, 0.44);
+    --transition-fast: 160ms ease;
+    --transition-med: 220ms ease;
 }
 
 * {
@@ -74,21 +81,50 @@ body {
     color: var(--ink-0);
     user-select: none;
     background:
-        radial-gradient(circle at 10% 10%, rgba(255, 138, 91, 0.14), transparent 24%),
-        radial-gradient(circle at 92% 18%, rgba(112, 198, 187, 0.16), transparent 18%),
-        linear-gradient(145deg, #081116 0%, #10232a 44%, #0f1d24 100%);
+        radial-gradient(circle at 10% 12%, rgba(255, 138, 91, 0.14), transparent 24%),
+        radial-gradient(circle at 88% 14%, rgba(116, 208, 196, 0.18), transparent 20%),
+        radial-gradient(circle at 50% 100%, rgba(255, 255, 255, 0.04), transparent 32%),
+        linear-gradient(145deg, #051015 0%, #0b1b22 42%, #10232b 100%);
 }
 
 button,
 input,
 select {
     font: inherit;
+    color: inherit;
 }
 
 button {
     border: none;
     background: none;
-    color: inherit;
+}
+
+input,
+select {
+    outline: none;
+}
+
+option {
+    background: #10242d;
+    color: var(--ink-0);
+}
+
+*::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.03);
+}
+
+*::-webkit-scrollbar-thumb {
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.12);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.22);
 }
 
 .app {
@@ -98,6 +134,7 @@ button {
     height: 100vh;
     padding: 18px 18px 14px;
     gap: 14px;
+    min-width: 0;
 }
 
 .topbar,
@@ -108,19 +145,53 @@ button {
     border: 1px solid var(--panel-edge);
     background:
         linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent),
-        linear-gradient(180deg, rgba(17, 40, 48, 0.96), rgba(11, 24, 31, 0.92));
+        linear-gradient(180deg, rgba(15, 33, 40, 0.96), rgba(8, 20, 26, 0.94));
     box-shadow: var(--shadow-lg);
     backdrop-filter: blur(18px);
 }
 
 .topbar {
     display: grid;
-    grid-template-columns: minmax(280px, 1.2fr) minmax(360px, 1.5fr) minmax(220px, 0.9fr);
-    align-items: center;
+    grid-template-columns: minmax(300px, 1.05fr) minmax(420px, 1.35fr) minmax(260px, 0.9fr);
     gap: 18px;
-    min-height: 104px;
-    padding: 18px 22px;
-    border-radius: 28px;
+    min-height: 138px;
+    padding: 20px 22px;
+    border-radius: 30px;
+}
+
+.topbar-main,
+.topbar-side,
+.brand-copy,
+.rail-head,
+.inspector-head,
+.meta-stack,
+.tool-meta,
+.panel-title-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.brand-kicker,
+.rail-eyebrow,
+.inspector-kicker,
+.meta-kicker,
+.metric-label,
+.stage-kicker,
+.canvas-hud-kicker,
+.panel-kicker,
+.layer-control-label,
+.status-label,
+.rail-spotlight-label,
+.rail-footer-label,
+.inspector-card-label,
+.toolbar-group-label,
+.doc-badge {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--ink-2);
 }
 
 .brand-block {
@@ -132,63 +203,99 @@ button {
 .brand-mark {
     display: grid;
     place-items: center;
-    width: 56px;
-    height: 56px;
-    border-radius: 18px;
-    background: linear-gradient(145deg, var(--accent), var(--accent-strong));
+    width: 62px;
+    height: 62px;
+    border-radius: 20px;
+    background:
+        radial-gradient(circle at 28% 20%, rgba(255, 255, 255, 0.18), transparent 36%),
+        linear-gradient(145deg, var(--accent), var(--accent-strong));
     color: #fff8f4;
-    font-size: 24px;
+    font-size: 22px;
     font-weight: 800;
-    letter-spacing: 0.08em;
-    box-shadow: 0 16px 28px rgba(255, 109, 63, 0.3);
-}
-
-.brand-copy,
-.rail-head,
-.inspector-head,
-.meta-stack,
-.tool-meta {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-}
-
-.brand-kicker,
-.rail-eyebrow,
-.inspector-kicker,
-.meta-kicker,
-.toolbar-group-label,
-.panel-header,
-.layer-control-label {
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.2em;
-    text-transform: uppercase;
-    color: var(--ink-2);
+    letter-spacing: 0.1em;
+    box-shadow: 0 18px 30px rgba(255, 109, 63, 0.28);
 }
 
 .brand-title,
 .rail-title,
-.inspector-title {
+.inspector-title,
+.stage-title {
     letter-spacing: 0.04em;
 }
 
 .brand-title {
-    font-size: 24px;
+    font-size: 28px;
     line-height: 1;
     text-transform: uppercase;
 }
 
-.doc-title,
+.doc-strip {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+}
+
+.doc-title {
+    color: var(--ink-0);
+    font-size: 15px;
+    font-weight: 600;
+}
+
+.doc-badge,
+.top-chip,
+.stage-chip,
+.paint-tab,
+.panel-badge {
+    display: inline-flex;
+    align-items: center;
+    height: 30px;
+    padding: 0 12px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--ink-1);
+}
+
+.doc-badge.warning {
+    background: rgba(255, 138, 91, 0.12);
+    border-color: rgba(255, 138, 91, 0.28);
+    color: #ffd0c0;
+}
+
+.brand-description,
 .rail-copy,
 .inspector-copy,
+.session-copy,
+.metric-copy,
+.panel-meta,
+.canvas-hud-copy,
+.inspector-card-copy,
 .status-item {
     color: var(--ink-1);
 }
 
+.brand-description,
+.rail-copy,
+.inspector-copy,
+.session-copy,
+.panel-meta,
+.canvas-hud-copy,
+.inspector-card-copy {
+    line-height: 1.55;
+}
+
 .topbar-actions {
     display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 12px;
+}
+
+.action-row {
+    display: flex;
     flex-wrap: wrap;
+    align-items: center;
     justify-content: center;
     gap: 10px;
 }
@@ -204,7 +311,7 @@ button {
 }
 
 .quick-btn {
-    min-width: 74px;
+    min-width: 78px;
     height: 38px;
     padding: 0 14px;
     border-radius: 14px;
@@ -212,7 +319,11 @@ button {
     background: rgba(255, 255, 255, 0.04);
     color: var(--ink-0);
     cursor: pointer;
-    transition: transform 160ms ease, background 160ms ease, border-color 160ms ease;
+    transition:
+        transform var(--transition-fast),
+        background var(--transition-fast),
+        border-color var(--transition-fast),
+        box-shadow var(--transition-fast);
 }
 
 .quick-btn:hover:not(:disabled) {
@@ -229,44 +340,120 @@ button {
 .quick-btn.primary {
     background: linear-gradient(135deg, var(--accent), var(--accent-strong));
     color: #fff8f4;
+    box-shadow: 0 14px 24px rgba(255, 107, 61, 0.22);
 }
 
-.topbar-meta,
-.stage-chip-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
+.quick-btn.subtle {
+    background: rgba(116, 208, 196, 0.08);
+    border-color: rgba(116, 208, 196, 0.18);
 }
 
-.topbar-meta {
-    justify-content: flex-end;
-}
-
-.top-chip,
-.stage-chip,
-.paint-tab {
-    display: inline-flex;
-    align-items: center;
-    height: 30px;
-    padding: 0 12px;
-    border-radius: 999px;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    background: rgba(255, 255, 255, 0.04);
-    color: var(--ink-1);
-}
-
+.quick-btn.active,
 .top-chip.active,
 .stage-chip.active,
 .paint-tab.active {
     background: var(--accent-soft);
-    border-color: rgba(255, 138, 91, 0.32);
+    border-color: var(--accent-outline);
     color: #ffd3c3;
+}
+
+.metric-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+}
+
+.metric-card,
+.session-card,
+.rail-spotlight,
+.inspector-card,
+.canvas-stat,
+.stage-footer-item,
+.status-cluster {
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    background: rgba(255, 255, 255, 0.035);
+}
+
+.metric-card {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 14px 16px;
+    border-radius: 22px;
+}
+
+.metric-card.accent {
+    background: linear-gradient(180deg, rgba(255, 138, 91, 0.12), rgba(255, 138, 91, 0.04));
+    border-color: var(--accent-outline);
+}
+
+.metric-value {
+    font-size: 24px;
+    line-height: 1;
+    font-weight: 700;
+    color: var(--ink-0);
+}
+
+.metric-copy {
+    line-height: 1.45;
+}
+
+.topbar-side {
+    justify-content: center;
+    gap: 12px;
+}
+
+.session-card {
+    display: grid;
+    grid-template-columns: 54px minmax(0, 1fr);
+    gap: 14px;
+    align-items: center;
+    padding: 14px 16px;
+    border-radius: 24px;
+}
+
+.session-tool-mark,
+.rail-spotlight-mark {
+    display: grid;
+    place-items: center;
+    border-radius: 18px;
+    background:
+        radial-gradient(circle at 30% 20%, rgba(255, 255, 255, 0.18), transparent 38%),
+        linear-gradient(145deg, rgba(255, 138, 91, 0.2), rgba(116, 208, 196, 0.18));
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: #fff8f4;
+    font-weight: 800;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.session-tool-mark {
+    width: 54px;
+    height: 54px;
+    font-size: 16px;
+}
+
+.session-title {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--ink-0);
+}
+
+.topbar-meta,
+.stage-chip-row,
+.stage-mode-buttons,
+.canvas-swatch-row,
+.inspector-swatch-row,
+.status-section {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
 }
 
 .workspace {
     display: grid;
-    grid-template-columns: 118px minmax(0, 1fr) 336px;
-    gap: 14px;
+    grid-template-columns: 142px minmax(0, 1fr) 360px;
+    gap: 16px;
     min-height: 0;
     flex: 1;
 }
@@ -276,20 +463,57 @@ button {
     display: flex;
     flex-direction: column;
     min-height: 0;
-    padding: 16px 14px 14px;
-    border-radius: 28px;
+    padding: 18px 16px 16px;
+    border-radius: 30px;
 }
 
 .toolbar,
 .right-panels {
     flex: 1;
     min-height: 0;
-    overflow-y: auto;
+    overflow: auto;
+    padding-right: 2px;
+}
+
+.rail-title,
+.inspector-title {
+    font-size: 21px;
+    color: var(--ink-0);
+}
+
+.rail-spotlight {
+    display: grid;
+    grid-template-columns: 56px minmax(0, 1fr);
+    gap: 12px;
+    align-items: center;
+    margin: 14px 0 16px;
+    padding: 14px;
+    border-radius: 24px;
+}
+
+.rail-spotlight-mark {
+    width: 56px;
+    height: 56px;
+    font-size: 16px;
+}
+
+.rail-spotlight-value {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--ink-0);
+}
+
+.rail-footer {
+    margin-top: 14px;
+    padding: 14px;
+    border-radius: 22px;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    background: rgba(255, 255, 255, 0.025);
 }
 
 .toolbar-group {
     margin-bottom: 16px;
-    padding-top: 10px;
+    padding-top: 12px;
     border-top: 1px solid rgba(255, 255, 255, 0.04);
 }
 
@@ -305,26 +529,33 @@ button {
 .tool-btn {
     width: 100%;
     margin-bottom: 8px;
-    padding: 10px;
+    padding: 11px;
     border-radius: 18px;
     border: 1px solid rgba(255, 255, 255, 0.05);
     background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.015));
     cursor: pointer;
+    transition:
+        transform var(--transition-fast),
+        border-color var(--transition-fast),
+        background var(--transition-fast),
+        box-shadow var(--transition-fast);
 }
 
 .tool-btn:hover {
+    transform: translateY(-1px);
     border-color: rgba(255, 255, 255, 0.12);
     background: linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.025));
 }
 
 .tool-btn.active {
-    border-color: rgba(255, 138, 91, 0.34);
+    border-color: var(--accent-outline);
     background: linear-gradient(180deg, rgba(255, 138, 91, 0.16), rgba(255, 138, 91, 0.08));
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
 .tool-btn-main {
     display: grid;
-    grid-template-columns: 28px minmax(0, 1fr);
+    grid-template-columns: 30px minmax(0, 1fr);
     align-items: center;
     gap: 10px;
 }
@@ -332,8 +563,10 @@ button {
 .tool-icon {
     display: grid;
     place-items: center;
-    width: 28px;
-    height: 28px;
+    width: 30px;
+    height: 30px;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.04);
     font-size: 16px;
     color: #fff7f1;
 }
@@ -362,33 +595,63 @@ button {
 }
 
 .stage-bar {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 14px;
-    padding: 16px 20px 14px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 16px;
+    padding: 18px 22px 16px;
     border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.stage-title {
+    font-size: 22px;
+    color: var(--ink-0);
+}
+
+.stage-copy {
+    margin-top: 4px;
+    max-width: 58ch;
+    color: var(--ink-1);
+    line-height: 1.55;
+}
+
+.stage-actions {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: flex-end;
+    gap: 12px;
 }
 
 .canvas-frame {
     position: relative;
     flex: 1;
     min-height: 0;
-    padding: 20px;
+    padding: 28px;
+    overflow: hidden;
     background:
         linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent),
-        linear-gradient(180deg, rgba(6, 15, 19, 0.38), rgba(6, 15, 19, 0.64));
+        linear-gradient(180deg, rgba(6, 15, 19, 0.44), rgba(6, 15, 19, 0.72));
 }
 
 .canvas-frame::before {
     content: "";
     position: absolute;
-    inset: 22px;
-    border-radius: 28px;
+    inset: 24px;
+    border-radius: 30px;
     background:
-        repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.03) 0, rgba(255, 255, 255, 0.03) 1px, transparent 1px, transparent 26px),
-        repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.03) 0, rgba(255, 255, 255, 0.03) 1px, transparent 1px, transparent 26px);
+        repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.03) 0, rgba(255, 255, 255, 0.03) 1px, transparent 1px, transparent 28px),
+        repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.03) 0, rgba(255, 255, 255, 0.03) 1px, transparent 1px, transparent 28px);
     opacity: 0.32;
+    pointer-events: none;
+}
+
+.canvas-frame::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background:
+        radial-gradient(circle at 50% 42%, rgba(255, 138, 91, 0.08), transparent 32%),
+        radial-gradient(circle at 14% 88%, rgba(116, 208, 196, 0.08), transparent 26%);
     pointer-events: none;
 }
 
@@ -400,16 +663,22 @@ button {
     justify-content: center;
     width: 100%;
     height: 100%;
-    border-radius: 26px;
+    padding: 42px;
+    border-radius: 30px;
+    border: 1px solid rgba(255, 255, 255, 0.04);
+    background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent),
+        linear-gradient(180deg, rgba(12, 23, 29, 0.56), rgba(9, 20, 24, 0.74));
+    overflow: hidden;
 }
 
 .canvas-container::before {
     content: "";
     position: absolute;
-    width: min(72vw, 820px);
-    height: min(72vw, 820px);
+    width: min(70vw, 840px);
+    height: min(70vw, 840px);
     background: radial-gradient(circle, rgba(255, 138, 91, 0.12), transparent 62%);
-    filter: blur(18px);
+    filter: blur(22px);
     pointer-events: none;
 }
 
@@ -418,40 +687,181 @@ button {
     z-index: 1;
     max-width: 100%;
     max-height: 100%;
-    border-radius: 18px;
-    border: 1px solid rgba(23, 37, 47, 0.22);
+    border-radius: 20px;
+    border: 1px solid var(--canvas-edge);
     background: var(--canvas-surface);
-    box-shadow: 0 24px 46px rgba(0, 0, 0, 0.32), 0 0 0 14px rgba(243, 234, 219, 0.04);
+    box-shadow: 0 28px 50px rgba(0, 0, 0, 0.34), 0 0 0 14px rgba(243, 234, 219, 0.05);
     cursor: crosshair;
+    transition:
+        transform var(--transition-med),
+        box-shadow var(--transition-med);
+}
+
+.canvas-container img:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 32px 58px rgba(0, 0, 0, 0.38), 0 0 0 14px rgba(243, 234, 219, 0.05);
+}
+
+.canvas-hud {
+    position: absolute;
+    z-index: 2;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 220px;
+    max-width: 280px;
+    padding: 16px 18px;
+    border-radius: 22px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(6, 17, 22, 0.62);
+    box-shadow: 0 16px 32px rgba(0, 0, 0, 0.22);
+    backdrop-filter: blur(14px);
+    pointer-events: none;
+}
+
+.canvas-hud.top-left {
+    top: 34px;
+    left: 34px;
+}
+
+.canvas-hud.top-right {
+    top: 34px;
+    right: 34px;
+}
+
+.canvas-hud.bottom-left {
+    bottom: 34px;
+    left: 34px;
+}
+
+.canvas-hud.bottom-right {
+    bottom: 34px;
+    right: 34px;
+}
+
+.canvas-hud-title {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--ink-0);
+}
+
+.canvas-stat-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.canvas-stat {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 10px 12px;
+    border-radius: 16px;
+}
+
+.canvas-stat-label {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--ink-2);
+}
+
+.canvas-stat-value {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--ink-0);
+}
+
+.canvas-swatch {
+    width: 20px;
+    height: 20px;
+    border-radius: 7px;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.stage-footer {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 22px 18px;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.stage-footer-item {
+    min-height: 32px;
+    padding: 0 12px;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    color: var(--ink-1);
 }
 
 .inspector-shell {
-    border-radius: 28px;
+    border-radius: 30px;
+}
+
+.inspector-overview {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+    margin: 14px 0;
+}
+
+.inspector-card {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 14px 16px;
+    border-radius: 22px;
+}
+
+.inspector-card.wide {
+    grid-column: 1 / -1;
+}
+
+.inspector-card-value {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--ink-0);
+}
+
+.inspector-swatch {
+    width: 18px;
+    height: 18px;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.16);
 }
 
 .right-panels {
     display: flex;
     flex-direction: column;
-    gap: 12px;
-    padding-right: 2px;
+    gap: 14px;
 }
 
 .properties-panel,
 .layers-panel {
-    border-radius: 22px;
+    border-radius: 24px;
     border: 1px solid rgba(255, 255, 255, 0.05);
     background: rgba(8, 18, 23, 0.56);
     overflow: hidden;
 }
 
 .panel-header {
-    padding: 14px 16px;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 16px 18px;
     border-bottom: 1px solid rgba(255, 255, 255, 0.05);
     background: rgba(255, 255, 255, 0.03);
 }
 
 .prop-section {
-    padding: 14px 16px 16px;
+    padding: 16px 18px;
     border-bottom: 1px solid rgba(255, 255, 255, 0.04);
 }
 
@@ -459,8 +869,36 @@ button {
     border-bottom: none;
 }
 
-.prop-section-header {
+.panel-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--ink-0);
+    letter-spacing: 0.02em;
+}
+
+.panel-swatch-pair {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.panel-swatch {
+    width: 18px;
+    height: 18px;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.prop-section-header-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
     margin-bottom: 12px;
+}
+
+.prop-section-header {
     color: #f6faf7;
     font-size: 13px;
     font-weight: 700;
@@ -475,6 +913,15 @@ button {
 
 .paint-tab {
     cursor: pointer;
+    transition:
+        border-color var(--transition-fast),
+        background var(--transition-fast),
+        color var(--transition-fast);
+}
+
+.paint-tab:hover {
+    border-color: rgba(255, 255, 255, 0.14);
+    background: rgba(255, 255, 255, 0.08);
 }
 
 .prop-row,
@@ -485,17 +932,25 @@ button {
 }
 
 .prop-row {
-    grid-template-columns: 72px minmax(0, 1fr) auto;
-    margin-bottom: 10px;
+    grid-template-columns: 88px minmax(0, 1fr) auto;
+    margin-bottom: 12px;
 }
 
-.prop-row:last-child {
+.prop-row:last-child,
+.prop-color-row:last-child {
     margin-bottom: 0;
+}
+
+.prop-color-row {
+    display: grid;
+    grid-template-columns: 48px minmax(0, 1fr);
+    gap: 10px;
+    margin-bottom: 12px;
 }
 
 .layer-controls {
     grid-column: 1 / -1;
-    grid-template-columns: 54px minmax(0, 1fr) auto;
+    grid-template-columns: 64px minmax(0, 1fr) auto;
 }
 
 .prop-label,
@@ -509,19 +964,26 @@ button {
 .prop-hex-input,
 .prop-select,
 .layer-blend-select {
-    height: 34px;
+    height: 38px;
     width: 100%;
     padding: 0 12px;
     border-radius: 12px;
     border: 1px solid rgba(255, 255, 255, 0.08);
     background: rgba(255, 255, 255, 0.04);
     color: var(--ink-0);
-    outline: none;
 }
 
 .prop-color {
-    width: 44px;
     padding: 0;
+    overflow: hidden;
+}
+
+.prop-input:focus,
+.prop-hex-input:focus,
+.prop-select:focus,
+.layer-blend-select:focus {
+    border-color: var(--accent-outline);
+    box-shadow: 0 0 0 3px rgba(255, 138, 91, 0.12);
 }
 
 .prop-slider,
@@ -532,14 +994,24 @@ button {
 
 .prop-value,
 .layer-opacity-value {
+    min-width: 42px;
+    text-align: right;
     color: var(--ink-1);
     font-variant-numeric: tabular-nums;
 }
 
 .prop-empty,
 .layer-empty {
-    padding: 18px 16px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 20px 18px 22px;
     line-height: 1.6;
+}
+
+.empty-title {
+    color: var(--ink-0);
+    font-weight: 700;
 }
 
 .layers-list {
@@ -548,16 +1020,25 @@ button {
 
 .layer-item {
     display: grid;
-    grid-template-columns: 28px 28px minmax(0, 1fr) 24px 24px;
-    gap: 8px;
-    padding: 12px;
+    grid-template-columns: 32px 32px minmax(0, 1fr) 28px 28px;
+    gap: 10px;
+    padding: 14px;
     margin-bottom: 10px;
-    border-radius: 18px;
+    border-radius: 20px;
     border: 1px solid rgba(255, 255, 255, 0.04);
     background: rgba(255, 255, 255, 0.02);
+    transition:
+        border-color var(--transition-fast),
+        background var(--transition-fast),
+        transform var(--transition-fast);
+}
+
+.layer-item:last-child {
+    margin-bottom: 0;
 }
 
 .layer-item:hover {
+    transform: translateY(-1px);
     border-color: rgba(255, 255, 255, 0.1);
     background: rgba(255, 255, 255, 0.04);
 }
@@ -568,13 +1049,21 @@ button {
 }
 
 .layer-btn {
-    width: 28px;
-    height: 28px;
-    border-radius: 10px;
+    width: 32px;
+    height: 32px;
+    border-radius: 11px;
     border: 1px solid rgba(255, 255, 255, 0.06);
     background: rgba(255, 255, 255, 0.03);
     color: var(--ink-1);
     cursor: pointer;
+    transition:
+        border-color var(--transition-fast),
+        background var(--transition-fast);
+}
+
+.layer-btn:hover:not(:disabled) {
+    border-color: rgba(255, 255, 255, 0.12);
+    background: rgba(255, 255, 255, 0.08);
 }
 
 .layer-btn:disabled {
@@ -582,21 +1071,104 @@ button {
     cursor: default;
 }
 
-.layer-label {
+.layer-label-wrap {
     display: flex;
-    align-items: center;
+    flex-direction: column;
+    justify-content: center;
+    gap: 4px;
+    min-width: 0;
+    cursor: pointer;
+}
+
+.layer-label {
     min-width: 0;
     font-weight: 700;
-    cursor: pointer;
+    color: var(--ink-0);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.layer-meta {
+    color: var(--ink-2);
+    font-size: 11px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .status-bar {
     display: flex;
     align-items: center;
-    gap: 18px;
-    min-height: 52px;
+    justify-content: space-between;
+    gap: 12px;
+    min-height: 58px;
     padding: 0 18px;
-    border-radius: 18px;
+    border-radius: 20px;
+}
+
+.status-section {
+    gap: 10px;
+}
+
+.status-cluster {
+    min-height: 36px;
+    padding: 0 12px;
+    border-radius: 16px;
+}
+
+.status-cluster.emphasis {
+    background: var(--accent-soft);
+    border-color: var(--accent-outline);
+}
+
+@media (max-width: 1420px) {
+    .topbar {
+        grid-template-columns: minmax(280px, 1fr) minmax(420px, 1.2fr);
+    }
+
+    .topbar-side {
+        grid-column: 1 / -1;
+        flex-direction: row;
+        align-items: stretch;
+        justify-content: space-between;
+    }
+
+    .workspace {
+        grid-template-columns: 132px minmax(0, 1fr) 328px;
+    }
+}
+
+@media (max-width: 1240px) {
+    .topbar {
+        grid-template-columns: 1fr;
+    }
+
+    .metric-grid,
+    .inspector-overview {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .workspace {
+        grid-template-columns: 122px minmax(0, 1fr) 300px;
+    }
+
+    .canvas-hud {
+        min-width: 200px;
+        max-width: 240px;
+    }
+
+    .canvas-container {
+        padding: 34px;
+    }
+
+    .stage-bar {
+        grid-template-columns: 1fr;
+    }
+
+    .stage-actions {
+        align-items: flex-start;
+    }
 }
 "#;
 
@@ -778,6 +1350,110 @@ fn tool_label(tool: ToolId) -> &'static str {
         ToolId::Marker => "Marker",
         ToolId::Pages => "Pages",
         ToolId::Lpe => "Live Path",
+    }
+}
+
+fn tool_glyph(tool: ToolId) -> &'static str {
+    match tool {
+        ToolId::Select => "S",
+        ToolId::Node => "N",
+        ToolId::Rect => "R",
+        ToolId::Ellipse => "E",
+        ToolId::Star => "*",
+        ToolId::Spiral => "@",
+        ToolId::Pen => "P",
+        ToolId::Pencil => "Pb",
+        ToolId::Calligraphy => "Ink",
+        ToolId::Text => "T",
+        ToolId::Gradient => "G",
+        ToolId::Dropper => "D",
+        ToolId::BucketFill => "Bk",
+        ToolId::Connector => "Cn",
+        ToolId::Eraser => "Er",
+        ToolId::Spray => "Sp",
+        ToolId::Tweak => "Tw",
+        ToolId::Measure => "Me",
+        ToolId::Zoom => "Z",
+        ToolId::Mesh => "Ms",
+        ToolId::Box3d => "3D",
+        ToolId::Marker => "Mk",
+        ToolId::Pages => "Pg",
+        ToolId::Lpe => "Fx",
+    }
+}
+
+fn tool_shortcut(tool: ToolId) -> &'static str {
+    match tool {
+        ToolId::Select => "S",
+        ToolId::Node => "N",
+        ToolId::Rect => "R",
+        ToolId::Ellipse => "E",
+        ToolId::Star => "*",
+        ToolId::Spiral => "I",
+        ToolId::Pen => "B",
+        ToolId::Pencil => "P",
+        ToolId::Calligraphy => "C",
+        ToolId::Text => "T",
+        ToolId::Gradient => "G",
+        ToolId::Dropper => "D",
+        ToolId::BucketFill => "U",
+        ToolId::Connector => "O",
+        ToolId::Eraser => "Shift+E",
+        ToolId::Spray => "A",
+        ToolId::Tweak => "W",
+        ToolId::Measure => "F5",
+        ToolId::Zoom => "Z",
+        ToolId::Mesh => "M",
+        ToolId::Box3d => "X",
+        ToolId::Marker => "K",
+        ToolId::Pages | ToolId::Lpe => "Menu",
+    }
+}
+
+fn tool_copy(tool: ToolId) -> &'static str {
+    match tool {
+        ToolId::Select => "Transform, move, and inspect objects directly on the stage.",
+        ToolId::Node => "Refine path handles and clean up geometry with direct node editing.",
+        ToolId::Rect => "Create crisp rectangular shapes with predictable dimensions.",
+        ToolId::Ellipse => "Lay out circles and ellipses for icons, diagrams, and framing.",
+        ToolId::Star => "Generate star and polygon primitives with adjustable symmetry.",
+        ToolId::Spiral => "Sketch spirals quickly for decorative or technical shapes.",
+        ToolId::Pen => "Draw precise Bezier paths for logos, illustrations, and vector curves.",
+        ToolId::Pencil => "Capture quick freehand strokes before refining them.",
+        ToolId::Calligraphy => "Simulate expressive ink strokes with pressure-inspired shapes.",
+        ToolId::Text => "Place and edit live text directly on the canvas.",
+        ToolId::Gradient => "Author linear and radial color transitions on selected objects.",
+        ToolId::Dropper => "Sample color directly from the canvas and reuse it instantly.",
+        ToolId::BucketFill => "Flood closed regions with a new fill treatment.",
+        ToolId::Connector => "Build diagram-style connectors between objects.",
+        ToolId::Eraser => "Remove portions of shapes to edit silhouettes quickly.",
+        ToolId::Spray => "Distribute repeated shapes for texture and generative layouts.",
+        ToolId::Tweak => "Push, pull, and sculpt vector forms with direct gestures.",
+        ToolId::Measure => "Inspect distance and alignment before committing changes.",
+        ToolId::Zoom => "Navigate dense artwork without losing precision.",
+        ToolId::Mesh => "Set up multi-stop mesh color transitions.",
+        ToolId::Box3d => "Construct perspective boxes for spatial illustration.",
+        ToolId::Marker => "Place reusable marker treatments for arrows and path ends.",
+        ToolId::Pages => "Manage multi-page layouts for print and presentation output.",
+        ToolId::Lpe => "Apply live path effects without destructively editing source geometry.",
+    }
+}
+
+fn display_mode_label(mode: DisplayMode) -> &'static str {
+    match mode {
+        DisplayMode::Normal => "Rendered",
+        DisplayMode::Outline => "Outline",
+        DisplayMode::NoFilters => "No Filters",
+        DisplayMode::VisibleHairlines => "Hairlines",
+    }
+}
+
+fn display_mode_copy(mode: DisplayMode) -> &'static str {
+    match mode {
+        DisplayMode::Normal => "Full render with fills, strokes, and effects enabled.",
+        DisplayMode::Outline => "Geometry-only view for path cleanup and structure review.",
+        DisplayMode::NoFilters => "Rendered output with filter effects temporarily disabled.",
+        DisplayMode::VisibleHairlines => "Hairline strokes boosted for precision inspection.",
     }
 }
 
@@ -1089,14 +1765,16 @@ fn handle_editor_action(
         ),
         "view.zoom_in" => {
             let mut eng = engine.write();
-            let center = sivgo_math::Point::new(eng.viewport.width / 2.0, eng.viewport.height / 2.0);
+            let center =
+                sivgo_math::Point::new(eng.viewport.width / 2.0, eng.viewport.height / 2.0);
             eng.viewport.zoom_at(center, 1.15);
             drop(eng);
             bump_render(render_version);
         }
         "view.zoom_out" => {
             let mut eng = engine.write();
-            let center = sivgo_math::Point::new(eng.viewport.width / 2.0, eng.viewport.height / 2.0);
+            let center =
+                sivgo_math::Point::new(eng.viewport.width / 2.0, eng.viewport.height / 2.0);
             eng.viewport.zoom_at(center, 1.0 / 1.15);
             drop(eng);
             bump_render(render_version);
@@ -1238,15 +1916,25 @@ fn App() -> Element {
     let selection_count = eng.selection.len();
     let object_count = eng.document.len();
     let layers = build_layer_entries(&eng);
+    let layer_count = layers.len();
     let fill_hex = get_selected_fill(&eng);
     let stroke_hex = get_selected_stroke(&eng);
     let stroke_width_val = get_selected_stroke_width(&eng);
     let zoom = eng.viewport.zoom;
+    let display_mode = eng.viewport.display_mode;
+    let page_count = eng.page_count();
     drop(eng);
 
-    let document_name = current_document_name(file_path.read().as_ref());
-    let active_tool_name = tool_label(*active_tool.read());
+    let current_file = file_path.read().clone();
+    let document_name = current_document_name(current_file.as_ref());
+    let active_tool_id = *active_tool.read();
+    let active_tool_name = tool_label(active_tool_id);
+    let active_tool_glyph = tool_glyph(active_tool_id);
+    let active_tool_shortcut = tool_shortcut(active_tool_id);
+    let active_tool_copy = tool_copy(active_tool_id);
     let zoom_pct = format!("{:.0}%", zoom * 100.0);
+    let display_mode_name = display_mode_label(display_mode);
+    let display_mode_note = display_mode_copy(display_mode);
     let selection_summary = if selection_count == 0 {
         "No selection".to_string()
     } else if selection_count == 1 {
@@ -1254,100 +1942,227 @@ fn App() -> Element {
     } else {
         format!("{} objects selected", selection_count)
     };
+    let selection_metric = if selection_count == 0 {
+        "Ready".to_string()
+    } else {
+        selection_count.to_string()
+    };
+    let surface_count = page_count.max(1);
+    let layer_summary = if layer_count == 1 {
+        "1 layer".to_string()
+    } else {
+        format!("{} layers", layer_count)
+    };
+    let page_summary = if page_count == 0 {
+        "Single canvas".to_string()
+    } else if page_count == 1 {
+        "1 page".to_string()
+    } else {
+        format!("{} pages", page_count)
+    };
+    let structure_summary = format!("{layer_summary} / {page_summary}");
+    let document_state = if current_file.is_some() {
+        "Linked file"
+    } else {
+        "Unsaved draft"
+    };
+    let document_state_copy = if current_file.is_some() {
+        "This canvas is attached to a file on disk and ready for repeated saves."
+    } else {
+        "Work is live in memory. Open or save the document to anchor it to disk."
+    };
+    let history_state = if can_undo || can_redo {
+        "History available"
+    } else {
+        "Fresh session"
+    };
+    let fullscreen_enabled = *is_fullscreen.read();
+    let fullscreen_label = if fullscreen_enabled {
+        "Fullscreen"
+    } else {
+        "Windowed"
+    };
+    let fullscreen_button_label = if fullscreen_enabled {
+        "Exit Fullscreen"
+    } else {
+        "Fullscreen"
+    };
+    let selection_state = if selection_count > 0 {
+        "Selection live"
+    } else {
+        "Canvas ready"
+    };
+    let stage_hint = if selection_count == 0 {
+        format!(
+            "Start with {} or choose Select to inspect an existing object.",
+            active_tool_name
+        )
+    } else {
+        format!(
+            "{} Use the inspector to refine paint, stroke, and stacking.",
+            selection_summary
+        )
+    };
+    let stroke_width_label = format!("{stroke_width_val:.1}px");
+    let paint_summary = format!("Fill {fill_hex} / Stroke {stroke_hex} / {stroke_width_label}");
+    let fill_swatch_style = format!("background: {fill_hex};");
+    let stroke_swatch_style = format!("background: {stroke_hex};");
+    let document_badge_class = if current_file.is_some() {
+        "doc-badge"
+    } else {
+        "doc-badge warning"
+    };
+    let selection_metric_class = if selection_count > 0 {
+        "metric-card accent"
+    } else {
+        "metric-card"
+    };
+    let selection_preview_title = if selection_count > 0 {
+        "Live preview"
+    } else {
+        "Waiting for selection"
+    };
 
     rsx! {
         style { {CSS} }
         div { class: "app",
             div { class: "topbar",
-                div { class: "brand-block",
-                    div { class: "brand-mark", "X" }
-                    div { class: "brand-copy",
-                        span { class: "brand-kicker", "Desktop Studio" }
-                        h1 { class: "brand-title", "Sivgo" }
-                        p { class: "doc-title", "{document_name}" }
+                div { class: "topbar-main",
+                    div { class: "brand-block",
+                        div { class: "brand-mark", "SG" }
+                        div { class: "brand-copy",
+                            span { class: "brand-kicker", "Vector Workspace" }
+                            h1 { class: "brand-title", "Sivgo Studio" }
+                            div { class: "doc-strip",
+                                p { class: "doc-title", "{document_name}" }
+                                span { class: document_badge_class, "{document_state}" }
+                                span { class: "doc-badge", "{fullscreen_label}" }
+                            }
+                        }
+                    }
+                    p { class: "brand-description",
+                        "A cleaner desktop shell for focused SVG editing, stronger hierarchy, and inspector-first refinement."
                     }
                 }
+
                 div { class: "topbar-actions",
-                    div { class: "action-cluster",
-                        button {
-                            class: "quick-btn primary",
-                            onclick: {
-                                let desktop = desktop.clone();
-                                move |_| handle_editor_action("file.new", engine, render_version, file_path, is_fullscreen, desktop.clone())
-                            },
-                            "New"
+                    div { class: "action-row",
+                        div { class: "action-cluster",
+                            button {
+                                class: "quick-btn primary",
+                                onclick: {
+                                    let desktop = desktop.clone();
+                                    move |_| handle_editor_action("file.new", engine, render_version, file_path, is_fullscreen, desktop.clone())
+                                },
+                                "New"
+                            }
+                            button {
+                                class: "quick-btn",
+                                onclick: {
+                                    let desktop = desktop.clone();
+                                    move |_| handle_editor_action("file.open", engine, render_version, file_path, is_fullscreen, desktop.clone())
+                                },
+                                "Open"
+                            }
+                            button {
+                                class: "quick-btn",
+                                onclick: {
+                                    let desktop = desktop.clone();
+                                    move |_| handle_editor_action("file.save", engine, render_version, file_path, is_fullscreen, desktop.clone())
+                                },
+                                "Save"
+                            }
                         }
-                        button {
-                            class: "quick-btn",
-                            onclick: {
-                                let desktop = desktop.clone();
-                                move |_| handle_editor_action("file.open", engine, render_version, file_path, is_fullscreen, desktop.clone())
-                            },
-                            "Open"
+                        div { class: "action-cluster",
+                            button {
+                                class: "quick-btn",
+                                disabled: !can_undo,
+                                onclick: {
+                                    let desktop = desktop.clone();
+                                    move |_| handle_editor_action("edit.undo", engine, render_version, file_path, is_fullscreen, desktop.clone())
+                                },
+                                "Undo"
+                            }
+                            button {
+                                class: "quick-btn",
+                                disabled: !can_redo,
+                                onclick: {
+                                    let desktop = desktop.clone();
+                                    move |_| handle_editor_action("edit.redo", engine, render_version, file_path, is_fullscreen, desktop.clone())
+                                },
+                                "Redo"
+                            }
                         }
-                        button {
-                            class: "quick-btn",
-                            onclick: {
-                                let desktop = desktop.clone();
-                                move |_| handle_editor_action("file.save", engine, render_version, file_path, is_fullscreen, desktop.clone())
-                            },
-                            "Save"
+                        div { class: "action-cluster",
+                            button {
+                                class: "quick-btn",
+                                onclick: {
+                                    let desktop = desktop.clone();
+                                    move |_| handle_editor_action("view.zoom_out", engine, render_version, file_path, is_fullscreen, desktop.clone())
+                                },
+                                "Zoom -"
+                            }
+                            button {
+                                class: "quick-btn",
+                                onclick: {
+                                    let desktop = desktop.clone();
+                                    move |_| handle_editor_action("view.zoom_fit", engine, render_version, file_path, is_fullscreen, desktop.clone())
+                                },
+                                "Fit"
+                            }
+                            button {
+                                class: "quick-btn",
+                                onclick: {
+                                    let desktop = desktop.clone();
+                                    move |_| handle_editor_action("view.zoom_in", engine, render_version, file_path, is_fullscreen, desktop.clone())
+                                },
+                                "Zoom +"
+                            }
                         }
                     }
-                    div { class: "action-cluster",
-                        button {
-                            class: "quick-btn",
-                            disabled: !can_undo,
-                            onclick: {
-                                let desktop = desktop.clone();
-                                move |_| handle_editor_action("edit.undo", engine, render_version, file_path, is_fullscreen, desktop.clone())
-                            },
-                            "Undo"
+
+                    div { class: "metric-grid",
+                        div { class: selection_metric_class,
+                            span { class: "metric-label", "Selection" }
+                            strong { class: "metric-value", "{selection_metric}" }
+                            span { class: "metric-copy", "{selection_summary}" }
                         }
-                        button {
-                            class: "quick-btn",
-                            disabled: !can_redo,
-                            onclick: {
-                                let desktop = desktop.clone();
-                                move |_| handle_editor_action("edit.redo", engine, render_version, file_path, is_fullscreen, desktop.clone())
-                            },
-                            "Redo"
+                        div { class: "metric-card",
+                            span { class: "metric-label", "Structure" }
+                            strong { class: "metric-value", "{object_count}" }
+                            span { class: "metric-copy", "{structure_summary}" }
                         }
-                    }
-                    div { class: "action-cluster",
-                        button {
-                            class: "quick-btn",
-                            onclick: {
-                                let desktop = desktop.clone();
-                                move |_| handle_editor_action("view.zoom_out", engine, render_version, file_path, is_fullscreen, desktop.clone())
-                            },
-                            "Zoom -"
-                        }
-                        button {
-                            class: "quick-btn",
-                            onclick: {
-                                let desktop = desktop.clone();
-                                move |_| handle_editor_action("view.zoom_fit", engine, render_version, file_path, is_fullscreen, desktop.clone())
-                            },
-                            "Fit"
-                        }
-                        button {
-                            class: "quick-btn",
-                            onclick: {
-                                let desktop = desktop.clone();
-                                move |_| handle_editor_action("view.zoom_in", engine, render_version, file_path, is_fullscreen, desktop.clone())
-                            },
-                            "Zoom +"
+                        div { class: "metric-card",
+                            span { class: "metric-label", "Viewport" }
+                            strong { class: "metric-value", "{zoom_pct}" }
+                            span { class: "metric-copy", "{display_mode_note}" }
                         }
                     }
                 }
-                div { class: "topbar-meta",
-                    div { class: "meta-stack",
-                        span { class: "meta-kicker", "Workspace" }
-                        span { class: "doc-title", "{selection_summary}" }
+
+                div { class: "topbar-side",
+                    div { class: "session-card",
+                        div { class: "session-tool-mark", "{active_tool_glyph}" }
+                        div { class: "meta-stack",
+                            span { class: "meta-kicker", "Active Tool" }
+                            strong { class: "session-title", "{active_tool_name}" }
+                            p { class: "session-copy", "{active_tool_copy}" }
+                        }
                     }
-                    span { class: "top-chip active", "{active_tool_name}" }
-                    span { class: "top-chip", "{zoom_pct}" }
+                    div { class: "topbar-meta",
+                        span { class: "top-chip active", "{display_mode_name}" }
+                        span { class: "top-chip", "{selection_state}" }
+                        span { class: "top-chip", "{history_state}" }
+                        span { class: "top-chip", "{fullscreen_label}" }
+                        button {
+                            class: "quick-btn subtle",
+                            onclick: {
+                                let desktop = desktop.clone();
+                                move |_| handle_editor_action("view.fullscreen", engine, render_version, file_path, is_fullscreen, desktop.clone())
+                            },
+                            "{fullscreen_button_label}"
+                        }
+                    }
                 }
             }
 
@@ -1356,45 +2171,110 @@ fn App() -> Element {
                     div { class: "rail-head",
                         span { class: "rail-eyebrow", "Tool Rail" }
                         h2 { class: "rail-title", "{active_tool_name}" }
-                        p { class: "rail-copy", "Compact tool access tuned for desktop editing." }
+                        p { class: "rail-copy", "{active_tool_copy}" }
+                    }
+                    div { class: "rail-spotlight",
+                        div { class: "rail-spotlight-mark", "{active_tool_glyph}" }
+                        div { class: "meta-stack",
+                            span { class: "rail-spotlight-label", "Shortcut" }
+                            strong { class: "rail-spotlight-value", "{active_tool_shortcut}" }
+                            p { class: "rail-copy", "Switch tools fast without leaving the canvas or interrupting the current flow." }
+                        }
                     }
                     Toolbar {
-                        active_tool: *active_tool.read(),
+                        active_tool: active_tool_id,
                         on_tool_change: move |id: ToolId| {
                             engine.write().tools.switch_to(id);
                             active_tool.set(id);
                         },
                     }
+                    div { class: "rail-footer",
+                        span { class: "rail-footer-label", "Flow" }
+                        p { class: "rail-copy", "Keep creation in the rail, refinement in the inspector, and file actions in the workspace bar." }
+                    }
                 }
 
                 section { class: "canvas-stage",
                     div { class: "stage-bar",
-                        div { class: "stage-chip-row",
-                            span { class: "stage-chip active", "Desktop" }
-                            span { class: "stage-chip", "{selection_summary}" }
-                            span { class: "stage-chip", "Canvas {CANVAS_WIDTH} × {CANVAS_HEIGHT}" }
+                        div {
+                            span { class: "stage-kicker", "Stage" }
+                            h2 { class: "stage-title", "{document_name}" }
+                            p { class: "stage-copy", "{document_state_copy}" }
                         }
-                        div { class: "stage-chip-row",
-                            button {
-                                class: "quick-btn",
-                                onclick: {
-                                    let desktop = desktop.clone();
-                                    move |_| handle_editor_action("view.display_mode_outline", engine, render_version, file_path, is_fullscreen, desktop.clone())
-                                },
-                                "Outline"
+                        div { class: "stage-actions",
+                            div { class: "stage-chip-row",
+                                span { class: "stage-chip active", "{display_mode_name}" }
+                                span { class: "stage-chip", "{selection_summary}" }
+                                span { class: "stage-chip", "{structure_summary}" }
                             }
-                            button {
-                                class: "quick-btn",
-                                onclick: {
-                                    let desktop = desktop.clone();
-                                    move |_| handle_editor_action("view.display_mode_normal", engine, render_version, file_path, is_fullscreen, desktop.clone())
-                                },
-                                "Normal"
+                            div { class: "stage-mode-buttons",
+                                button {
+                                    class: if display_mode == DisplayMode::Normal { "quick-btn active" } else { "quick-btn" },
+                                    onclick: {
+                                        let desktop = desktop.clone();
+                                        move |_| handle_editor_action("view.display_mode_normal", engine, render_version, file_path, is_fullscreen, desktop.clone())
+                                    },
+                                    "Render"
+                                }
+                                button {
+                                    class: if display_mode == DisplayMode::Outline { "quick-btn active" } else { "quick-btn" },
+                                    onclick: {
+                                        let desktop = desktop.clone();
+                                        move |_| handle_editor_action("view.display_mode_outline", engine, render_version, file_path, is_fullscreen, desktop.clone())
+                                    },
+                                    "Outline"
+                                }
+                                button {
+                                    class: if display_mode == DisplayMode::NoFilters { "quick-btn active" } else { "quick-btn" },
+                                    onclick: {
+                                        let desktop = desktop.clone();
+                                        move |_| handle_editor_action("view.display_mode_no_filters", engine, render_version, file_path, is_fullscreen, desktop.clone())
+                                    },
+                                    "No Filters"
+                                }
                             }
-                            span { class: "stage-chip active", "Zoom {zoom_pct}" }
                         }
                     }
                     div { class: "canvas-frame",
+                        div { class: "canvas-hud top-left",
+                            span { class: "canvas-hud-kicker", "Document" }
+                            strong { class: "canvas-hud-title", "{document_name}" }
+                            span { class: "canvas-hud-copy", "{document_state}" }
+                        }
+                        div { class: "canvas-hud top-right",
+                            span { class: "canvas-hud-kicker", "Stage Stats" }
+                            div { class: "canvas-stat-grid",
+                                div { class: "canvas-stat",
+                                    span { class: "canvas-stat-label", "Objects" }
+                                    strong { class: "canvas-stat-value", "{object_count}" }
+                                }
+                                div { class: "canvas-stat",
+                                    span { class: "canvas-stat-label", "Layers" }
+                                    strong { class: "canvas-stat-value", "{layer_count}" }
+                                }
+                                div { class: "canvas-stat",
+                                    span { class: "canvas-stat-label", "Pages" }
+                                    strong { class: "canvas-stat-value", "{surface_count}" }
+                                }
+                                div { class: "canvas-stat",
+                                    span { class: "canvas-stat-label", "Zoom" }
+                                    strong { class: "canvas-stat-value", "{zoom_pct}" }
+                                }
+                            }
+                        }
+                        div { class: "canvas-hud bottom-left",
+                            span { class: "canvas-hud-kicker", "Guide" }
+                            strong { class: "canvas-hud-title", "{active_tool_name}" }
+                            span { class: "canvas-hud-copy", "{stage_hint}" }
+                        }
+                        div { class: "canvas-hud bottom-right",
+                            span { class: "canvas-hud-kicker", "Current Paint" }
+                            div { class: "canvas-swatch-row",
+                                span { class: "canvas-swatch", style: fill_swatch_style.clone() }
+                                span { class: "canvas-swatch", style: stroke_swatch_style.clone() }
+                            }
+                            span { class: "canvas-hud-copy", "{paint_summary}" }
+                        }
                         div { class: "canvas-container",
                             img {
                                 src: "{canvas_data_uri}",
@@ -1420,20 +2300,47 @@ fn App() -> Element {
                             }
                         }
                     }
+                    div { class: "stage-footer",
+                        span { class: "stage-footer-item", "Canvas {CANVAS_WIDTH} x {CANVAS_HEIGHT}" }
+                        span { class: "stage-footer-item", "{structure_summary}" }
+                        span { class: "stage-footer-item", "{history_state}" }
+                        span { class: "stage-footer-item", "{document_state}" }
+                    }
                 }
 
                 aside { class: "inspector-shell",
                     div { class: "inspector-head",
                         span { class: "inspector-kicker", "Inspector" }
                         h2 { class: "inspector-title", "Appearance & Layers" }
-                        p { class: "inspector-copy", "Fill, stroke, and layer controls live here." }
+                        p { class: "inspector-copy", "Live paint controls, structure management, and mode feedback stay anchored on the right." }
+                    }
+                    div { class: "inspector-overview",
+                        div { class: "inspector-card",
+                            span { class: "inspector-card-label", "Selection Paint" }
+                            strong { class: "inspector-card-value", "{selection_preview_title}" }
+                            div { class: "inspector-swatch-row",
+                                span { class: "inspector-swatch", style: fill_swatch_style.clone() }
+                                span { class: "inspector-swatch", style: stroke_swatch_style.clone() }
+                            }
+                            p { class: "inspector-card-copy", "{paint_summary}" }
+                        }
+                        div { class: "inspector-card",
+                            span { class: "inspector-card-label", "Document Structure" }
+                            strong { class: "inspector-card-value", "{layer_summary}" }
+                            p { class: "inspector-card-copy", "{object_count} objects / {page_summary}" }
+                        }
+                        div { class: "inspector-card wide",
+                            span { class: "inspector-card-label", "Editing Mode" }
+                            strong { class: "inspector-card-value", "{active_tool_name} / {display_mode_name}" }
+                            p { class: "inspector-card-copy", "{display_mode_note}" }
+                        }
                     }
                     div { class: "right-panels",
                         PropertiesPanel {
-                            fill: fill_hex,
+                            fill: fill_hex.clone(),
                             fill_paint_type: "Flat Color".to_string(),
                             fill_opacity: 1.0,
-                            stroke: stroke_hex,
+                            stroke: stroke_hex.clone(),
                             stroke_paint_type: "Flat Color".to_string(),
                             stroke_opacity: 1.0,
                             stroke_width: stroke_width_val,

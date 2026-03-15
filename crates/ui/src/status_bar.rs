@@ -45,18 +45,26 @@ pub fn StatusBar(
 
     rsx! {
         div { class: "status-bar",
-            span { class: "status-item",
-                "X: {cursor_x:.1}  Y: {cursor_y:.1}"
+            div { class: "status-section",
+                div { class: "status-cluster",
+                    span { class: "status-label", "Cursor" }
+                    span { class: "status-item", "{cursor_x:.1}, {cursor_y:.1}" }
+                }
+                div { class: "status-cluster",
+                    span { class: "status-label", "Zoom" }
+                    span { class: "status-item", "{zoom_pct:.0}%" }
+                }
             }
-            span { class: "status-item",
-                "Zoom: {zoom_pct:.0}%"
-            }
-            span { class: "status-item",
-                "{selection_text}"
-            }
-            if object_count > 0 {
-                span { class: "status-item",
-                    "Objects: {object_count}"
+            div { class: "status-section",
+                div { class: "status-cluster emphasis",
+                    span { class: "status-label", "Selection" }
+                    span { class: "status-item", "{selection_text}" }
+                }
+                if object_count > 0 {
+                    div { class: "status-cluster",
+                        span { class: "status-label", "Document" }
+                        span { class: "status-item", "{object_count} objects" }
+                    }
                 }
             }
         }

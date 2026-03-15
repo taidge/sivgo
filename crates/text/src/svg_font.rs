@@ -1,4 +1,4 @@
-﻿//! SVG font rendering support (SVG 1.1 `<font>` elements).
+//! SVG font rendering support (SVG 1.1 `<font>` elements).
 //!
 //! SVG fonts are an older, rarely-used feature where glyph outlines are
 //! defined inline in the SVG using `<glyph>` elements. This module
@@ -6,8 +6,8 @@
 //!
 //! Note: SVG fonts are deprecated in SVG 2 in favor of WOFF/WOFF2.
 
-use std::collections::HashMap;
 use sivgo_math::BezPath;
+use std::collections::HashMap;
 
 /// An SVG font definition parsed from `<font>` / `<font-face>` / `<glyph>`.
 #[derive(Debug, Clone)]

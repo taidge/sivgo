@@ -143,11 +143,27 @@ pub fn PropertiesPanel(
     has_selection: bool,
     on_action: EventHandler<PropertiesAction>,
 ) -> Element {
+    let fill_preview_style = format!("background: {fill};");
+    let stroke_preview_style = format!("background: {stroke};");
+
     if !has_selection {
         return rsx! {
             div { class: "properties-panel",
-                div { class: "panel-header", "Fill & Stroke" }
-                div { class: "prop-empty", "No selection" }
+                div { class: "panel-header",
+                    div { class: "panel-title-wrap",
+                        span { class: "panel-kicker", "Inspector" }
+                        h3 { class: "panel-title", "Fill & Stroke" }
+                        p { class: "panel-meta", "Color, opacity, stroke profile, and marker controls for the active object." }
+                    }
+                    div { class: "panel-swatch-pair",
+                        span { class: "panel-swatch", style: fill_preview_style.clone() }
+                        span { class: "panel-swatch", style: stroke_preview_style.clone() }
+                    }
+                }
+                div { class: "prop-empty",
+                    span { class: "empty-title", "Select an object to inspect it" }
+                    span { "The fill, stroke, and marker controls appear here as soon as the canvas has an active selection." }
+                }
             }
         };
     }
@@ -160,11 +176,24 @@ pub fn PropertiesPanel(
 
     rsx! {
         div { class: "properties-panel",
-            div { class: "panel-header", "Fill & Stroke" }
+            div { class: "panel-header",
+                div { class: "panel-title-wrap",
+                    span { class: "panel-kicker", "Inspector" }
+                    h3 { class: "panel-title", "Fill & Stroke" }
+                    p { class: "panel-meta", "Fine-tune paint, stroke weight, line endings, and SVG markers in one place." }
+                }
+                div { class: "panel-swatch-pair",
+                    span { class: "panel-swatch", style: fill_preview_style }
+                    span { class: "panel-swatch", style: stroke_preview_style }
+                }
+            }
 
             // ---- Fill Section ----
             div { class: "prop-section",
-                div { class: "prop-section-header", "Fill" }
+                div { class: "prop-section-header-row",
+                    div { class: "prop-section-header", "Fill" }
+                    span { class: "panel-badge", "Primary paint" }
+                }
 
                 // Paint type tabs
                 div { class: "paint-type-tabs",
@@ -195,7 +224,7 @@ pub fn PropertiesPanel(
 
                 // Color picker + hex input (shown when paint type is Flat Color)
                 if fill_paint_type == "Flat Color" {
-                    div { class: "prop-row",
+                    div { class: "prop-color-row",
                         input {
                             r#type: "color",
                             class: "prop-color",
@@ -238,7 +267,10 @@ pub fn PropertiesPanel(
 
             // ---- Stroke Section ----
             div { class: "prop-section",
-                div { class: "prop-section-header", "Stroke" }
+                div { class: "prop-section-header-row",
+                    div { class: "prop-section-header", "Stroke" }
+                    span { class: "panel-badge", "Edge profile" }
+                }
 
                 // Paint type tabs
                 div { class: "paint-type-tabs",
@@ -269,7 +301,7 @@ pub fn PropertiesPanel(
 
                 // Stroke color picker + hex input
                 if stroke_paint_type == "Flat Color" {
-                    div { class: "prop-row",
+                    div { class: "prop-color-row",
                         input {
                             r#type: "color",
                             class: "prop-color",
@@ -410,7 +442,10 @@ pub fn PropertiesPanel(
 
             // ---- Markers Section ----
             div { class: "prop-section",
-                div { class: "prop-section-header", "Markers" }
+                div { class: "prop-section-header-row",
+                    div { class: "prop-section-header", "Markers" }
+                    span { class: "panel-badge", "Directional cues" }
+                }
 
                 div { class: "prop-row",
                     label { class: "prop-label", "Start" }

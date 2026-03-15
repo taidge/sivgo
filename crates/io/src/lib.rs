@@ -1,4 +1,4 @@
-﻿//! `sivgo-io` -- Import/export for the Sivgo SVG editor.
+//! `sivgo-io` -- Import/export for the Sivgo SVG editor.
 //!
 //! Provides file-level operations:
 //!
@@ -1080,8 +1080,8 @@ fn set_svg_viewport(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Read;
     use sivgo_dom::*;
+    use std::io::Read;
 
     /// Build a minimal test document: 100x100 SVG with a red rect.
     fn test_doc() -> SvgDocument {

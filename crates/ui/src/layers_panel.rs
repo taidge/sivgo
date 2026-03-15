@@ -54,13 +54,22 @@ pub fn LayersPanel(layers: Vec<LayerEntry>, on_action: EventHandler<LayerAction>
 
     rsx! {
         div { class: "layers-panel",
-            div { class: "panel-header", "Layers" }
+            div { class: "panel-header",
+                div { class: "panel-title-wrap",
+                    span { class: "panel-kicker", "Structure" }
+                    h3 { class: "panel-title", "Layers" }
+                    p { class: "panel-meta", "Visibility, locking, blend mode, and stacking order for the document tree." }
+                }
+                span { class: "panel-badge", "{layers.len()} items" }
+            }
             div { class: "layers-list",
                 for (idx, entry) in layers.iter().enumerate() {
                     {
                         let entry_id = entry.id;
                         let entry_opacity = entry.opacity;
                         let entry_blend = entry.blend_mode.clone();
+                        let visibility_copy = if entry.visible { "Visible" } else { "Hidden" };
+                        let edit_copy = if entry.locked { "Locked" } else { "Editable" };
                         let is_first = idx == 0;
                         let is_last = idx == layers.len() - 1;
                         let blend_modes = blend_modes.clone();
@@ -85,10 +94,11 @@ pub fn LayersPanel(layers: Vec<LayerEntry>, on_action: EventHandler<LayerAction>
                                 }
 
                                 // Label (click to select)
-                                span {
-                                    class: "layer-label",
+                                div {
+                                    class: "layer-label-wrap",
                                     onclick: move |_| on_action.call(LayerAction::Select(entry_id)),
-                                    "{entry.label}"
+                                    span { class: "layer-label", "{entry.label}" }
+                                    span { class: "layer-meta", "{edit_copy} / {visibility_copy}" }
                                 }
 
                                 // Move up / down buttons
@@ -151,7 +161,10 @@ pub fn LayersPanel(layers: Vec<LayerEntry>, on_action: EventHandler<LayerAction>
                     }
                 }
                 if layers.is_empty() {
-                    div { class: "layer-empty", "No layers" }
+                    div { class: "layer-empty",
+                        span { class: "empty-title", "No layers yet" }
+                        span { "As objects and named layers appear in the document, this stack becomes the primary place to manage order and visibility." }
+                    }
                 }
             }
         }
