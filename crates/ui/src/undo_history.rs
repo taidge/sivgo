@@ -90,6 +90,7 @@ pub fn UndoHistoryPanel(
                         };
                         rsx! {
                             div {
+                                key: "{entry.index}",
                                 class: "{class_str}",
                                 onclick: move |_| on_action.call(UndoHistoryAction::JumpTo(idx)),
                                 span { class: "history-index", "{entry.index}" }

@@ -31,11 +31,16 @@ pub mod wasm_sandbox;
 pub use actions::PluginAction;
 pub use api::{Plugin, PluginContext};
 pub use builtin::{GridGeneratorPlugin, HelloPlugin};
-pub use lua_engine::{eval_expression, LuaEngine, LuaValue};
+pub use lua_engine::{eval_expression, LuaEngine, LuaHostCommand, LuaValue};
 pub use manager::{InstalledPlugin, PluginManager, PluginRegistry};
-pub use manifest::{Permission, PluginManifest};
-pub use plugin_ui::{DialogElement, DialogResult, DialogValue, PluginDialog};
-pub use wasm_sandbox::{StubWasmRuntime, WasmModule, WasmRuntime, WasmSandbox, WasmValue};
+pub use manifest::{Permission, PluginManifest, PluginPermissionSet};
+pub use plugin_ui::{
+    DialogElement, DialogResult, DialogValue, ExtensionMenuItem, ExtensionUiRegistry, PluginDialog,
+};
+pub use wasm_sandbox::{
+    SandboxedWasmRuntime, WasmExport, WasmExportKind, WasmImport, WasmImportKind, WasmModule,
+    WasmModuleInspection, WasmPermissions, WasmRuntime, WasmSandbox, WasmValue,
+};
 
 // ---------------------------------------------------------------------------
 // Tests

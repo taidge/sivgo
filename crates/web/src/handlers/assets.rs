@@ -1,6 +1,8 @@
 //! Asset upload/download handlers.
 
+use base64::{engine::general_purpose, Engine as _};
 use salvo::prelude::*;
+use uuid::Uuid;
 
 use crate::assets::AssetStore;
 use crate::auth;
@@ -26,7 +28,7 @@ pub async fn list_assets(depot: &mut Depot, res: &mut Response) {
         }
     };
 
-    let assets = store.list(&user_id.to_string());
+    let assets = store.list_assets(user_id);
     res.render(Json(assets));
 }
 
@@ -72,19 +74,26 @@ pub async fn upload_asset(req: &mut Request, depot: &mut Depot, res: &mut Respon
         ApiError::bad_request("filename is required").write_to(res);
         return;
     }
+    if body.content_type.is_empty() {
+        ApiError::bad_request("content_type is required").write_to(res);
+        return;
+    }
 
-    // For simplicity, store the base64 string as raw bytes.
-    // In production, decode the base64 first.
-    let data = body.data.into_bytes();
-    let id = store.upload(
-        &user_id.to_string(),
-        &body.filename,
-        &body.content_type,
-        data,
-    );
+    let data = match general_purpose::STANDARD.decode(body.data.trim()) {
+        Ok(data) if !data.is_empty() => data,
+        Ok(_) => {
+            ApiError::bad_request("data is required").write_to(res);
+            return;
+        }
+        Err(e) => {
+            ApiError::bad_request(format!("data must be valid base64: {e}")).write_to(res);
+            return;
+        }
+    };
+    let info = store.upload_asset(user_id, &body.filename, &body.content_type, data);
 
     res.status_code(StatusCode::CREATED);
-    res.render(Json(serde_json::json!({ "id": id })));
+    res.render(Json(info));
 }
 
 /// `GET /api/v1/assets/{id}`
@@ -99,17 +108,24 @@ pub async fn download_asset(req: &mut Request, depot: &mut Depot, res: &mut Resp
             return;
         }
     };
-
-    let asset_id: String = match req.param("id") {
+    let user_id = match auth::get_user_id(depot) {
         Some(id) => id,
         None => {
-            ApiError::bad_request("Missing asset id").write_to(res);
+            ApiError::unauthorized("Not authenticated").write_to(res);
             return;
         }
     };
 
-    match store.download(&asset_id) {
-        Some(asset) => {
+    let asset_id = match parse_uuid_param(req, "id") {
+        Some(id) => id,
+        None => {
+            ApiError::bad_request("Invalid asset id").write_to(res);
+            return;
+        }
+    };
+
+    match store.download_asset(asset_id) {
+        Some(asset) if asset.owner_id == user_id => {
             res.headers_mut().insert(
                 "content-type",
                 asset
@@ -125,7 +141,7 @@ pub async fn download_asset(req: &mut Request, depot: &mut Depot, res: &mut Resp
             );
             res.body(asset.data);
         }
-        None => {
+        Some(_) | None => {
             ApiError::not_found("Asset not found").write_to(res);
         }
     }
@@ -143,18 +159,34 @@ pub async fn delete_asset(req: &mut Request, depot: &mut Depot, res: &mut Respon
             return;
         }
     };
-
-    let asset_id: String = match req.param("id") {
+    let user_id = match auth::get_user_id(depot) {
         Some(id) => id,
         None => {
-            ApiError::bad_request("Missing asset id").write_to(res);
+            ApiError::unauthorized("Not authenticated").write_to(res);
             return;
         }
     };
 
-    if store.delete(&asset_id) {
-        res.status_code(StatusCode::NO_CONTENT);
-    } else {
-        ApiError::not_found("Asset not found").write_to(res);
+    let asset_id = match parse_uuid_param(req, "id") {
+        Some(id) => id,
+        None => {
+            ApiError::bad_request("Invalid asset id").write_to(res);
+            return;
+        }
+    };
+
+    match store.download_asset(asset_id) {
+        Some(asset) if asset.owner_id == user_id => match store.delete_asset(asset_id) {
+            Ok(()) => {
+                res.status_code(StatusCode::NO_CONTENT);
+            }
+            Err(_) => ApiError::not_found("Asset not found").write_to(res),
+        },
+        Some(_) | None => ApiError::not_found("Asset not found").write_to(res),
     }
+}
+
+fn parse_uuid_param(req: &Request, name: &str) -> Option<Uuid> {
+    let value: String = req.param(name)?;
+    value.parse().ok()
 }

@@ -1,4 +1,4 @@
-﻿//! 3D box tool: click-drag to create a perspective box.
+//! 3D box tool: click-drag to create a perspective box.
 //!
 //! States:
 //! - **Idle**: waiting for input.
@@ -7,10 +7,10 @@
 //! On mouse-down: start drawing (record the start point).
 //! On mouse-drag: define the front face rectangle.
 //! On mouse-up: create a `Box3d` element containing 6 `<path>` children
-//! representing the box faces, with perspective projection.
+//! representing the box faces, with a stable cabinet-style depth projection.
 //!
 //! Parameters:
-//! - `vanishing_point_x`, `vanishing_point_y`: convergence point for depth lines.
+//! - `vanishing_point_x`, `vanishing_point_y`: serialized for SPBox3D compatibility.
 //! - `z_depth`: how far back the box extends.
 
 use sivgo_dom::types::{Color, LengthUnit, Paint, SvgLength};
@@ -21,6 +21,7 @@ use crate::command::Command;
 use crate::input::{KeyEvent, MouseButton, MouseEvent};
 use crate::selection::SelectionSet;
 use crate::tool::{Tool, ToolResponse};
+use crate::tools::drag::drag_rect;
 use crate::viewport::Viewport;
 
 // ---------------------------------------------------------------------------
@@ -30,17 +31,16 @@ use crate::viewport::Viewport;
 /// Interactive tool for creating 3D perspective boxes.
 ///
 /// Click-drag to define the front face rectangle, then the tool generates
-/// a `Box3d` element with 6 path children (one per face) using perspective
-/// projection.
+/// a `Box3d` element with 6 path children (one per face).
 #[derive(Debug)]
 pub struct Box3dTool {
     /// Start point in document space.
     start: Option<Point>,
     /// Whether we are actively dragging.
     dragging: bool,
-    /// X coordinate of the vanishing point.
+    /// X coordinate of the serialized vanishing point.
     pub vanishing_point_x: f64,
-    /// Y coordinate of the vanishing point.
+    /// Y coordinate of the serialized vanishing point.
     pub vanishing_point_y: f64,
     /// Depth of the box along the Z axis (in document units).
     pub z_depth: f64,
@@ -75,22 +75,21 @@ impl Default for Box3dTool {
     }
 }
 
-/// Compute the back-face corners by projecting the front-face corners towards
-/// the vanishing point by a fraction proportional to `z_depth`.
+/// Compute a stable cabinet-style back-face offset.
 ///
-/// Each front corner is moved towards the vanishing point by a factor
-/// `z_depth / (z_depth + distance_to_vp)`, giving a simple one-point
-/// perspective effect.
-fn compute_back_face(front: &[Point; 4], vp: Point, z_depth: f64) -> [Point; 4] {
-    let mut back = [Point::new(0.0, 0.0); 4];
-    for (i, &corner) in front.iter().enumerate() {
-        let dx = vp.x - corner.x;
-        let dy = vp.y - corner.y;
-        let dist = (dx * dx + dy * dy).sqrt().max(1.0);
-        let t = z_depth / (z_depth + dist);
-        back[i] = Point::new(corner.x + dx * t, corner.y + dy * t);
-    }
-    back
+/// Keeping all back-face corners translated by the same vector makes the
+/// result read as a box instead of an arbitrary warped perspective quad.
+fn compute_depth_offset(front: &[Point; 4], z_depth: f64) -> Point {
+    let width = front[0].distance(front[1]);
+    let height = front[1].distance(front[2]);
+    let short_side = width.min(height).max(1.0);
+    let depth = z_depth.min(short_side * 0.55).max(1.0);
+    Point::new(depth * 0.55, -depth * 0.45)
+}
+
+fn compute_back_face(front: &[Point; 4], z_depth: f64) -> [Point; 4] {
+    let offset = compute_depth_offset(front, z_depth);
+    std::array::from_fn(|i| Point::new(front[i].x + offset.x, front[i].y + offset.y))
 }
 
 /// Build a `BezPath` for a quadrilateral from four corner points.
@@ -107,7 +106,7 @@ fn quad_path(corners: &[Point; 4]) -> BezPath {
 /// Build the six face paths of the 3D box.
 ///
 /// Front face corners are ordered: top-left, top-right, bottom-right, bottom-left.
-/// Back face corners are in the same order, projected towards the vanishing point.
+/// Back face corners are in the same order, translated by the depth offset.
 ///
 /// Returns paths for: front, back, top, bottom, left, right.
 fn build_box_faces(front: &[Point; 4], back: &[Point; 4]) -> [BezPath; 6] {
@@ -167,6 +166,10 @@ const FACE_COLORS: [Color; 6] = [
         a: 255,
     }, // right  - bright blue
 ];
+
+/// Paint hidden/back faces first and the front face last so the front does not
+/// get covered by the back face.
+const FACE_PAINT_ORDER: [usize; 6] = [1, 2, 5, 3, 4, 0];
 
 /// Format a corner point as a `"x,y"` string for `Box3dAttrs`.
 fn corner_string(p: Point) -> String {
@@ -299,27 +302,22 @@ impl Tool for Box3dTool {
 
         let end = viewport.screen_to_document(Point::new(event.x, event.y));
 
-        // Normalize the rectangle.
-        let x0 = start.x.min(end.x);
-        let y0 = start.y.min(end.y);
-        let x1 = start.x.max(end.x);
-        let y1 = start.y.max(end.y);
+        let rect = drag_rect(start, end, event.modifiers.ctrl, event.modifiers.shift);
 
         // Don't create tiny boxes.
-        if (x1 - x0) < 1.0 || (y1 - y0) < 1.0 {
+        if rect.width() < 1.0 || rect.height() < 1.0 {
             return ToolResponse::None;
         }
 
         // Front face corners: TL, TR, BR, BL
         let front = [
-            Point::new(x0, y0),
-            Point::new(x1, y0),
-            Point::new(x1, y1),
-            Point::new(x0, y1),
+            Point::new(rect.x0, rect.y0),
+            Point::new(rect.x1, rect.y0),
+            Point::new(rect.x1, rect.y1),
+            Point::new(rect.x0, rect.y1),
         ];
 
-        let vp_pt = Point::new(self.vanishing_point_x, self.vanishing_point_y);
-        let back = compute_back_face(&front, vp_pt, self.z_depth);
+        let back = compute_back_face(&front, self.z_depth);
         let faces = build_box_faces(&front, &back);
 
         let parent = match doc.root() {
@@ -421,7 +419,8 @@ impl Command for CreateBox3dCommand {
         self.box3d_id = Some(box3d_id);
 
         // Create each face path as a child of the Box3d element.
-        for (i, face_path) in self.faces.iter().enumerate() {
+        for &i in &FACE_PAINT_ORDER {
+            let face_path = &self.faces[i];
             let element = SvgElement::Path(PathAttrs {
                 d: face_path.clone(),
                 ..Default::default()
@@ -470,6 +469,7 @@ impl Command for CreateBox3dCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::input::Modifiers;
     use sivgo_dom::SvgSvgAttrs;
 
     fn make_doc() -> SvgDocument {
@@ -480,27 +480,45 @@ mod tests {
     }
 
     #[test]
-    fn box3d_back_face_converges_toward_vp() {
+    fn box3d_back_face_uses_one_shared_depth_offset() {
         let front = [
             Point::new(100.0, 100.0),
             Point::new(200.0, 100.0),
             Point::new(200.0, 200.0),
             Point::new(100.0, 200.0),
         ];
-        let vp = Point::new(400.0, 300.0);
-        let back = compute_back_face(&front, vp, 50.0);
+        let back = compute_back_face(&front, 50.0);
+        let offset = Point::new(back[0].x - front[0].x, back[0].y - front[0].y);
 
-        // Each back corner should be between its front corner and the VP.
         for (i, (&f, &b)) in front.iter().zip(back.iter()).enumerate() {
-            // b should be closer to vp than f.
-            let dist_f = ((vp.x - f.x).powi(2) + (vp.y - f.y).powi(2)).sqrt();
-            let dist_b = ((vp.x - b.x).powi(2) + (vp.y - b.y).powi(2)).sqrt();
             assert!(
-                dist_b < dist_f,
-                "back corner {} should be closer to VP than front corner",
+                (b.x - f.x - offset.x).abs() < 1e-10 && (b.y - f.y - offset.y).abs() < 1e-10,
+                "back corner {} should use the shared depth offset",
                 i
             );
         }
+        assert!(offset.x > 0.0, "box depth should move right");
+        assert!(offset.y < 0.0, "box depth should move upward");
+    }
+
+    #[test]
+    fn box3d_back_face_keeps_parallel_front_edges() {
+        let front = [
+            Point::new(0.0, 0.0),
+            Point::new(100.0, 0.0),
+            Point::new(100.0, 100.0),
+            Point::new(0.0, 100.0),
+        ];
+        let back = compute_back_face(&front, 60.0);
+
+        assert!((front[0].distance(front[1]) - back[0].distance(back[1])).abs() < 1e-10);
+        assert!((front[1].distance(front[2]) - back[1].distance(back[2])).abs() < 1e-10);
+    }
+
+    #[test]
+    fn box3d_paints_front_face_last() {
+        assert_eq!(FACE_PAINT_ORDER.last().copied(), Some(0));
+        assert!(FACE_PAINT_ORDER[..5].contains(&1));
     }
 
     #[test]
@@ -578,6 +596,63 @@ mod tests {
     }
 
     #[test]
+    fn box3d_tool_ctrl_shift_uses_constrained_centered_front_face() {
+        let doc = make_doc();
+        let sel = SelectionSet::new();
+        let vp = Viewport::new(800.0, 600.0);
+        let mut tool = Box3dTool::new();
+
+        tool.on_mouse_down(MouseEvent::left(100.0, 100.0), &doc, &sel, &vp);
+        let resp = tool.on_mouse_up(
+            MouseEvent {
+                x: 120.0,
+                y: 110.0,
+                button: MouseButton::Left,
+                modifiers: Modifiers {
+                    ctrl: true,
+                    shift: true,
+                    alt: false,
+                },
+            },
+            &doc,
+            &sel,
+            &vp,
+        );
+
+        match resp {
+            ToolResponse::ExecuteCommand(mut cmd) => {
+                let mut doc = doc;
+                cmd.execute(&mut doc);
+                let root = doc.root().unwrap();
+                let box3d_node = doc.get_node(doc.children(root)[0]).unwrap();
+
+                match &box3d_node.element {
+                    SvgElement::Box3d(attrs) => {
+                        assert_eq!(
+                            parse_corner(attrs.corner0.as_deref().unwrap()).unwrap(),
+                            Point::new(80.0, 80.0)
+                        );
+                        assert_eq!(
+                            parse_corner(attrs.corner1.as_deref().unwrap()).unwrap(),
+                            Point::new(120.0, 80.0)
+                        );
+                        assert_eq!(
+                            parse_corner(attrs.corner2.as_deref().unwrap()).unwrap(),
+                            Point::new(120.0, 120.0)
+                        );
+                        assert_eq!(
+                            parse_corner(attrs.corner3.as_deref().unwrap()).unwrap(),
+                            Point::new(80.0, 120.0)
+                        );
+                    }
+                    _ => panic!("expected Box3d element"),
+                }
+            }
+            _ => panic!("expected ExecuteCommand response from Box3dTool"),
+        }
+    }
+
+    #[test]
     fn box3d_undo_removes_everything() {
         let mut doc = make_doc();
         let root = doc.root().unwrap();
@@ -588,7 +663,7 @@ mod tests {
             Point::new(100.0, 100.0),
             Point::new(0.0, 100.0),
         ];
-        let back = compute_back_face(&front, Point::new(400.0, 300.0), 50.0);
+        let back = compute_back_face(&front, 50.0);
         let faces = build_box_faces(&front, &back);
         let box3d_element = SvgElement::Box3d(Box3dAttrs {
             corner0: Some(corner_string(front[0])),

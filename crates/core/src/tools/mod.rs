@@ -4,6 +4,7 @@ pub mod box3d;
 pub mod bucket;
 pub mod calligraphy;
 pub mod connector;
+mod drag;
 pub mod dropper;
 pub mod ellipse;
 pub mod eraser;

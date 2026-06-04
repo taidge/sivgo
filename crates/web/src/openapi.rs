@@ -113,7 +113,14 @@ pub fn generate_openapi_spec() -> String {
                         }
                     ],
                     "responses": {
-                        "302": { "description": "Redirect to OAuth provider" },
+                        "200": {
+                            "description": "OAuth authorization URL",
+                            "content": {
+                                "application/json": {
+                                    "schema": { "$ref": "#/components/schemas/OAuthLoginResponse" }
+                                }
+                            }
+                        },
                         "400": { "description": "Unsupported provider" }
                     }
                 }
@@ -142,7 +149,7 @@ pub fn generate_openapi_spec() -> String {
                             "description": "OAuth login successful",
                             "content": {
                                 "application/json": {
-                                    "schema": { "$ref": "#/components/schemas/AuthResponse" }
+                                    "schema": { "$ref": "#/components/schemas/OAuthCallbackResponse" }
                                 }
                             }
                         },
@@ -361,7 +368,14 @@ pub fn generate_openapi_spec() -> String {
                         }
                     },
                     "responses": {
-                        "201": { "description": "Asset uploaded" },
+                        "201": {
+                            "description": "Asset uploaded",
+                            "content": {
+                                "application/json": {
+                                    "schema": { "$ref": "#/components/schemas/Asset" }
+                                }
+                            }
+                        },
                         "400": { "description": "Invalid request" }
                     }
                 }
@@ -377,7 +391,7 @@ pub fn generate_openapi_spec() -> String {
                             "name": "id",
                             "in": "path",
                             "required": true,
-                            "schema": { "type": "string" }
+                            "schema": { "type": "string", "format": "uuid" }
                         }
                     ],
                     "responses": {
@@ -402,7 +416,7 @@ pub fn generate_openapi_spec() -> String {
                             "name": "id",
                             "in": "path",
                             "required": true,
-                            "schema": { "type": "string" }
+                            "schema": { "type": "string", "format": "uuid" }
                         }
                     ],
                     "responses": {
@@ -594,9 +608,39 @@ pub fn generate_openapi_spec() -> String {
                 },
                 "AuthResponse": {
                     "type": "object",
+                    "required": ["token", "user"],
                     "properties": {
                         "token": { "type": "string" },
                         "user": { "$ref": "#/components/schemas/User" }
+                    }
+                },
+                "OAuthLoginResponse": {
+                    "type": "object",
+                    "required": ["auth_url", "state"],
+                    "properties": {
+                        "auth_url": { "type": "string", "format": "uri" },
+                        "state": { "type": "string" }
+                    }
+                },
+                "OAuthCallbackResponse": {
+                    "type": "object",
+                    "required": ["access_token", "expires_in", "provider", "user"],
+                    "properties": {
+                        "access_token": { "type": "string" },
+                        "refresh_token": { "type": "string", "nullable": true },
+                        "expires_in": { "type": "integer" },
+                        "provider": { "type": "string", "enum": ["google", "github"] },
+                        "user": { "$ref": "#/components/schemas/OAuthUserInfo" }
+                    }
+                },
+                "OAuthUserInfo": {
+                    "type": "object",
+                    "required": ["email", "name", "provider_user_id"],
+                    "properties": {
+                        "email": { "type": "string" },
+                        "name": { "type": "string" },
+                        "avatar_url": { "type": "string", "nullable": true },
+                        "provider_user_id": { "type": "string" }
                     }
                 },
                 "User": {
@@ -656,13 +700,14 @@ pub fn generate_openapi_spec() -> String {
                 },
                 "Asset": {
                     "type": "object",
+                    "required": ["id", "filename", "content_type", "size_bytes", "created_at", "url"],
                     "properties": {
-                        "id": { "type": "string" },
+                        "id": { "type": "string", "format": "uuid" },
                         "filename": { "type": "string" },
                         "content_type": { "type": "string" },
-                        "size": { "type": "integer" },
-                        "owner_id": { "type": "string" },
-                        "created_at": { "type": "integer" }
+                        "size_bytes": { "type": "integer" },
+                        "created_at": { "type": "string", "format": "date-time" },
+                        "url": { "type": "string" }
                     }
                 },
                 "UploadAssetRequest": {
@@ -700,13 +745,13 @@ pub fn generate_openapi_spec() -> String {
                 },
                 "PluginInfo": {
                     "type": "object",
+                    "required": ["id", "name", "version", "description", "author"],
                     "properties": {
                         "id": { "type": "string" },
                         "name": { "type": "string" },
                         "version": { "type": "string" },
                         "description": { "type": "string" },
-                        "author": { "type": "string" },
-                        "installed": { "type": "boolean" }
+                        "author": { "type": "string" }
                     }
                 }
             }

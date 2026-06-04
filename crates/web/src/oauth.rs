@@ -1,11 +1,10 @@
 //! OAuth2 login support.
 //!
-//! Provides configuration and helpers for Google and GitHub OAuth2 flows.
-//! The `exchange_code` and `get_user_info` methods are stubbed for development
-//! -- a production deployment would perform real HTTP requests to the
-//! provider endpoints.
+//! Provides configuration and helpers for Google and GitHub OAuth2 flows with
+//! injectable HTTP transport for token exchange and userinfo retrieval.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
@@ -35,6 +34,20 @@ impl OAuthProvider {
             "google" => Some(OAuthProvider::Google),
             "github" => Some(OAuthProvider::GitHub),
             _ => None,
+        }
+    }
+
+    fn auth_url(self) -> &'static str {
+        match self {
+            OAuthProvider::Google => "https://accounts.google.com/o/oauth2/v2/auth",
+            OAuthProvider::GitHub => "https://github.com/login/oauth/authorize",
+        }
+    }
+
+    fn token_url(self) -> &'static str {
+        match self {
+            OAuthProvider::Google => "https://oauth2.googleapis.com/token",
+            OAuthProvider::GitHub => "https://github.com/login/oauth/access_token",
         }
     }
 }
@@ -80,22 +93,113 @@ pub struct OAuthUserInfo {
 
 /// An OAuth2 client that holds configurations for multiple providers and
 /// exposes methods for the authorization-code flow.
+pub trait OAuthHttpClient: Send + Sync {
+    fn post_form(&self, url: &str, fields: &[(&str, String)]) -> Result<String, String>;
+    fn get_bearer(&self, url: &str, access_token: &str) -> Result<String, String>;
+}
+
 #[derive(Debug, Clone)]
+pub struct ReqwestOAuthHttpClient {
+    client: reqwest::blocking::Client,
+}
+
+impl ReqwestOAuthHttpClient {
+    pub fn new() -> Self {
+        let client = reqwest::blocking::Client::builder()
+            .user_agent("Sivgo/0.1 OAuth client")
+            .build()
+            .unwrap_or_else(|_| reqwest::blocking::Client::new());
+        Self { client }
+    }
+}
+
+impl Default for ReqwestOAuthHttpClient {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl OAuthHttpClient for ReqwestOAuthHttpClient {
+    fn post_form(&self, url: &str, fields: &[(&str, String)]) -> Result<String, String> {
+        let form = fields
+            .iter()
+            .map(|(key, value)| (*key, value.as_str()))
+            .collect::<Vec<_>>();
+        self.client
+            .post(url)
+            .header(reqwest::header::ACCEPT, "application/json")
+            .form(&form)
+            .send()
+            .map_err(|err| format!("OAuth token request failed: {err}"))?
+            .error_for_status()
+            .map_err(|err| format!("OAuth token request was rejected: {err}"))?
+            .text()
+            .map_err(|err| format!("OAuth token response read failed: {err}"))
+    }
+
+    fn get_bearer(&self, url: &str, access_token: &str) -> Result<String, String> {
+        self.client
+            .get(url)
+            .bearer_auth(access_token)
+            .header(reqwest::header::ACCEPT, "application/json")
+            .send()
+            .map_err(|err| format!("OAuth userinfo request failed: {err}"))?
+            .error_for_status()
+            .map_err(|err| format!("OAuth userinfo request was rejected: {err}"))?
+            .text()
+            .map_err(|err| format!("OAuth userinfo response read failed: {err}"))
+    }
+}
+
+#[derive(Clone)]
 pub struct OAuthClient {
     configs: HashMap<OAuthProvider, OAuthConfig>,
+    http_client: Option<Arc<dyn OAuthHttpClient>>,
+}
+
+impl std::fmt::Debug for OAuthClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OAuthClient")
+            .field("configs", &self.configs.keys().collect::<Vec<_>>())
+            .field("http_client_configured", &self.http_client.is_some())
+            .finish()
+    }
 }
 
 impl OAuthClient {
     /// Create a new client with the given provider configurations.
     pub fn new(configs: HashMap<OAuthProvider, OAuthConfig>) -> Self {
-        Self { configs }
+        Self {
+            configs,
+            http_client: None,
+        }
     }
 
     /// Create an empty client (no providers configured).
     pub fn empty() -> Self {
         Self {
             configs: HashMap::new(),
+            http_client: None,
         }
+    }
+
+    pub fn from_env(http_client: Arc<dyn OAuthHttpClient>) -> Self {
+        let redirect_uri = std::env::var("OAUTH_REDIRECT_URI")
+            .unwrap_or_else(|_| "http://localhost:3000/api/v1/auth/oauth/callback".to_string());
+        let mut configs = HashMap::new();
+
+        for provider in [OAuthProvider::Google, OAuthProvider::GitHub] {
+            if let Some(config) = provider_config_from_env(provider, &redirect_uri) {
+                configs.insert(provider, config);
+            }
+        }
+
+        Self::new(configs).with_http_client(http_client)
+    }
+
+    pub fn with_http_client(mut self, http_client: Arc<dyn OAuthHttpClient>) -> Self {
+        self.http_client = Some(http_client);
+        self
     }
 
     /// Add or replace the configuration for a provider.
@@ -114,22 +218,27 @@ impl OAuthClient {
     /// The `state` parameter is an opaque anti-CSRF token that the client
     /// should validate when the user returns.
     pub fn get_auth_url(&self, provider: OAuthProvider) -> Result<String, String> {
+        self.get_auth_url_with_state(provider, "")
+    }
+
+    pub fn get_auth_url_with_state(
+        &self,
+        provider: OAuthProvider,
+        state: &str,
+    ) -> Result<String, String> {
         let config = self
             .configs
             .get(&provider)
             .ok_or_else(|| format!("Provider {:?} is not configured", provider))?;
         Ok(format!(
-            "{}?client_id={}&redirect_uri={}&response_type=code&scope=openid%20email%20profile",
-            config.auth_url, config.client_id, config.redirect_uri,
+            "{}?client_id={}&redirect_uri={}&response_type=code&scope=openid%20email%20profile&state={}",
+            config.auth_url,
+            url_encode(&config.client_id),
+            url_encode(&config.redirect_uri),
+            url_encode(state),
         ))
     }
 
-    /// Exchange an authorization code for an access token.
-    ///
-    /// **Stub implementation** -- returns a mock token without making a real
-    /// HTTP request.  A production deployment would POST to
-    /// `config.token_url` with the code, client_id, client_secret, and
-    /// redirect_uri.
     pub fn exchange_code(&self, provider: OAuthProvider, code: &str) -> Result<OAuthToken, String> {
         let config = self
             .configs
@@ -140,29 +249,23 @@ impl OAuthClient {
             return Err("authorization code must not be empty".to_string());
         }
 
-        // In production this would be:
-        //   POST {config.token_url}
-        //     grant_type=authorization_code
-        //     code={code}
-        //     client_id={config.client_id}
-        //     client_secret={config.client_secret}
-        //     redirect_uri={config.redirect_uri}
-        Ok(OAuthToken {
-            access_token: format!(
-                "mock_access_token_{}_{}",
-                provider.name(),
-                &config.client_id
-            ),
-            refresh_token: Some(format!("mock_refresh_token_{}", provider.name())),
-            expires_in: 3600,
-        })
+        let http = self
+            .http_client
+            .as_ref()
+            .ok_or_else(|| "OAuth HTTP client is not configured".to_string())?;
+        let body = http.post_form(
+            &config.token_url,
+            &[
+                ("grant_type", "authorization_code".to_string()),
+                ("code", code.to_string()),
+                ("client_id", config.client_id.clone()),
+                ("client_secret", config.client_secret.clone()),
+                ("redirect_uri", config.redirect_uri.clone()),
+            ],
+        )?;
+        parse_token_response(&body)
     }
 
-    /// Retrieve user profile information from the OAuth provider using an
-    /// access token.
-    ///
-    /// **Stub implementation** -- returns plausible mock data.  A production
-    /// deployment would call the provider's userinfo endpoint.
     pub fn get_user_info(
         &self,
         provider: OAuthProvider,
@@ -177,23 +280,12 @@ impl OAuthClient {
             .get(&provider)
             .ok_or_else(|| format!("Provider {:?} is not configured", provider))?;
 
-        // In production this would fetch from:
-        //   Google: GET https://www.googleapis.com/oauth2/v3/userinfo
-        //   GitHub: GET https://api.github.com/user
-        Ok(match provider {
-            OAuthProvider::Google => OAuthUserInfo {
-                email: "user@gmail.com".to_string(),
-                name: "Google User".to_string(),
-                avatar_url: Some("https://lh3.googleusercontent.com/photo.jpg".to_string()),
-                provider_user_id: "google-uid-123456".to_string(),
-            },
-            OAuthProvider::GitHub => OAuthUserInfo {
-                email: "user@github.com".to_string(),
-                name: "GitHub User".to_string(),
-                avatar_url: Some("https://avatars.githubusercontent.com/u/12345".to_string()),
-                provider_user_id: "github-uid-789012".to_string(),
-            },
-        })
+        let http = self
+            .http_client
+            .as_ref()
+            .ok_or_else(|| "OAuth HTTP client is not configured".to_string())?;
+        let body = http.get_bearer(userinfo_url(provider), &token.access_token)?;
+        parse_user_info(provider, &body)
     }
 }
 
@@ -204,75 +296,128 @@ impl Default for OAuthClient {
 }
 
 // ---------------------------------------------------------------------------
-// Legacy helpers (kept for backward-compat with existing handler code)
+// State helpers
 // ---------------------------------------------------------------------------
 
-/// Legacy flat configuration struct.
-///
-/// Used by the existing router/handler code.  New code should prefer
-/// [`OAuthClient`] with per-provider [`OAuthConfig`] values.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct OAuthConfigLegacy {
-    pub google_client_id: Option<String>,
-    pub google_client_secret: Option<String>,
-    pub github_client_id: Option<String>,
-    pub github_client_secret: Option<String>,
-    pub redirect_uri: String,
+pub fn build_state(provider_name: &str, nonce: &str) -> String {
+    format!("{}:{}", provider_name, nonce)
 }
 
-/// Legacy per-provider descriptor.
-#[derive(Debug, Clone)]
-pub struct OAuthProviderLegacy {
-    pub name: String,
-    pub auth_url: String,
-    pub token_url: String,
-    pub client_id: String,
-    pub client_secret: String,
-}
-
-/// Build a Google provider from the legacy config.
-pub fn google_provider(config: &OAuthConfigLegacy) -> Option<OAuthProviderLegacy> {
-    let client_id = config.google_client_id.as_ref()?;
-    let client_secret = config.google_client_secret.as_ref()?;
-    Some(OAuthProviderLegacy {
-        name: "google".to_string(),
-        auth_url: "https://accounts.google.com/o/oauth2/v2/auth".to_string(),
-        token_url: "https://oauth2.googleapis.com/token".to_string(),
-        client_id: client_id.clone(),
-        client_secret: client_secret.clone(),
-    })
-}
-
-/// Build a GitHub provider from the legacy config.
-pub fn github_provider(config: &OAuthConfigLegacy) -> Option<OAuthProviderLegacy> {
-    let client_id = config.github_client_id.as_ref()?;
-    let client_secret = config.github_client_secret.as_ref()?;
-    Some(OAuthProviderLegacy {
-        name: "github".to_string(),
-        auth_url: "https://github.com/login/oauth/authorize".to_string(),
-        token_url: "https://github.com/login/oauth/access_token".to_string(),
-        client_id: client_id.clone(),
-        client_secret: client_secret.clone(),
-    })
-}
-
-/// Build the authorization URL for a legacy provider.
-pub fn build_auth_url(provider: &OAuthProviderLegacy, state: &str) -> String {
-    format!(
-        "{}?client_id={}&state={}&response_type=code&scope=openid%20email%20profile",
-        provider.auth_url, provider.client_id, state,
-    )
-}
-
-/// Exchange an authorization code for a token (legacy stub).
-pub fn exchange_code(provider: &OAuthProviderLegacy, code: &str) -> Result<String, String> {
-    if code.is_empty() {
-        return Err("authorization code must not be empty".to_string());
+pub fn provider_name_from_state(state: &str) -> Option<String> {
+    let (provider_name, nonce) = state.split_once(':')?;
+    if nonce.is_empty() || OAuthProvider::from_str(provider_name).is_none() {
+        return None;
     }
-    Ok(format!(
-        "mock_access_token_{}_{}_{}",
-        provider.name, provider.client_id, code
-    ))
+    Some(provider_name.to_string())
+}
+
+fn parse_token_response(body: &str) -> Result<OAuthToken, String> {
+    let json: serde_json::Value =
+        serde_json::from_str(body).map_err(|err| format!("invalid token JSON: {err}"))?;
+    let access_token = json
+        .get("access_token")
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "token response missing access_token".to_string())?;
+    Ok(OAuthToken {
+        access_token: access_token.to_string(),
+        refresh_token: json
+            .get("refresh_token")
+            .and_then(|value| value.as_str())
+            .map(|value| value.to_string()),
+        expires_in: json
+            .get("expires_in")
+            .and_then(|value| value.as_u64())
+            .unwrap_or(3600),
+    })
+}
+
+fn parse_user_info(provider: OAuthProvider, body: &str) -> Result<OAuthUserInfo, String> {
+    let json: serde_json::Value =
+        serde_json::from_str(body).map_err(|err| format!("invalid userinfo JSON: {err}"))?;
+    match provider {
+        OAuthProvider::Google => Ok(OAuthUserInfo {
+            email: json_string(&json, "email")?,
+            name: json_string(&json, "name")?,
+            avatar_url: json
+                .get("picture")
+                .and_then(|value| value.as_str())
+                .map(|value| value.to_string()),
+            provider_user_id: json_string(&json, "sub")?,
+        }),
+        OAuthProvider::GitHub => {
+            let login = json_string(&json, "login")?;
+            let id = json
+                .get("id")
+                .map(|value| value.to_string())
+                .ok_or_else(|| "github userinfo missing id".to_string())?;
+            Ok(OAuthUserInfo {
+                email: json
+                    .get("email")
+                    .and_then(|value| value.as_str())
+                    .filter(|email| !email.is_empty())
+                    .map(|email| email.to_string())
+                    .unwrap_or_else(|| format!("{login}@users.noreply.github.com")),
+                name: json
+                    .get("name")
+                    .and_then(|value| value.as_str())
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or(&login)
+                    .to_string(),
+                avatar_url: json
+                    .get("avatar_url")
+                    .and_then(|value| value.as_str())
+                    .map(|value| value.to_string()),
+                provider_user_id: id,
+            })
+        }
+    }
+}
+
+fn json_string(json: &serde_json::Value, key: &str) -> Result<String, String> {
+    json.get(key)
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string())
+        .ok_or_else(|| format!("userinfo missing {key}"))
+}
+
+fn userinfo_url(provider: OAuthProvider) -> &'static str {
+    match provider {
+        OAuthProvider::Google => "https://www.googleapis.com/oauth2/v3/userinfo",
+        OAuthProvider::GitHub => "https://api.github.com/user",
+    }
+}
+
+fn provider_config_from_env(provider: OAuthProvider, redirect_uri: &str) -> Option<OAuthConfig> {
+    let prefix = provider.name().to_ascii_uppercase();
+    let client_id = env_value(&format!("{prefix}_OAUTH_CLIENT_ID"))?;
+    let client_secret = env_value(&format!("{prefix}_OAUTH_CLIENT_SECRET"))?;
+    Some(OAuthConfig {
+        client_id,
+        client_secret,
+        redirect_uri: redirect_uri.to_string(),
+        auth_url: provider.auth_url().to_string(),
+        token_url: provider.token_url().to_string(),
+    })
+}
+
+fn url_encode(input: &str) -> String {
+    input
+        .bytes()
+        .flat_map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                vec![byte as char]
+            }
+            _ => format!("%{byte:02X}").chars().collect(),
+        })
+        .collect()
+}
+
+fn env_value(key: &str) -> Option<String> {
+    std::env::var(key)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
 }
 
 // ======================================================================
@@ -284,6 +429,30 @@ mod tests {
     use super::*;
 
     // ----- New OAuthClient tests ------------------------------------------
+
+    #[derive(Debug)]
+    struct FakeHttpClient;
+
+    impl OAuthHttpClient for FakeHttpClient {
+        fn post_form(&self, _url: &str, fields: &[(&str, String)]) -> Result<String, String> {
+            assert!(fields
+                .iter()
+                .any(|(key, value)| *key == "code" && value == "auth-code-123"));
+            Ok(
+                r#"{"access_token":"access-123","refresh_token":"refresh-123","expires_in":7200}"#
+                    .to_string(),
+            )
+        }
+
+        fn get_bearer(&self, url: &str, access_token: &str) -> Result<String, String> {
+            assert_eq!(access_token, "access-123");
+            if url.contains("googleapis") {
+                Ok(r#"{"sub":"google-1","email":"user@gmail.com","name":"Google User","picture":"https://img.test/g.png"}"#.to_string())
+            } else {
+                Ok(r#"{"id":42,"login":"octo","email":null,"name":"Octo Cat","avatar_url":"https://img.test/gh.png"}"#.to_string())
+            }
+        }
+    }
 
     fn make_client() -> OAuthClient {
         let mut configs = HashMap::new();
@@ -307,7 +476,7 @@ mod tests {
                 token_url: "https://github.com/login/oauth/access_token".to_string(),
             },
         );
-        OAuthClient::new(configs)
+        OAuthClient::new(configs).with_http_client(Arc::new(FakeHttpClient))
     }
 
     #[test]
@@ -336,9 +505,12 @@ mod tests {
     #[test]
     fn get_auth_url_contains_client_id() {
         let client = make_client();
-        let url = client.get_auth_url(OAuthProvider::Google).unwrap();
+        let url = client
+            .get_auth_url_with_state(OAuthProvider::Google, "state 1")
+            .unwrap();
         assert!(url.contains("client_id=google-id"));
         assert!(url.contains("accounts.google.com"));
+        assert!(url.contains("state=state%201"));
     }
 
     #[test]
@@ -354,10 +526,9 @@ mod tests {
         let token = client
             .exchange_code(OAuthProvider::GitHub, "auth-code-123")
             .unwrap();
-        assert!(token.access_token.contains("mock_access_token"));
-        assert!(token.access_token.contains("github"));
+        assert_eq!(token.access_token, "access-123");
         assert!(token.refresh_token.is_some());
-        assert_eq!(token.expires_in, 3600);
+        assert_eq!(token.expires_in, 7200);
     }
 
     #[test]
@@ -368,27 +539,47 @@ mod tests {
     }
 
     #[test]
-    fn get_user_info_returns_mock_data() {
-        let client = make_client();
-        let token = client
-            .exchange_code(OAuthProvider::Google, "test-code")
-            .unwrap();
-        let info = client.get_user_info(OAuthProvider::Google, &token).unwrap();
-        assert!(!info.email.is_empty());
-        assert!(!info.name.is_empty());
-        assert!(!info.provider_user_id.is_empty());
+    fn exchange_code_requires_http_client() {
+        let mut configs = HashMap::new();
+        configs.insert(
+            OAuthProvider::Google,
+            OAuthConfig {
+                client_id: "google-id".to_string(),
+                client_secret: "google-secret".to_string(),
+                redirect_uri: "http://localhost:3000/callback".to_string(),
+                auth_url: "https://accounts.google.com/o/oauth2/v2/auth".to_string(),
+                token_url: "https://oauth2.googleapis.com/token".to_string(),
+            },
+        );
+        let client = OAuthClient::new(configs);
+        assert!(client
+            .exchange_code(OAuthProvider::Google, "auth-code-123")
+            .unwrap_err()
+            .contains("HTTP client"));
     }
 
     #[test]
-    fn get_user_info_github_mock() {
+    fn get_user_info_returns_provider_data() {
+        let client = make_client();
+        let token = client
+            .exchange_code(OAuthProvider::Google, "auth-code-123")
+            .unwrap();
+        let info = client.get_user_info(OAuthProvider::Google, &token).unwrap();
+        assert_eq!(info.email, "user@gmail.com");
+        assert_eq!(info.name, "Google User");
+        assert_eq!(info.provider_user_id, "google-1");
+    }
+
+    #[test]
+    fn get_user_info_github_falls_back_to_noreply_email() {
         let client = make_client();
         let token = OAuthToken {
-            access_token: "some-token".to_string(),
+            access_token: "access-123".to_string(),
             refresh_token: None,
             expires_in: 3600,
         };
         let info = client.get_user_info(OAuthProvider::GitHub, &token).unwrap();
-        assert!(info.email.contains("github"));
+        assert_eq!(info.email, "octo@users.noreply.github.com");
         assert!(info.avatar_url.is_some());
     }
 
@@ -419,62 +610,5 @@ mod tests {
             },
         );
         assert!(client.has_provider(OAuthProvider::Google));
-    }
-
-    // ----- Legacy helpers tests -------------------------------------------
-
-    fn test_legacy_config() -> OAuthConfigLegacy {
-        OAuthConfigLegacy {
-            google_client_id: Some("google-id".to_string()),
-            google_client_secret: Some("google-secret".to_string()),
-            github_client_id: Some("github-id".to_string()),
-            github_client_secret: Some("github-secret".to_string()),
-            redirect_uri: "http://localhost:3000/callback".to_string(),
-        }
-    }
-
-    #[test]
-    fn legacy_google_provider_returns_some_when_configured() {
-        let config = test_legacy_config();
-        let provider = google_provider(&config).expect("should build provider");
-        assert_eq!(provider.name, "google");
-        assert_eq!(provider.client_id, "google-id");
-        assert!(provider.auth_url.contains("accounts.google.com"));
-    }
-
-    #[test]
-    fn legacy_github_provider_returns_none_when_missing() {
-        let config = OAuthConfigLegacy {
-            github_client_id: None,
-            github_client_secret: None,
-            ..test_legacy_config()
-        };
-        assert!(github_provider(&config).is_none());
-    }
-
-    #[test]
-    fn legacy_build_auth_url_contains_state_and_client_id() {
-        let config = test_legacy_config();
-        let provider = google_provider(&config).unwrap();
-        let url = build_auth_url(&provider, "random-state");
-        assert!(url.contains("client_id=google-id"));
-        assert!(url.contains("state=random-state"));
-    }
-
-    #[test]
-    fn legacy_exchange_code_returns_mock_token() {
-        let config = test_legacy_config();
-        let provider = github_provider(&config).unwrap();
-        let token = exchange_code(&provider, "auth-code-123").unwrap();
-        assert!(token.contains("mock_access_token"));
-        assert!(token.contains("github"));
-    }
-
-    #[test]
-    fn legacy_exchange_code_rejects_empty_code() {
-        let config = test_legacy_config();
-        let provider = google_provider(&config).unwrap();
-        let result = exchange_code(&provider, "");
-        assert!(result.is_err());
     }
 }

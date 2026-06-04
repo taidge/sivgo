@@ -3,10 +3,11 @@
 //! Maintains a catalogue of available plugins and tracks which plugins
 //! each user has installed.  All state is held in memory.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 /// Metadata for a plugin in the registry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -16,7 +17,6 @@ pub struct PluginInfo {
     pub version: String,
     pub description: String,
     pub author: String,
-    pub installed: bool,
 }
 
 /// Thread-safe plugin registry.
@@ -26,7 +26,7 @@ pub struct PluginInfo {
 #[derive(Debug, Clone)]
 pub struct PluginRegistry {
     plugins: Arc<RwLock<Vec<PluginInfo>>>,
-    installations: Arc<RwLock<HashMap<String, Vec<String>>>>,
+    installations: Arc<RwLock<HashMap<Uuid, HashSet<String>>>>,
 }
 
 impl PluginRegistry {
@@ -58,7 +58,7 @@ impl PluginRegistry {
 
     /// Install a plugin for a user. Returns `true` if the plugin exists and
     /// was not already installed for this user.
-    pub fn install(&self, user_id: &str, plugin_id: &str) -> bool {
+    pub fn install(&self, user_id: Uuid, plugin_id: &str) -> bool {
         // Verify the plugin exists.
         let exists = self
             .plugins
@@ -71,31 +71,24 @@ impl PluginRegistry {
         }
 
         let mut installs = self.installations.write().unwrap();
-        let user_plugins = installs.entry(user_id.to_string()).or_default();
-        if user_plugins.contains(&plugin_id.to_string()) {
-            return false; // already installed
-        }
-        user_plugins.push(plugin_id.to_string());
-        true
+        let user_plugins = installs.entry(user_id).or_default();
+        user_plugins.insert(plugin_id.to_string())
     }
 
     /// Uninstall a plugin for a user. Returns `true` if it was installed.
-    pub fn uninstall(&self, user_id: &str, plugin_id: &str) -> bool {
+    pub fn uninstall(&self, user_id: Uuid, plugin_id: &str) -> bool {
         let mut installs = self.installations.write().unwrap();
-        if let Some(user_plugins) = installs.get_mut(user_id) {
-            let before = user_plugins.len();
-            user_plugins.retain(|id| id != plugin_id);
-            user_plugins.len() < before
+        if let Some(user_plugins) = installs.get_mut(&user_id) {
+            user_plugins.remove(plugin_id)
         } else {
             false
         }
     }
 
-    /// List the plugins installed by a specific user, with `installed` set
-    /// to `true`.
-    pub fn user_plugins(&self, user_id: &str) -> Vec<PluginInfo> {
+    /// List the plugins installed by a specific user.
+    pub fn user_plugins(&self, user_id: Uuid) -> Vec<PluginInfo> {
         let installs = self.installations.read().unwrap();
-        let installed_ids = match installs.get(user_id) {
+        let installed_ids = match installs.get(&user_id) {
             Some(ids) => ids.clone(),
             None => return Vec::new(),
         };
@@ -107,11 +100,7 @@ impl PluginRegistry {
             .unwrap()
             .iter()
             .filter(|p| installed_ids.contains(&p.id))
-            .map(|p| {
-                let mut plugin = p.clone();
-                plugin.installed = true;
-                plugin
-            })
+            .cloned()
             .collect()
     }
 }
@@ -134,7 +123,6 @@ mod tests {
                 version: "1.0.0".to_string(),
                 description: "First plugin".to_string(),
                 author: "Alice".to_string(),
-                installed: false,
             },
             PluginInfo {
                 id: "plugin-b".to_string(),
@@ -142,7 +130,6 @@ mod tests {
                 version: "2.1.0".to_string(),
                 description: "Second plugin".to_string(),
                 author: "Bob".to_string(),
-                installed: false,
             },
         ]
     }
@@ -159,31 +146,32 @@ mod tests {
     #[test]
     fn install_and_user_plugins() {
         let registry = PluginRegistry::with_plugins(sample_plugins());
-        assert!(registry.install("user-1", "plugin-a"));
+        let user_id = Uuid::new_v4();
+        assert!(registry.install(user_id, "plugin-a"));
         // Installing again returns false.
-        assert!(!registry.install("user-1", "plugin-a"));
+        assert!(!registry.install(user_id, "plugin-a"));
 
-        let user_plugins = registry.user_plugins("user-1");
+        let user_plugins = registry.user_plugins(user_id);
         assert_eq!(user_plugins.len(), 1);
         assert_eq!(user_plugins[0].id, "plugin-a");
-        assert!(user_plugins[0].installed);
     }
 
     #[test]
     fn install_nonexistent_plugin_returns_false() {
         let registry = PluginRegistry::with_plugins(sample_plugins());
-        assert!(!registry.install("user-1", "plugin-nonexistent"));
+        assert!(!registry.install(Uuid::new_v4(), "plugin-nonexistent"));
     }
 
     #[test]
     fn uninstall_removes_plugin() {
         let registry = PluginRegistry::with_plugins(sample_plugins());
-        registry.install("user-1", "plugin-b");
-        assert!(registry.uninstall("user-1", "plugin-b"));
+        let user_id = Uuid::new_v4();
+        registry.install(user_id, "plugin-b");
+        assert!(registry.uninstall(user_id, "plugin-b"));
         // Uninstalling again returns false.
-        assert!(!registry.uninstall("user-1", "plugin-b"));
+        assert!(!registry.uninstall(user_id, "plugin-b"));
 
-        let user_plugins = registry.user_plugins("user-1");
+        let user_plugins = registry.user_plugins(user_id);
         assert!(user_plugins.is_empty());
     }
 }

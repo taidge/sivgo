@@ -22,6 +22,41 @@ pub enum FilterPrimitiveKind {
 }
 
 impl FilterPrimitiveKind {
+    /// Stable key shared with the core engine.
+    pub fn key(&self) -> &'static str {
+        match self {
+            Self::GaussianBlur => "gaussian_blur",
+            Self::Offset => "offset",
+            Self::ColorMatrix => "color_matrix",
+            Self::Blend => "blend",
+            Self::Composite => "composite",
+            Self::Morphology => "morphology",
+            Self::Turbulence => "turbulence",
+            Self::DisplacementMap => "displacement_map",
+            Self::ConvolveMatrix => "convolve_matrix",
+            Self::Flood => "flood",
+            Self::Merge => "merge",
+        }
+    }
+
+    /// Create a UI kind from a stable core key.
+    pub fn from_key(key: &str) -> Option<Self> {
+        match key {
+            "gaussian_blur" => Some(Self::GaussianBlur),
+            "offset" => Some(Self::Offset),
+            "color_matrix" => Some(Self::ColorMatrix),
+            "blend" => Some(Self::Blend),
+            "composite" => Some(Self::Composite),
+            "morphology" => Some(Self::Morphology),
+            "turbulence" => Some(Self::Turbulence),
+            "displacement_map" => Some(Self::DisplacementMap),
+            "convolve_matrix" => Some(Self::ConvolveMatrix),
+            "flood" => Some(Self::Flood),
+            "merge" => Some(Self::Merge),
+            _ => None,
+        }
+    }
+
     /// Human-readable label.
     pub fn label(&self) -> &'static str {
         match self {
@@ -55,6 +90,91 @@ impl FilterPrimitiveKind {
             Self::Merge,
         ]
     }
+
+    /// Default editable parameter rows for this primitive.
+    pub fn default_params(&self) -> Vec<FilterParam> {
+        fn param(name: &str, value: &str) -> FilterParam {
+            FilterParam {
+                name: name.to_string(),
+                value: value.to_string(),
+            }
+        }
+
+        match self {
+            Self::GaussianBlur => vec![
+                param("input", "SourceGraphic"),
+                param("stdDeviationX", "3"),
+                param("stdDeviationY", "3"),
+                param("result", "blur"),
+            ],
+            Self::Offset => vec![
+                param("input", "SourceGraphic"),
+                param("dx", "4"),
+                param("dy", "4"),
+                param("result", "offset"),
+            ],
+            Self::ColorMatrix => vec![
+                param("input", "SourceGraphic"),
+                param("type", "saturate"),
+                param("values", "0"),
+                param("result", "color"),
+            ],
+            Self::Blend => vec![
+                param("input", "SourceGraphic"),
+                param("in2", "SourceGraphic"),
+                param("mode", "normal"),
+                param("result", "blend"),
+            ],
+            Self::Composite => vec![
+                param("input", "SourceGraphic"),
+                param("in2", "SourceGraphic"),
+                param("operator", "over"),
+                param("k1", "0"),
+                param("k2", "1"),
+                param("k3", "1"),
+                param("k4", "0"),
+                param("result", "composite"),
+            ],
+            Self::Morphology => vec![
+                param("input", "SourceAlpha"),
+                param("operator", "dilate"),
+                param("radiusX", "2"),
+                param("radiusY", "2"),
+                param("result", "morphology"),
+            ],
+            Self::Turbulence => vec![
+                param("type", "turbulence"),
+                param("baseFrequencyX", "0.05"),
+                param("baseFrequencyY", "0.05"),
+                param("numOctaves", "2"),
+                param("seed", "0"),
+                param("result", "noise"),
+            ],
+            Self::DisplacementMap => vec![
+                param("input", "SourceGraphic"),
+                param("in2", "noise"),
+                param("scale", "10"),
+                param("xChannelSelector", "R"),
+                param("yChannelSelector", "G"),
+                param("result", "displaced"),
+            ],
+            Self::ConvolveMatrix => vec![
+                param("input", "SourceGraphic"),
+                param("orderX", "3"),
+                param("orderY", "3"),
+                param("kernelMatrix", "0 -1 0 -1 5 -1 0 -1 0"),
+                param("divisor", "1"),
+                param("bias", "0"),
+                param("result", "convolved"),
+            ],
+            Self::Flood => vec![
+                param("flood-color", "#000000"),
+                param("flood-opacity", "0.5"),
+                param("result", "flood"),
+            ],
+            Self::Merge => vec![param("inputs", "SourceGraphic"), param("result", "merge")],
+        }
+    }
 }
 
 /// A key-value parameter for a filter primitive.
@@ -78,12 +198,13 @@ pub struct FilterPrimitive {
 }
 
 impl FilterPrimitive {
-    /// Create a new enabled filter primitive with default (empty) params.
+    /// Create a new enabled filter primitive with default params.
     pub fn new(id: impl Into<String>, kind: FilterPrimitiveKind) -> Self {
+        let params = kind.default_params();
         Self {
             id: id.into(),
             kind,
-            params: Vec::new(),
+            params,
             enabled: true,
         }
     }
@@ -158,6 +279,7 @@ pub fn FilterEditorPanel(
                             let is_last = idx == primitives.len() - 1;
                             rsx! {
                                 div {
+                                    key: "{prim.id}",
                                     class: if is_selected { "filter-prim-item selected" } else { "filter-prim-item" },
                                     onclick: move |_| on_action.call(FilterEditorAction::SelectPrimitive(prim_id.clone())),
 
@@ -258,7 +380,7 @@ mod tests {
         let prim = FilterPrimitive::new("f1", FilterPrimitiveKind::GaussianBlur);
         assert_eq!(prim.id, "f1");
         assert_eq!(prim.kind, FilterPrimitiveKind::GaussianBlur);
-        assert!(prim.params.is_empty());
+        assert_eq!(prim.params[1].name, "stdDeviationX");
         assert!(prim.enabled);
     }
 
@@ -268,5 +390,19 @@ mod tests {
         assert_eq!(FilterPrimitiveKind::ColorMatrix.label(), "Color Matrix");
         assert_eq!(FilterPrimitiveKind::Turbulence.label(), "Turbulence");
         assert_eq!(FilterPrimitiveKind::all().len(), 11);
+    }
+
+    #[test]
+    fn filter_primitive_kind_keys_and_default_params() {
+        assert_eq!(FilterPrimitiveKind::GaussianBlur.key(), "gaussian_blur");
+        assert_eq!(
+            FilterPrimitiveKind::from_key("displacement_map"),
+            Some(FilterPrimitiveKind::DisplacementMap)
+        );
+        assert_eq!(
+            FilterPrimitiveKind::Flood.default_params()[0].name,
+            "flood-color"
+        );
+        assert_eq!(FilterPrimitiveKind::Composite.default_params().len(), 8);
     }
 }

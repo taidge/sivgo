@@ -1,12 +1,13 @@
-﻿//! Spiral tool: click-drag to create an Archimedean spiral path.
+//! Spiral tool: click-drag to create an Archimedean spiral path.
 
 use sivgo_dom::{PathAttrs, PresentationAttrs, SvgDocument, SvgElement};
-use sivgo_math::{BezPath, Point};
+use sivgo_math::{BezPath, Point, Rect};
 
 use crate::commands::AddNodeCommand;
 use crate::input::{KeyEvent, MouseButton, MouseEvent};
 use crate::selection::SelectionSet;
 use crate::tool::{Tool, ToolResponse};
+use crate::tools::drag::{drag_rect, fit_path_to_rect};
 use crate::viewport::Viewport;
 
 use sivgo_dom::types::{Color, LengthUnit, Paint, SvgLength};
@@ -14,8 +15,7 @@ use sivgo_dom::types::{Color, LengthUnit, Paint, SvgLength};
 /// The spiral creation tool.
 ///
 /// Creates an Archimedean spiral (r = a + b*theta) as a cubic-bezier
-/// approximated SVG path. The center is placed at the mouse-down point,
-/// and the outer radius is determined by dragging.
+/// approximated SVG path inside the dragged rectangle.
 #[derive(Debug)]
 pub struct SpiralTool {
     /// Center point in document space (mouse-down location).
@@ -95,26 +95,21 @@ impl Tool for SpiralTool {
         }
         self.dragging = false;
 
-        let center = match self.start.take() {
+        let start = match self.start.take() {
             Some(p) => p,
             None => return ToolResponse::None,
         };
 
         let end = viewport.screen_to_document(Point::new(event.x, event.y));
-        let outer_radius = center.distance(end);
+        let bounds = drag_rect(start, end, event.modifiers.ctrl, event.modifiers.shift);
 
         // Don't create a spiral that is too small.
-        if outer_radius < 1.0 {
+        if bounds.width() < 1.0 || bounds.height() < 1.0 {
             return ToolResponse::None;
         }
 
-        let path = build_spiral_path(
-            center,
-            outer_radius,
-            self.turns,
-            self.divergence,
-            self.inner_radius,
-        );
+        let path =
+            build_spiral_path_in_rect(bounds, self.turns, self.divergence, self.inner_radius);
 
         let element = SvgElement::Path(PathAttrs {
             d: path,
@@ -270,6 +265,22 @@ fn build_spiral_path(
     path
 }
 
+fn build_spiral_path_in_rect(
+    bounds: Rect,
+    turns: f64,
+    divergence: f64,
+    inner_radius_frac: f64,
+) -> BezPath {
+    let base = build_spiral_path(
+        Point::new(0.0, 0.0),
+        1.0,
+        turns,
+        divergence,
+        inner_radius_frac,
+    );
+    fit_path_to_rect(&base, bounds)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -324,5 +335,17 @@ mod tests {
         let center = Point::new(0.0, 0.0);
         let path = build_spiral_path(center, 0.5, 1.0, 1.0, 0.0);
         assert!(!path.is_empty());
+    }
+
+    #[test]
+    fn spiral_path_in_rect_matches_drag_bounds() {
+        let bounds = Rect::new(10.0, 20.0, 90.0, 70.0);
+        let path = build_spiral_path_in_rect(bounds, 3.0, 1.0, 0.0);
+        let actual = path.bounding_box();
+
+        assert!((actual.x0 - bounds.x0).abs() < 1e-6);
+        assert!((actual.y0 - bounds.y0).abs() < 1e-6);
+        assert!((actual.x1 - bounds.x1).abs() < 1e-6);
+        assert!((actual.y1 - bounds.y1).abs() < 1e-6);
     }
 }

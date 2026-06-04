@@ -2,9 +2,10 @@
 //! Tools, Interface, I/O, Rendering, and Snapping.
 
 use dioxus::prelude::*;
+use serde::{Deserialize, Serialize};
 
 /// Top-level section within the preferences dialog.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PreferencesSection {
     Tools,
     Interface,
@@ -37,8 +38,15 @@ impl PreferencesSection {
     }
 }
 
+impl Default for PreferencesSection {
+    fn default() -> Self {
+        Self::Tools
+    }
+}
+
 /// Aggregate preferences state.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct PreferencesState {
     pub section: PreferencesSection,
     // Tools
@@ -60,6 +68,15 @@ pub struct PreferencesState {
     pub snap_to_nodes: bool,
     pub snap_to_paths: bool,
     pub snap_to_grid: bool,
+    pub snap_to_guides: bool,
+    pub snap_to_objects: bool,
+    pub snap_to_intersections: bool,
+    pub snap_to_equal_spacing: bool,
+    pub snap_from_cursor: bool,
+    pub snap_from_object_nodes: bool,
+    pub snap_from_bbox_corners: bool,
+    pub snap_from_bbox_centers: bool,
+    pub snap_from_bbox_midpoints: bool,
     pub snap_distance: f64,
 }
 
@@ -81,6 +98,15 @@ impl Default for PreferencesState {
             snap_to_nodes: true,
             snap_to_paths: true,
             snap_to_grid: true,
+            snap_to_guides: true,
+            snap_to_objects: true,
+            snap_to_intersections: true,
+            snap_to_equal_spacing: true,
+            snap_from_cursor: true,
+            snap_from_object_nodes: true,
+            snap_from_bbox_corners: true,
+            snap_from_bbox_centers: true,
+            snap_from_bbox_midpoints: true,
             snap_distance: 10.0,
         }
     }
@@ -109,6 +135,15 @@ pub enum PreferencesAction {
     SetSnapToNodes(bool),
     SetSnapToPaths(bool),
     SetSnapToGrid(bool),
+    SetSnapToGuides(bool),
+    SetSnapToObjects(bool),
+    SetSnapToIntersections(bool),
+    SetSnapToEqualSpacing(bool),
+    SetSnapFromCursor(bool),
+    SetSnapFromObjectNodes(bool),
+    SetSnapFromBBoxCorners(bool),
+    SetSnapFromBBoxCenters(bool),
+    SetSnapFromBBoxMidpoints(bool),
     SetSnapDistance(f64),
     /// Close the dialog.
     Close,
@@ -366,6 +401,106 @@ pub fn PreferencesDialog(
                                     }
                                 }
                                 div { class: "prop-row",
+                                    label { class: "prop-label", "Snap to guides" }
+                                    input {
+                                        r#type: "checkbox",
+                                        class: "prop-checkbox",
+                                        checked: state.snap_to_guides,
+                                        onchange: move |evt: Event<FormData>| {
+                                            on_action.call(PreferencesAction::SetSnapToGuides(evt.value() == "true"));
+                                        },
+                                    }
+                                }
+                                div { class: "prop-row",
+                                    label { class: "prop-label", "Snap to objects" }
+                                    input {
+                                        r#type: "checkbox",
+                                        class: "prop-checkbox",
+                                        checked: state.snap_to_objects,
+                                        onchange: move |evt: Event<FormData>| {
+                                            on_action.call(PreferencesAction::SetSnapToObjects(evt.value() == "true"));
+                                        },
+                                    }
+                                }
+                                div { class: "prop-row",
+                                    label { class: "prop-label", "Snap intersections" }
+                                    input {
+                                        r#type: "checkbox",
+                                        class: "prop-checkbox",
+                                        checked: state.snap_to_intersections,
+                                        onchange: move |evt: Event<FormData>| {
+                                            on_action.call(PreferencesAction::SetSnapToIntersections(evt.value() == "true"));
+                                        },
+                                    }
+                                }
+                                div { class: "prop-row",
+                                    label { class: "prop-label", "Equal spacing" }
+                                    input {
+                                        r#type: "checkbox",
+                                        class: "prop-checkbox",
+                                        checked: state.snap_to_equal_spacing,
+                                        onchange: move |evt: Event<FormData>| {
+                                            on_action.call(PreferencesAction::SetSnapToEqualSpacing(evt.value() == "true"));
+                                        },
+                                    }
+                                }
+                                div { class: "prop-section-header", "Snap Sources" }
+                                div { class: "prop-row",
+                                    label { class: "prop-label", "Cursor point" }
+                                    input {
+                                        r#type: "checkbox",
+                                        class: "prop-checkbox",
+                                        checked: state.snap_from_cursor,
+                                        onchange: move |evt: Event<FormData>| {
+                                            on_action.call(PreferencesAction::SetSnapFromCursor(evt.value() == "true"));
+                                        },
+                                    }
+                                }
+                                div { class: "prop-row",
+                                    label { class: "prop-label", "Object nodes" }
+                                    input {
+                                        r#type: "checkbox",
+                                        class: "prop-checkbox",
+                                        checked: state.snap_from_object_nodes,
+                                        onchange: move |evt: Event<FormData>| {
+                                            on_action.call(PreferencesAction::SetSnapFromObjectNodes(evt.value() == "true"));
+                                        },
+                                    }
+                                }
+                                div { class: "prop-row",
+                                    label { class: "prop-label", "BBox corners" }
+                                    input {
+                                        r#type: "checkbox",
+                                        class: "prop-checkbox",
+                                        checked: state.snap_from_bbox_corners,
+                                        onchange: move |evt: Event<FormData>| {
+                                            on_action.call(PreferencesAction::SetSnapFromBBoxCorners(evt.value() == "true"));
+                                        },
+                                    }
+                                }
+                                div { class: "prop-row",
+                                    label { class: "prop-label", "BBox centers" }
+                                    input {
+                                        r#type: "checkbox",
+                                        class: "prop-checkbox",
+                                        checked: state.snap_from_bbox_centers,
+                                        onchange: move |evt: Event<FormData>| {
+                                            on_action.call(PreferencesAction::SetSnapFromBBoxCenters(evt.value() == "true"));
+                                        },
+                                    }
+                                }
+                                div { class: "prop-row",
+                                    label { class: "prop-label", "BBox midpoints" }
+                                    input {
+                                        r#type: "checkbox",
+                                        class: "prop-checkbox",
+                                        checked: state.snap_from_bbox_midpoints,
+                                        onchange: move |evt: Event<FormData>| {
+                                            on_action.call(PreferencesAction::SetSnapFromBBoxMidpoints(evt.value() == "true"));
+                                        },
+                                    }
+                                }
+                                div { class: "prop-row",
                                     label { class: "prop-label", "Distance" }
                                     input {
                                         r#type: "number",
@@ -402,6 +537,15 @@ mod tests {
         assert_eq!(state.auto_save_interval_secs, 300);
         assert!(state.anti_aliasing);
         assert!(state.snap_to_nodes);
+        assert!(state.snap_to_guides);
+        assert!(state.snap_to_objects);
+        assert!(state.snap_to_intersections);
+        assert!(state.snap_to_equal_spacing);
+        assert!(state.snap_from_cursor);
+        assert!(state.snap_from_object_nodes);
+        assert!(state.snap_from_bbox_corners);
+        assert!(state.snap_from_bbox_centers);
+        assert!(state.snap_from_bbox_midpoints);
         assert!((state.snap_distance - 10.0).abs() < f64::EPSILON);
     }
 

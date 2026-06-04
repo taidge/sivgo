@@ -64,6 +64,18 @@ pub fn all_commands() -> Vec<PaletteCommand> {
             category: "File",
         },
         PaletteCommand {
+            action: "file.export_pages_svg",
+            label: "Export Pages as SVG",
+            shortcut: "",
+            category: "File",
+        },
+        PaletteCommand {
+            action: "file.export_pages_pdf",
+            label: "Export Pages as PDF",
+            shortcut: "",
+            category: "File",
+        },
+        PaletteCommand {
             action: "file.import",
             label: "Import...",
             shortcut: "Ctrl+I",
@@ -113,6 +125,12 @@ pub fn all_commands() -> Vec<PaletteCommand> {
             category: "Edit",
         },
         PaletteCommand {
+            action: "edit.copy_bitmap",
+            label: "Copy as Bitmap",
+            shortcut: "",
+            category: "Edit",
+        },
+        PaletteCommand {
             action: "edit.paste",
             label: "Paste",
             shortcut: "Ctrl+V",
@@ -137,9 +155,27 @@ pub fn all_commands() -> Vec<PaletteCommand> {
             category: "Edit",
         },
         PaletteCommand {
+            action: "edit.clone",
+            label: "Create Clone",
+            shortcut: "Alt+D",
+            category: "Edit",
+        },
+        PaletteCommand {
+            action: "edit.unlink_clone",
+            label: "Unlink Clone",
+            shortcut: "Alt+Shift+D",
+            category: "Edit",
+        },
+        PaletteCommand {
             action: "edit.select_all",
             label: "Select All",
             shortcut: "Ctrl+A",
+            category: "Edit",
+        },
+        PaletteCommand {
+            action: "edit.select_all_layers",
+            label: "Select All in All Layers",
+            shortcut: "",
             category: "Edit",
         },
         PaletteCommand {
@@ -210,6 +246,42 @@ pub fn all_commands() -> Vec<PaletteCommand> {
             category: "View",
         },
         PaletteCommand {
+            action: "view.display_mode_normal",
+            label: "Normal Display",
+            shortcut: "",
+            category: "View",
+        },
+        PaletteCommand {
+            action: "view.display_mode_outline",
+            label: "Outline Display",
+            shortcut: "",
+            category: "View",
+        },
+        PaletteCommand {
+            action: "view.display_mode_no_filters",
+            label: "No Filters Display",
+            shortcut: "",
+            category: "View",
+        },
+        PaletteCommand {
+            action: "view.display_mode_hairlines",
+            label: "Visible Hairlines Display",
+            shortcut: "",
+            category: "View",
+        },
+        PaletteCommand {
+            action: "view.display_mode_print",
+            label: "Print Preview Display",
+            shortcut: "",
+            category: "View",
+        },
+        PaletteCommand {
+            action: "view.display_mode_proof",
+            label: "Proof Colors Display",
+            shortcut: "",
+            category: "View",
+        },
+        PaletteCommand {
             action: "view.fullscreen",
             label: "Fullscreen",
             shortcut: "F11",
@@ -267,6 +339,12 @@ pub fn all_commands() -> Vec<PaletteCommand> {
         PaletteCommand {
             action: "layer.toggle_lock",
             label: "Toggle Layer Lock",
+            shortcut: "",
+            category: "Layer",
+        },
+        PaletteCommand {
+            action: "layer.move_selection_to_active",
+            label: "Move Selection to Active Layer",
             shortcut: "",
             category: "Layer",
         },
@@ -429,6 +507,30 @@ pub fn all_commands() -> Vec<PaletteCommand> {
             category: "Path",
         },
         PaletteCommand {
+            action: "path.inset",
+            label: "Inset",
+            shortcut: "Ctrl+(",
+            category: "Path",
+        },
+        PaletteCommand {
+            action: "path.outset",
+            label: "Outset",
+            shortcut: "Ctrl+)",
+            category: "Path",
+        },
+        PaletteCommand {
+            action: "path.dynamic_offset",
+            label: "Dynamic Offset",
+            shortcut: "Ctrl+J",
+            category: "Path",
+        },
+        PaletteCommand {
+            action: "path.linked_offset",
+            label: "Linked Offset",
+            shortcut: "Ctrl+Alt+J",
+            category: "Path",
+        },
+        PaletteCommand {
             action: "path.simplify",
             label: "Simplify",
             shortcut: "Ctrl+L",
@@ -462,6 +564,12 @@ pub fn all_commands() -> Vec<PaletteCommand> {
         PaletteCommand {
             action: "text.remove_from_path",
             label: "Remove from Path",
+            shortcut: "",
+            category: "Text",
+        },
+        PaletteCommand {
+            action: "text.to_path",
+            label: "Text to Path",
             shortcut: "",
             category: "Text",
         },
@@ -586,28 +694,37 @@ pub fn CommandPalette(
 ) -> Element {
     let mut query = use_signal(|| String::new());
 
+    // Recompute the filtered + sorted command list only when the query signal
+    // changes. The closure reads `query`, so the memo is correctly reactive.
+    // NOTE: this hook must be called unconditionally (before any early return)
+    // to keep the hook order stable across renders.
+    let filtered = use_memo(move || {
+        let q = query.read().clone();
+        let commands = all_commands();
+        let mut scored: Vec<(usize, PaletteCommand)> = commands
+            .into_iter()
+            .filter_map(|cmd| {
+                // Match against label and action.
+                let score_label = fuzzy_score(&q, cmd.label);
+                let score_action = fuzzy_score(&q, cmd.action);
+                let best = match (score_label, score_action) {
+                    (Some(a), Some(b)) => Some(a.min(b)),
+                    (Some(a), None) => Some(a),
+                    (None, Some(b)) => Some(b),
+                    (None, None) => None,
+                };
+                best.map(|s| (s, cmd))
+            })
+            .collect::<Vec<_>>();
+        scored.sort_by_key(|(score, _)| *score);
+        scored.into_iter().map(|(_, cmd)| cmd).collect::<Vec<_>>()
+    });
+
     if !visible {
         return rsx! {};
     }
 
-    let commands = all_commands();
     let q = query.read().clone();
-    let mut filtered: Vec<(usize, &PaletteCommand)> = commands
-        .iter()
-        .filter_map(|cmd| {
-            // Match against label and action.
-            let score_label = fuzzy_score(&q, cmd.label);
-            let score_action = fuzzy_score(&q, cmd.action);
-            let best = match (score_label, score_action) {
-                (Some(a), Some(b)) => Some(a.min(b)),
-                (Some(a), None) => Some(a),
-                (None, Some(b)) => Some(b),
-                (None, None) => None,
-            };
-            best.map(|s| (s, cmd))
-        })
-        .collect();
-    filtered.sort_by_key(|(score, _)| *score);
 
     rsx! {
         div {
@@ -636,11 +753,12 @@ pub fn CommandPalette(
                 }
 
                 div { class: "cp-results",
-                    if filtered.is_empty() {
+                    if filtered.read().is_empty() {
                         div { class: "cp-empty", "No matching commands" }
                     }
-                    for (_score, cmd) in filtered {
+                    for cmd in filtered.read().iter() {
                         button {
+                            key: "{cmd.action}",
                             class: "cp-item",
                             onclick: {
                                 let action_owned = cmd.action.to_string();
@@ -656,5 +774,55 @@ pub fn CommandPalette(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn path_offset_commands_are_exposed() {
+        let commands = all_commands();
+
+        assert!(commands.iter().any(|cmd| cmd.action == "path.inset"));
+        assert!(commands.iter().any(|cmd| cmd.action == "path.outset"));
+        assert!(commands
+            .iter()
+            .any(|cmd| cmd.action == "path.dynamic_offset"));
+        assert!(commands
+            .iter()
+            .any(|cmd| cmd.action == "path.linked_offset"));
+    }
+
+    #[test]
+    fn display_mode_commands_are_exposed() {
+        let commands = all_commands();
+
+        for action in [
+            "view.display_mode_normal",
+            "view.display_mode_outline",
+            "view.display_mode_no_filters",
+            "view.display_mode_hairlines",
+            "view.display_mode_print",
+            "view.display_mode_proof",
+        ] {
+            assert!(
+                commands.iter().any(|cmd| cmd.action == action),
+                "missing {action}"
+            );
+        }
+    }
+
+    #[test]
+    fn layer_aware_commands_are_exposed() {
+        let commands = all_commands();
+
+        assert!(commands
+            .iter()
+            .any(|cmd| cmd.action == "edit.select_all_layers"));
+        assert!(commands
+            .iter()
+            .any(|cmd| cmd.action == "layer.move_selection_to_active"));
     }
 }

@@ -19,6 +19,39 @@ pub enum LpeKind {
 }
 
 impl LpeKind {
+    /// Stable key shared with the core engine.
+    pub fn key(&self) -> &'static str {
+        match self {
+            Self::BendPath => "bend_path",
+            Self::PatternAlongPath => "pattern_along_path",
+            Self::StitchSubPaths => "stitch_sub_paths",
+            Self::Offset => "offset",
+            Self::Simplify => "simplify",
+            Self::PowerStroke => "power_stroke",
+            Self::Roughen => "roughen",
+            Self::Mirror => "mirror",
+            Self::BooleanOperation => "boolean_operation",
+            Self::Measure => "measure",
+        }
+    }
+
+    /// Create a UI kind from the stable core key.
+    pub fn from_key(key: &str) -> Option<Self> {
+        match key {
+            "bend_path" => Some(Self::BendPath),
+            "pattern_along_path" => Some(Self::PatternAlongPath),
+            "stitch_sub_paths" => Some(Self::StitchSubPaths),
+            "offset" => Some(Self::Offset),
+            "simplify" => Some(Self::Simplify),
+            "power_stroke" => Some(Self::PowerStroke),
+            "roughen" => Some(Self::Roughen),
+            "mirror" => Some(Self::Mirror),
+            "boolean_operation" => Some(Self::BooleanOperation),
+            "measure" => Some(Self::Measure),
+            _ => None,
+        }
+    }
+
     /// Human-readable label.
     pub fn label(&self) -> &'static str {
         match self {
@@ -50,6 +83,41 @@ impl LpeKind {
             Self::Measure,
         ]
     }
+
+    /// Default editable parameter rows for this effect kind.
+    pub fn default_params(&self) -> Vec<LpeParam> {
+        fn param(name: &str, value: &str) -> LpeParam {
+            LpeParam {
+                name: name.to_string(),
+                value: value.to_string(),
+            }
+        }
+
+        match self {
+            Self::BendPath => vec![param("bend_amount", "1")],
+            Self::PatternAlongPath => vec![
+                param("spacing", "10"),
+                param("normal_offset", "0"),
+                param("tangential_offset", "0"),
+            ],
+            Self::StitchSubPaths => vec![param("gap", "5")],
+            Self::Offset => vec![param("offset", "5")],
+            Self::Simplify => vec![param("threshold", "2")],
+            Self::PowerStroke => vec![param("width", "5")],
+            Self::Roughen => vec![
+                param("max_displacement", "2"),
+                param("segment_length", "10"),
+                param("seed", "42"),
+            ],
+            Self::Mirror => vec![
+                param("axis_origin_x", "0"),
+                param("axis_origin_y", "0"),
+                param("axis_angle", "0"),
+            ],
+            Self::BooleanOperation => vec![param("operation", "0")],
+            Self::Measure => vec![param("font_size", "12"), param("measure_offset", "10")],
+        }
+    }
 }
 
 /// A key-value parameter for an LPE.
@@ -73,12 +141,13 @@ pub struct LpeEntry {
 }
 
 impl LpeEntry {
-    /// Create a new enabled LPE entry with no parameters.
+    /// Create a new enabled LPE entry with that kind's default parameters.
     pub fn new(id: impl Into<String>, kind: LpeKind) -> Self {
+        let params = kind.default_params();
         Self {
             id: id.into(),
             kind,
-            params: Vec::new(),
+            params,
             enabled: true,
         }
     }
@@ -162,6 +231,7 @@ pub fn LpePanel(
                             let is_last = idx == effects.len() - 1;
                             rsx! {
                                 div {
+                                    key: "{effect.id}",
                                     class: if is_selected { "lpe-item selected" } else { "lpe-item" },
                                     onclick: move |_| on_action.call(LpeAction::Select(eid.clone())),
 
@@ -262,7 +332,7 @@ mod tests {
         let lpe = LpeEntry::new("lpe1", LpeKind::BendPath);
         assert_eq!(lpe.id, "lpe1");
         assert_eq!(lpe.kind, LpeKind::BendPath);
-        assert!(lpe.params.is_empty());
+        assert_eq!(lpe.params[0].name, "bend_amount");
         assert!(lpe.enabled);
     }
 
@@ -272,5 +342,13 @@ mod tests {
         assert_eq!(LpeKind::PowerStroke.label(), "Power Stroke");
         assert_eq!(LpeKind::BooleanOperation.label(), "Boolean Operation");
         assert_eq!(LpeKind::all().len(), 10);
+    }
+
+    #[test]
+    fn lpe_kind_keys_and_default_params() {
+        assert_eq!(LpeKind::Offset.key(), "offset");
+        assert_eq!(LpeKind::from_key("roughen"), Some(LpeKind::Roughen));
+        assert_eq!(LpeKind::Offset.default_params()[0].name, "offset");
+        assert_eq!(LpeKind::Roughen.default_params().len(), 3);
     }
 }

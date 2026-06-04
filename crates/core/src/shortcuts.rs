@@ -420,6 +420,34 @@ mod tests {
     }
 
     #[test]
+    fn default_shortcuts_cover_file_tool_and_zoom_interactions() {
+        let mgr = ShortcutManager::new();
+        assert_eq!(
+            mgr.lookup(
+                Key::O,
+                Modifiers {
+                    ctrl: true,
+                    shift: false,
+                    alt: false,
+                }
+            ),
+            Some(&Action::Open)
+        );
+        assert_eq!(
+            mgr.lookup(Key::T, Modifiers::none()),
+            Some(&Action::SwitchTool(ToolId::Text))
+        );
+        assert_eq!(
+            mgr.lookup(Key::Plus, Modifiers::none()),
+            Some(&Action::ZoomIn)
+        );
+        assert_eq!(
+            mgr.lookup(Key::Minus, Modifiers::none()),
+            Some(&Action::ZoomOut)
+        );
+    }
+
+    #[test]
     fn display_format() {
         let s = Shortcut::new(
             Key::Z,

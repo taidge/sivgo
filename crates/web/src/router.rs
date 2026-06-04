@@ -1,4 +1,6 @@
-﻿//! Route definitions for the Sivgo web API.
+//! Route definitions for the Sivgo web API.
+
+use std::sync::Arc;
 
 use salvo::cors::Cors;
 use salvo::logging::Logger;
@@ -8,7 +10,7 @@ use crate::assets::AssetStore;
 use crate::auth;
 use crate::config::ServerConfig;
 use crate::handlers;
-use crate::oauth::OAuthConfigLegacy as OAuthConfig;
+use crate::oauth::{OAuthClient, ReqwestOAuthHttpClient};
 use crate::plugin_registry::PluginRegistry;
 use crate::preferences::PreferencesStore;
 use crate::store::Store;
@@ -52,7 +54,7 @@ pub fn create_router(store: Store, config: &ServerConfig) -> Service {
     let asset_store = AssetStore::new();
     let prefs_store = PreferencesStore::new();
     let plugin_registry = PluginRegistry::new();
-    let oauth_config = OAuthConfig::default();
+    let oauth_client = OAuthClient::from_env(Arc::new(ReqwestOAuthHttpClient::new()));
 
     // Public routes (no auth required).
     let public = Router::with_path("api/v1")
@@ -123,9 +125,9 @@ pub fn create_router(store: Store, config: &ServerConfig) -> Service {
                 .inject(config.clone())
                 .inject(asset_store)
                 .inject(prefs_store)
-                .inject(plugin_registry)
-                .inject(oauth_config),
+                .inject(plugin_registry),
         )
+        .hoop(affix_state::inject(oauth_client))
         .push(public)
         .push(authenticated);
 

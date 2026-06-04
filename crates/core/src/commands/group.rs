@@ -1,6 +1,6 @@
 ﻿//! Command: group selected nodes into a `<g>`.
 
-use sivgo_dom::{GroupAttrs, NodeId, SvgDocument, SvgElement, SvgNode};
+use sivgo_dom::{GroupAttrs, NodeId, PresentationAttrs, SvgDocument, SvgElement, SvgNode};
 
 use crate::command::Command;
 
@@ -107,6 +107,10 @@ pub struct UngroupCommand {
     group_index: usize,
     /// The children that were in the group.
     children: Vec<NodeId>,
+    group_element: Option<SvgElement>,
+    group_presentation: Option<PresentationAttrs>,
+    group_xml_id: Option<String>,
+    group_attributes: Option<std::collections::HashMap<String, String>>,
 }
 
 impl UngroupCommand {
@@ -116,6 +120,10 @@ impl UngroupCommand {
             group_parent: None,
             group_index: 0,
             children: Vec::new(),
+            group_element: None,
+            group_presentation: None,
+            group_xml_id: None,
+            group_attributes: None,
         }
     }
 }
@@ -125,7 +133,13 @@ impl Command for UngroupCommand {
         // Record group's parent and position.
         self.group_parent = doc.parent(self.group_id);
         self.group_index = doc.child_index(self.group_id).unwrap_or(0);
-        self.children = doc.children(self.group_id).to_vec();
+        if let Some(group) = doc.get_node(self.group_id) {
+            self.children = group.children.clone();
+            self.group_element = Some(group.element.clone());
+            self.group_presentation = Some(group.presentation.clone());
+            self.group_xml_id = group.xml_id.clone();
+            self.group_attributes = Some(group.attributes.clone());
+        }
 
         let parent = match self.group_parent {
             Some(p) => p,
@@ -151,7 +165,19 @@ impl Command for UngroupCommand {
         };
 
         // Re-create the group.
-        let node = SvgNode::new(self.group_id, SvgElement::Group(GroupAttrs::default()));
+        let mut node = SvgNode::new(
+            self.group_id,
+            self.group_element
+                .clone()
+                .unwrap_or_else(|| SvgElement::Group(GroupAttrs::default())),
+        );
+        if let Some(presentation) = &self.group_presentation {
+            node.presentation = presentation.clone();
+        }
+        node.xml_id = self.group_xml_id.clone();
+        if let Some(attributes) = &self.group_attributes {
+            node.attributes = attributes.clone();
+        }
         doc.insert_node(node);
         doc.insert_child_at(parent, self.group_id, self.group_index);
 

@@ -12,10 +12,8 @@ use dioxus::prelude::*;
 /// - Total object count in the document
 #[component]
 pub fn StatusBar(
-    /// Cursor X position in document coordinates.
-    cursor_x: f64,
-    /// Cursor Y position in document coordinates.
-    cursor_y: f64,
+    /// Cursor position in document coordinates.
+    cursor_position: Signal<(f64, f64)>,
     /// Current zoom factor (1.0 = 100%).
     zoom: f64,
     /// Number of currently selected objects.
@@ -27,6 +25,7 @@ pub fn StatusBar(
     #[props(default = 0)]
     object_count: usize,
 ) -> Element {
+    let (cursor_x_value, cursor_y_value) = *cursor_position.read();
     let zoom_pct = zoom * 100.0;
 
     let selection_text = if selection_count == 0 {
@@ -48,7 +47,7 @@ pub fn StatusBar(
             div { class: "status-section",
                 div { class: "status-cluster",
                     span { class: "status-label", "Cursor" }
-                    span { class: "status-item", "{cursor_x:.1}, {cursor_y:.1}" }
+                    span { class: "status-item", "{cursor_x_value:.1}, {cursor_y_value:.1}" }
                 }
                 div { class: "status-cluster",
                     span { class: "status-label", "Zoom" }

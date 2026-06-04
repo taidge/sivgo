@@ -1,11 +1,10 @@
-﻿//! Snapping engine for the editor.
+//! Snapping engine for the editor.
 //!
 //! Implements grid, guide, bounding-box, node, path, midpoint, intersection,
 //! and smart distribution snapping. Each snap type can be individually
 //! enabled/disabled through [`SnapPreferences`].
 
-use sivgo_dom::SvgDocument;
-use sivgo_math::{BezPath, Point, Rect};
+use sivgo_math::{BezPath, Point, Rect, Vector};
 
 use crate::viewport::Viewport;
 
@@ -38,6 +37,34 @@ pub enum SnapTarget {
     EqualSpacing,
 }
 
+/// Describes which source point initiated a snap pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SnapSourceKind {
+    /// Raw cursor / tool point.
+    Cursor,
+    /// Explicit object/path node.
+    ObjectNode,
+    /// Object bounding-box corner.
+    BBoxCorner,
+    /// Object bounding-box center.
+    BBoxCenter,
+    /// Object bounding-box edge midpoint.
+    BBoxMidpoint,
+}
+
+/// A candidate source point that can be snapped to enabled targets.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SnapSource {
+    pub point: Point,
+    pub kind: SnapSourceKind,
+}
+
+impl SnapSource {
+    pub fn new(point: Point, kind: SnapSourceKind) -> Self {
+        Self { point, kind }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // SnapResult
 // ---------------------------------------------------------------------------
@@ -59,6 +86,13 @@ pub struct SnapResult {
     pub indicator_line: Option<(Point, Point)>,
 }
 
+/// Result of snapping a specific source point.
+#[derive(Debug, Clone, Copy)]
+pub struct SourcedSnapResult {
+    pub source: SnapSource,
+    pub snap: SnapResult,
+}
+
 impl SnapResult {
     /// Create a no-snap result that simply returns the original point.
     fn no_snap(point: Point) -> Self {
@@ -70,6 +104,59 @@ impl SnapResult {
             target: None,
             indicator_line: None,
         }
+    }
+}
+
+/// A guide line represented by one point on the line and a unit normal.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SnapGuide {
+    /// Any point on the guide line, in document coordinates.
+    pub origin: Point,
+    /// Unit normal to the guide line, in document coordinates.
+    pub normal: Vector,
+}
+
+impl SnapGuide {
+    /// Build a guide from an origin and normal. Returns `None` for invalid
+    /// zero-length or non-finite normals.
+    pub fn new(origin: Point, normal: Vector) -> Option<Self> {
+        let length = normal.length();
+        if !origin.x.is_finite() || !origin.y.is_finite() || !length.is_finite() || length <= 1e-12
+        {
+            return None;
+        }
+        Some(Self {
+            origin,
+            normal: normal / length,
+        })
+    }
+
+    /// Horizontal visual guide that constrains the y coordinate.
+    pub fn horizontal(y: f64) -> Self {
+        Self {
+            origin: Point::new(0.0, y),
+            normal: Vector::new(0.0, 1.0),
+        }
+    }
+
+    /// Vertical visual guide that constrains the x coordinate.
+    pub fn vertical(x: f64) -> Self {
+        Self {
+            origin: Point::new(x, 0.0),
+            normal: Vector::new(1.0, 0.0),
+        }
+    }
+
+    /// Return the closest point on this guide to `point` plus the absolute
+    /// perpendicular distance.
+    pub fn project(self, point: Point) -> (Point, f64) {
+        let signed = (point - self.origin).dot(self.normal);
+        (point - self.normal * signed, signed.abs())
+    }
+
+    /// Direction vector along the guide line.
+    pub fn direction(self) -> Vector {
+        self.normal.perp()
     }
 }
 
@@ -104,6 +191,18 @@ pub struct SnapPreferences {
     pub tolerance: f64,
     /// Grid spacing in document units.
     pub grid_spacing: f64,
+    /// Which object/cursor source points can initiate snapping.
+    pub sources: SnapSourcePreferences,
+}
+
+/// Per-source enable/disable flags for source-aware snapping.
+#[derive(Debug, Clone)]
+pub struct SnapSourcePreferences {
+    pub snap_from_cursor: bool,
+    pub snap_from_object_nodes: bool,
+    pub snap_from_bbox_corners: bool,
+    pub snap_from_bbox_centers: bool,
+    pub snap_from_bbox_midpoints: bool,
 }
 
 impl Default for SnapPreferences {
@@ -121,6 +220,19 @@ impl Default for SnapPreferences {
             snap_to_equal_spacing: true,
             tolerance: 10.0,
             grid_spacing: 10.0,
+            sources: SnapSourcePreferences::default(),
+        }
+    }
+}
+
+impl Default for SnapSourcePreferences {
+    fn default() -> Self {
+        Self {
+            snap_from_cursor: true,
+            snap_from_object_nodes: true,
+            snap_from_bbox_corners: true,
+            snap_from_bbox_centers: true,
+            snap_from_bbox_midpoints: true,
         }
     }
 }
@@ -138,6 +250,17 @@ impl SnapPreferences {
             || self.snap_to_intersections
             || self.snap_to_midpoints
             || self.snap_to_equal_spacing
+    }
+
+    /// Returns `true` if this source kind is currently enabled.
+    pub fn source_enabled(&self, kind: SnapSourceKind) -> bool {
+        match kind {
+            SnapSourceKind::Cursor => self.sources.snap_from_cursor,
+            SnapSourceKind::ObjectNode => self.sources.snap_from_object_nodes,
+            SnapSourceKind::BBoxCorner => self.sources.snap_from_bbox_corners,
+            SnapSourceKind::BBoxCenter => self.sources.snap_from_bbox_centers,
+            SnapSourceKind::BBoxMidpoint => self.sources.snap_from_bbox_midpoints,
+        }
     }
 }
 
@@ -165,8 +288,8 @@ pub struct SnapIndicator {
 /// Callers fill this in before calling [`SnappingEngine::snap_all`].
 #[derive(Debug, Clone, Default)]
 pub struct SnapContext {
-    /// Guide lines: `(position, is_horizontal)`.
-    pub guides: Vec<(f64, bool)>,
+    /// Guide lines.
+    pub guides: Vec<SnapGuide>,
     /// Bounding boxes of other objects on the canvas.
     pub bboxes: Vec<Rect>,
     /// On-curve / endpoint nodes from paths.
@@ -200,118 +323,34 @@ impl SnappingEngine {
         }
     }
 
-    // -- public convenience accessors for backward compat --
-
-    /// Whether grid snapping is enabled.
-    #[inline]
-    pub fn snap_to_grid(&self) -> bool {
-        self.prefs.snap_to_grid
-    }
-
-    /// Grid spacing in document units.
-    #[inline]
-    pub fn grid_spacing(&self) -> f64 {
-        self.prefs.grid_spacing
-    }
-
-    /// Maximum snap distance in screen pixels.
-    #[inline]
-    pub fn tolerance(&self) -> f64 {
-        self.prefs.tolerance
-    }
-
-    // -----------------------------------------------------------------------
-    // Legacy entry point (grid-only, used by existing callers)
-    // -----------------------------------------------------------------------
-
-    /// Snap a document-space point (grid only, legacy API).
-    ///
-    /// The viewport is used to convert the tolerance from screen pixels to
-    /// document units.
-    pub fn snap(&self, point: Point, _doc: &SvgDocument, viewport: &Viewport) -> SnapResult {
-        let mut result = SnapResult::no_snap(point);
-
-        if !self.prefs.any_enabled() {
-            return result;
-        }
-
-        let doc_tol = self.prefs.tolerance / viewport.zoom;
-
-        if self.prefs.snap_to_grid && self.prefs.grid_spacing > 0.0 {
-            let gs = self.prefs.grid_spacing;
-            let snapped_x = (point.x / gs).round() * gs;
-            let snapped_y = (point.y / gs).round() * gs;
-
-            let dx = (snapped_x - point.x).abs();
-            let dy = (snapped_y - point.y).abs();
-
-            if dx <= doc_tol {
-                result.point.x = snapped_x;
-                result.snapped_x = true;
-            }
-            if dy <= doc_tol {
-                result.point.y = snapped_y;
-                result.snapped_y = true;
-            }
-
-            if result.snapped_x || result.snapped_y {
-                result.target = Some(SnapTarget::Grid);
-            }
-            result.distance = result.point.distance(point);
-        }
-
-        result
-    }
-
     // -----------------------------------------------------------------------
     // Individual snap methods
     // -----------------------------------------------------------------------
 
     /// 9.4.3  Snap to guide lines.
-    ///
-    /// `guides` contains `(position, is_horizontal)`.  Horizontal guides snap
-    /// the Y coordinate; vertical guides snap the X coordinate.
     pub fn snap_to_guides(
         &self,
         point: Point,
-        guides: &[(f64, bool)],
+        guides: &[SnapGuide],
         doc_tol: f64,
     ) -> Option<SnapResult> {
         if !self.prefs.snap_to_guides || guides.is_empty() {
             return None;
         }
         let mut best: Option<SnapResult> = None;
-        for &(pos, is_horizontal) in guides {
-            let dist = if is_horizontal {
-                (point.y - pos).abs()
-            } else {
-                (point.x - pos).abs()
-            };
+        for &guide in guides {
+            let (snapped, dist) = guide.project(point);
             if dist > doc_tol {
                 continue;
             }
-            let snapped = if is_horizontal {
-                Point::new(point.x, pos)
-            } else {
-                Point::new(pos, point.y)
-            };
             let full_dist = snapped.distance(point);
             if best.as_ref().map_or(true, |b| full_dist < b.distance) {
-                let indicator = if is_horizontal {
-                    Some((
-                        Point::new(point.x - 20.0, pos),
-                        Point::new(point.x + 20.0, pos),
-                    ))
-                } else {
-                    Some((
-                        Point::new(pos, point.y - 20.0),
-                        Point::new(pos, point.y + 20.0),
-                    ))
-                };
+                let direction = guide.direction();
+                let indicator = Some((snapped - direction * 20.0, snapped + direction * 20.0));
                 best = Some(SnapResult {
                     point: snapped,
-                    snapped_x: !is_horizontal,
-                    snapped_y: is_horizontal,
+                    snapped_x: (snapped.x - point.x).abs() > 1e-12,
+                    snapped_y: (snapped.y - point.y).abs() > 1e-12,
                     distance: full_dist,
                     target: Some(SnapTarget::Guide),
                     indicator_line: indicator,
@@ -643,15 +682,88 @@ impl SnappingEngine {
             candidates.push(r);
         }
 
-        // Pick closest
+        // Pick closest, with deterministic target priority for numerical ties.
         candidates
             .into_iter()
             .min_by(|a, b| {
-                a.distance
+                let distance_order = a
+                    .distance
                     .partial_cmp(&b.distance)
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .unwrap_or(std::cmp::Ordering::Equal);
+                if distance_order != std::cmp::Ordering::Equal
+                    && (a.distance - b.distance).abs() > 1e-9
+                {
+                    distance_order
+                } else {
+                    Self::target_priority(a.target).cmp(&Self::target_priority(b.target))
+                }
             })
             .unwrap_or_else(|| SnapResult::no_snap(point))
+    }
+
+    /// Try all enabled snap targets for each enabled source point and return
+    /// the best source/target pair.
+    pub fn snap_all_sources(
+        &self,
+        sources: &[SnapSource],
+        context: &SnapContext,
+        viewport: &Viewport,
+    ) -> Option<SourcedSnapResult> {
+        sources
+            .iter()
+            .copied()
+            .filter(|source| self.prefs.source_enabled(source.kind))
+            .filter_map(|source| {
+                let snap = self.snap_all(source.point, context, viewport);
+                snap.target
+                    .is_some()
+                    .then_some(SourcedSnapResult { source, snap })
+            })
+            .min_by(|a, b| {
+                let distance_order = a
+                    .snap
+                    .distance
+                    .partial_cmp(&b.snap.distance)
+                    .unwrap_or(std::cmp::Ordering::Equal);
+                if distance_order != std::cmp::Ordering::Equal
+                    && (a.snap.distance - b.snap.distance).abs() > 1e-9
+                {
+                    distance_order
+                } else {
+                    Self::source_priority(a.source.kind)
+                        .cmp(&Self::source_priority(b.source.kind))
+                        .then_with(|| {
+                            Self::target_priority(a.snap.target)
+                                .cmp(&Self::target_priority(b.snap.target))
+                        })
+                }
+            })
+    }
+
+    fn source_priority(source: SnapSourceKind) -> u8 {
+        match source {
+            SnapSourceKind::ObjectNode => 0,
+            SnapSourceKind::BBoxCorner => 1,
+            SnapSourceKind::BBoxCenter => 2,
+            SnapSourceKind::BBoxMidpoint => 3,
+            SnapSourceKind::Cursor => 4,
+        }
+    }
+
+    fn target_priority(target: Option<SnapTarget>) -> u8 {
+        match target {
+            Some(SnapTarget::PathNode) => 0,
+            Some(SnapTarget::Intersection) => 1,
+            Some(SnapTarget::BBoxCorner) => 2,
+            Some(SnapTarget::BBoxCenter) => 3,
+            Some(SnapTarget::Guide) => 4,
+            Some(SnapTarget::PathPoint) => 5,
+            Some(SnapTarget::Midpoint) => 6,
+            Some(SnapTarget::BBoxEdge) => 7,
+            Some(SnapTarget::EqualSpacing) => 8,
+            Some(SnapTarget::Grid) => 9,
+            None => u8::MAX,
+        }
     }
 
     /// Build a [`SnapIndicator`] for UI rendering from a [`SnapResult`].
@@ -727,6 +839,7 @@ mod tests {
             snap_to_equal_spacing: false,
             tolerance: 10.0,
             grid_spacing: 10.0,
+            sources: SnapSourcePreferences::default(),
         };
         assert!(!prefs.any_enabled());
     }
@@ -737,8 +850,8 @@ mod tests {
     fn test_grid_snap_basic() {
         let engine = SnappingEngine::new();
         let vp = make_viewport();
-        let doc = sivgo_dom::SvgDocument::new();
-        let result = engine.snap(Point::new(12.0, 18.0), &doc, &vp);
+        let context = SnapContext::default();
+        let result = engine.snap_all(Point::new(12.0, 18.0), &context, &vp);
         assert_eq!(result.point, Point::new(10.0, 20.0));
         assert!(result.snapped_x);
         assert!(result.snapped_y);
@@ -750,9 +863,9 @@ mod tests {
         let mut engine = SnappingEngine::new();
         engine.prefs.tolerance = 1.0;
         let vp = make_viewport();
-        let doc = sivgo_dom::SvgDocument::new();
+        let context = SnapContext::default();
         // Point is 2 units from nearest grid line, tolerance is 1 px (= 1 doc unit at zoom 1).
-        let result = engine.snap(Point::new(12.0, 18.0), &doc, &vp);
+        let result = engine.snap_all(Point::new(12.0, 18.0), &context, &vp);
         assert_eq!(result.point, Point::new(12.0, 18.0));
         assert!(!result.snapped_x);
         assert!(!result.snapped_y);
@@ -763,7 +876,7 @@ mod tests {
     #[test]
     fn test_guide_snap_horizontal() {
         let engine = SnappingEngine::new();
-        let guides = vec![(100.0, true)]; // horizontal guide at y=100
+        let guides = vec![SnapGuide::horizontal(100.0)];
         let result = engine.snap_to_guides(Point::new(50.0, 103.0), &guides, 10.0);
         assert!(result.is_some());
         let r = result.unwrap();
@@ -776,7 +889,7 @@ mod tests {
     #[test]
     fn test_guide_snap_vertical() {
         let engine = SnappingEngine::new();
-        let guides = vec![(200.0, false)]; // vertical guide at x=200
+        let guides = vec![SnapGuide::vertical(200.0)];
         let result = engine.snap_to_guides(Point::new(203.0, 50.0), &guides, 10.0);
         assert!(result.is_some());
         let r = result.unwrap();
@@ -789,7 +902,7 @@ mod tests {
     #[test]
     fn test_guide_snap_out_of_tolerance() {
         let engine = SnappingEngine::new();
-        let guides = vec![(100.0, true)];
+        let guides = vec![SnapGuide::horizontal(100.0)];
         let result = engine.snap_to_guides(Point::new(50.0, 120.0), &guides, 10.0);
         assert!(result.is_none());
     }
@@ -797,7 +910,7 @@ mod tests {
     #[test]
     fn test_guide_snap_closest_wins() {
         let engine = SnappingEngine::new();
-        let guides = vec![(100.0, true), (105.0, true)];
+        let guides = vec![SnapGuide::horizontal(100.0), SnapGuide::horizontal(105.0)];
         // Point y=103 is distance 3 from guide y=100, distance 2 from guide y=105.
         // Guide y=105 is closer, so it should win.
         let result = engine.snap_to_guides(Point::new(50.0, 103.0), &guides, 10.0);
@@ -810,9 +923,21 @@ mod tests {
     fn test_guide_snap_disabled() {
         let mut engine = SnappingEngine::new();
         engine.prefs.snap_to_guides = false;
-        let guides = vec![(100.0, true)];
+        let guides = vec![SnapGuide::horizontal(100.0)];
         let result = engine.snap_to_guides(Point::new(50.0, 103.0), &guides, 10.0);
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_guide_snap_angled() {
+        let engine = SnappingEngine::new();
+        let guide = SnapGuide::new(Point::new(0.0, 0.0), Vector::new(1.0, -1.0)).unwrap();
+        let result = engine.snap_to_guides(Point::new(11.0, 9.0), &[guide], 10.0);
+        assert!(result.is_some());
+        let r = result.unwrap();
+        assert!((r.point.x - 10.0).abs() < 1e-9);
+        assert!((r.point.y - 10.0).abs() < 1e-9);
+        assert_eq!(r.target, Some(SnapTarget::Guide));
     }
 
     // -- BBox snapping ---------------------------------------------------
@@ -997,7 +1122,7 @@ mod tests {
         let vp = make_viewport();
 
         let context = SnapContext {
-            guides: vec![(100.0, true)], // horizontal guide at y=100
+            guides: vec![SnapGuide::horizontal(100.0)],
             bboxes: vec![Rect::new(200.0, 200.0, 300.0, 300.0)],
             nodes: vec![Point::new(50.0, 98.0)], // very close node
             ..Default::default()
@@ -1010,6 +1135,61 @@ mod tests {
         // Either is acceptable; just verify we *did* snap.
         assert!(result.target.is_some());
         assert!(result.distance <= 1.0 + 1e-6);
+    }
+
+    #[test]
+    fn test_snap_all_uses_target_priority_for_ties() {
+        let engine = SnappingEngine::new();
+        let vp = make_viewport();
+        let context = SnapContext {
+            nodes: vec![Point::new(12.0, 8.0)],
+            ..Default::default()
+        };
+
+        let result = engine.snap_all(Point::new(12.0, 10.0), &context, &vp);
+
+        assert_eq!(result.target, Some(SnapTarget::PathNode));
+        assert_eq!(result.point, Point::new(12.0, 8.0));
+    }
+
+    #[test]
+    fn test_snap_all_sources_prefers_object_node_over_cursor_on_tie() {
+        let engine = SnappingEngine::new();
+        let vp = make_viewport();
+        let context = SnapContext {
+            nodes: vec![Point::new(10.0, 10.0), Point::new(20.0, 20.0)],
+            ..Default::default()
+        };
+        let sources = vec![
+            SnapSource::new(Point::new(12.0, 10.0), SnapSourceKind::Cursor),
+            SnapSource::new(Point::new(22.0, 20.0), SnapSourceKind::ObjectNode),
+        ];
+
+        let result = engine.snap_all_sources(&sources, &context, &vp).unwrap();
+
+        assert_eq!(result.source.kind, SnapSourceKind::ObjectNode);
+        assert_eq!(result.snap.target, Some(SnapTarget::PathNode));
+        assert_eq!(result.snap.distance, 2.0);
+    }
+
+    #[test]
+    fn test_snap_all_sources_respects_source_preferences() {
+        let mut engine = SnappingEngine::new();
+        engine.prefs.sources.snap_from_object_nodes = false;
+        let vp = make_viewport();
+        let context = SnapContext {
+            nodes: vec![Point::new(10.0, 10.0), Point::new(20.0, 20.0)],
+            ..Default::default()
+        };
+        let sources = vec![
+            SnapSource::new(Point::new(12.0, 10.0), SnapSourceKind::Cursor),
+            SnapSource::new(Point::new(20.5, 20.0), SnapSourceKind::ObjectNode),
+        ];
+
+        let result = engine.snap_all_sources(&sources, &context, &vp).unwrap();
+
+        assert_eq!(result.source.kind, SnapSourceKind::Cursor);
+        assert_eq!(result.snap.point, Point::new(10.0, 10.0));
     }
 
     #[test]
@@ -1028,10 +1208,11 @@ mod tests {
             snap_to_equal_spacing: false,
             tolerance: 10.0,
             grid_spacing: 10.0,
+            sources: SnapSourcePreferences::default(),
         };
         let vp = make_viewport();
         let context = SnapContext {
-            guides: vec![(100.0, true)],
+            guides: vec![SnapGuide::horizontal(100.0)],
             bboxes: vec![Rect::new(0.0, 0.0, 100.0, 100.0)],
             ..Default::default()
         };
@@ -1066,18 +1247,5 @@ mod tests {
         let engine = SnappingEngine::new();
         let result = SnapResult::no_snap(Point::new(50.0, 50.0));
         assert!(engine.build_indicator(&result).is_none());
-    }
-
-    // -- Legacy API backward compat --------------------------------------
-
-    #[test]
-    fn test_legacy_snap_still_works() {
-        let engine = SnappingEngine::new();
-        let vp = make_viewport();
-        let doc = sivgo_dom::SvgDocument::new();
-        let result = engine.snap(Point::new(13.0, 7.0), &doc, &vp);
-        assert_eq!(result.point, Point::new(10.0, 10.0));
-        assert!(result.snapped_x);
-        assert!(result.snapped_y);
     }
 }

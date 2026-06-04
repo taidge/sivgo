@@ -27,7 +27,7 @@ pub async fn get_preferences(depot: &mut Depot, res: &mut Response) {
         }
     };
 
-    let prefs = store.get(&user_id.to_string()).unwrap_or_default();
+    let prefs = store.get(user_id).unwrap_or_default();
     res.render(Json(prefs));
 }
 
@@ -59,7 +59,7 @@ pub async fn set_preferences(req: &mut Request, depot: &mut Depot, res: &mut Res
         }
     };
 
-    store.set(&user_id.to_string(), prefs.clone());
+    store.set(user_id, prefs.clone());
     res.render(Json(prefs));
 }
 
@@ -91,9 +91,8 @@ pub async fn merge_preferences(req: &mut Request, depot: &mut Depot, res: &mut R
         }
     };
 
-    let uid = user_id.to_string();
-    store.merge(&uid, partial);
+    store.merge(user_id, partial);
 
-    let prefs = store.get(&uid).unwrap_or_default();
+    let prefs = store.get(user_id).unwrap_or_default();
     res.render(Json(prefs));
 }

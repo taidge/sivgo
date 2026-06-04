@@ -1,4 +1,4 @@
-﻿//! Select tool: click to select, drag to move, rubber-band select.
+//! Select tool: click to select, drag to move, rubber-band select.
 
 use sivgo_dom::{NodeId, SvgDocument, SvgElement};
 use sivgo_math::{Point, Rect, Transform2D};
@@ -6,7 +6,7 @@ use sivgo_math::{Point, Rect, Transform2D};
 use crate::command::Command;
 use crate::commands::TransformCommand;
 use crate::input::{KeyEvent, MouseButton, MouseEvent};
-use crate::selection::SelectionSet;
+use crate::selection::{element_bounding_box, node_transform, SelectionSet};
 use crate::tool::{Tool, ToolResponse};
 use crate::viewport::Viewport;
 
@@ -149,7 +149,7 @@ impl Tool for SelectTool {
         viewport: &Viewport,
     ) -> ToolResponse {
         let state = std::mem::replace(&mut self.state, SelectState::Idle);
-        let _doc_pt = viewport.screen_to_document(Point::new(event.x, event.y));
+        let release_doc = viewport.screen_to_document(Point::new(event.x, event.y));
 
         match state {
             SelectState::PressedOnObject { node_id: _, .. } => {
@@ -166,11 +166,11 @@ impl Tool for SelectTool {
             }
             SelectState::Dragging {
                 start_doc,
-                last_doc,
+                last_doc: _,
                 old_transforms,
             } => {
-                let delta_x = last_doc.x - start_doc.x;
-                let delta_y = last_doc.y - start_doc.y;
+                let delta_x = release_doc.x - start_doc.x;
+                let delta_y = release_doc.y - start_doc.y;
 
                 if delta_x.abs() < 0.001 && delta_y.abs() < 0.001 {
                     return ToolResponse::Handled;
@@ -256,53 +256,160 @@ pub fn hit_test_at(doc: &SvgDocument, point: Point) -> Option<NodeId> {
             _ => {}
         }
 
-        if let Some(bb) = element_bounding_box_for_hit(&node.element) {
+        if let Some(bb) = element_bounding_box_for_hit(doc, id, &node.element) {
             if bb.contains_point(point) {
-                result = Some(id);
+                result = Some(selectable_hit_id(doc, id));
             }
         }
     }
     result
 }
 
+fn selectable_hit_id(doc: &SvgDocument, id: NodeId) -> NodeId {
+    let mut current = id;
+    while let Some(parent_id) = doc.parent(current) {
+        if doc
+            .get_node(parent_id)
+            .is_some_and(|node| matches!(node.element, SvgElement::Box3d(_)))
+        {
+            return parent_id;
+        }
+        current = parent_id;
+    }
+    id
+}
+
 /// Bounding box for hit testing.
-fn element_bounding_box_for_hit(element: &SvgElement) -> Option<Rect> {
-    match element {
-        SvgElement::Rect(a) => Some(Rect::new(
-            a.x.value,
-            a.y.value,
-            a.x.value + a.width.value,
-            a.y.value + a.height.value,
-        )),
-        SvgElement::Circle(a) => {
-            let cx = a.cx.value;
-            let cy = a.cy.value;
-            let r = a.r.value;
-            Some(Rect::new(cx - r, cy - r, cx + r, cy + r))
+fn element_bounding_box_for_hit(
+    doc: &SvgDocument,
+    id: NodeId,
+    element: &SvgElement,
+) -> Option<Rect> {
+    let bb = element_bounding_box(element)?;
+    if bb.is_empty() {
+        return None;
+    }
+
+    let local_bb = match element {
+        // Inflate thin paths and lines so a visible stroke is not a one-pixel target.
+        SvgElement::Line(_) | SvgElement::Polyline(_) | SvgElement::Path(_) => {
+            inflate_rect(bb, 2.0)
         }
-        SvgElement::Ellipse(a) => {
-            let cx = a.cx.value;
-            let cy = a.cy.value;
-            let rx = a.rx.value;
-            let ry = a.ry.value;
-            Some(Rect::new(cx - rx, cy - ry, cx + rx, cy + ry))
-        }
-        SvgElement::Line(a) => {
-            // Inflate a bit so thin lines are clickable.
-            let x0 = a.x1.value.min(a.x2.value) - 2.0;
-            let y0 = a.y1.value.min(a.y2.value) - 2.0;
-            let x1 = a.x1.value.max(a.x2.value) + 2.0;
-            let y1 = a.y1.value.max(a.y2.value) + 2.0;
-            Some(Rect::new(x0, y0, x1, y1))
-        }
-        SvgElement::Path(a) => {
-            let bb = a.d.bounding_box();
-            if bb.is_empty() {
-                None
-            } else {
-                Some(bb)
-            }
-        }
-        _ => None,
+        _ => bb,
+    };
+
+    Some(node_transform(doc, id).transform_rect(local_bb))
+}
+
+fn inflate_rect(rect: Rect, amount: f64) -> Rect {
+    Rect::new(
+        rect.x0 - amount,
+        rect.y0 - amount,
+        rect.x1 + amount,
+        rect.y1 + amount,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sivgo_dom::{
+        Box3dAttrs, LengthUnit, PathAttrs, RectAttrs, SvgDocument, SvgElement, SvgLength,
+        SvgSvgAttrs,
+    };
+    use sivgo_math::BezPath;
+
+    fn make_doc() -> SvgDocument {
+        let mut doc = SvgDocument::new();
+        let root = doc.add_node(SvgElement::Svg(SvgSvgAttrs::default()));
+        doc.set_root(root);
+        doc
+    }
+
+    #[test]
+    fn hit_test_uses_shared_selection_bounds_for_drawable_elements() {
+        let mut doc = make_doc();
+        let root = doc.root().unwrap();
+        let polygon = doc.add_node(SvgElement::Polygon(sivgo_dom::PolygonAttrs {
+            points: vec![(10.0, 10.0), (60.0, 10.0), (60.0, 40.0)],
+        }));
+        doc.append_child(root, polygon);
+
+        assert_eq!(hit_test_at(&doc, Point::new(30.0, 20.0)), Some(polygon));
+    }
+
+    #[test]
+    fn hit_test_maps_box3d_face_clicks_to_box_container() {
+        let mut doc = make_doc();
+        let root = doc.root().unwrap();
+        let box_id = doc.add_node(SvgElement::Box3d(Box3dAttrs {
+            corner0: Some("10,50".to_string()),
+            corner1: Some("70,50".to_string()),
+            corner2: Some("70,10".to_string()),
+            corner3: Some("10,10".to_string()),
+            corner4: Some("25,65".to_string()),
+            corner5: Some("85,65".to_string()),
+            corner6: Some("85,25".to_string()),
+            corner7: Some("25,25".to_string()),
+            ..Default::default()
+        }));
+        doc.append_child(root, box_id);
+
+        let mut face = BezPath::new();
+        face.move_to(Point::new(10.0, 50.0));
+        face.line_to(Point::new(70.0, 50.0));
+        face.line_to(Point::new(70.0, 10.0));
+        face.line_to(Point::new(10.0, 10.0));
+        face.close();
+        let face_id = doc.add_node(SvgElement::Path(PathAttrs {
+            d: face,
+            ..Default::default()
+        }));
+        doc.append_child(box_id, face_id);
+
+        assert_eq!(hit_test_at(&doc, Point::new(30.0, 30.0)), Some(box_id));
+    }
+
+    #[test]
+    fn frontmost_plain_element_still_wins() {
+        let mut doc = make_doc();
+        let root = doc.root().unwrap();
+        let back = doc.add_node(SvgElement::Rect(RectAttrs {
+            x: SvgLength::new(0.0, LengthUnit::None),
+            y: SvgLength::new(0.0, LengthUnit::None),
+            width: SvgLength::new(100.0, LengthUnit::None),
+            height: SvgLength::new(100.0, LengthUnit::None),
+            ..Default::default()
+        }));
+        let front = doc.add_node(SvgElement::Rect(RectAttrs {
+            x: SvgLength::new(20.0, LengthUnit::None),
+            y: SvgLength::new(20.0, LengthUnit::None),
+            width: SvgLength::new(40.0, LengthUnit::None),
+            height: SvgLength::new(40.0, LengthUnit::None),
+            ..Default::default()
+        }));
+        doc.append_child(root, back);
+        doc.append_child(root, front);
+
+        assert_eq!(hit_test_at(&doc, Point::new(30.0, 30.0)), Some(front));
+    }
+
+    #[test]
+    fn hit_test_accounts_for_element_transform() {
+        let mut doc = make_doc();
+        let root = doc.root().unwrap();
+        let rect = doc.add_node(SvgElement::Rect(RectAttrs {
+            x: SvgLength::new(0.0, LengthUnit::None),
+            y: SvgLength::new(0.0, LengthUnit::None),
+            width: SvgLength::new(20.0, LengthUnit::None),
+            height: SvgLength::new(20.0, LengthUnit::None),
+            ..Default::default()
+        }));
+        doc.get_node_mut(rect).unwrap().presentation.transform =
+            Some(Transform2D::translate(80.0, 30.0));
+        doc.append_child(root, rect);
+
+        assert_eq!(hit_test_at(&doc, Point::new(90.0, 40.0)), Some(rect));
+        assert_eq!(hit_test_at(&doc, Point::new(10.0, 10.0)), None);
     }
 }

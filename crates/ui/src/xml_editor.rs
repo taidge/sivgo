@@ -84,6 +84,7 @@ pub fn XmlEditorPanel(
                                 let tag_label = format!("<{}>", node.tag_name);
                                 rsx! {
                                     div {
+                                        key: "{node_id}",
                                         class: if is_selected { "xml-node selected" } else { "xml-node" },
                                         style: "{style_str}",
 
@@ -120,14 +121,15 @@ pub fn XmlEditorPanel(
                             {
                                 let attr_name_key = attr.name.clone();
                                 let attr_name_del = attr.name.clone();
-                                let attr_current_val = attr.value.clone();
                                 rsx! {
-                                    div { class: "xml-attr-row",
+                                    div {
+                                        key: "{attr.name}",
+                                        class: "xml-attr-row",
                                         span { class: "xml-attr-name", "{attr.name}" }
                                         input {
                                             r#type: "text",
                                             class: "xml-attr-value-input",
-                                            value: "{attr_current_val}",
+                                            value: "{attr.value}",
                                             onchange: move |evt: Event<FormData>| {
                                                 on_action.call(XmlEditorAction::EditAttribute(
                                                     attr_name_key.clone(),

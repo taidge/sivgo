@@ -36,6 +36,10 @@ pub struct StrokeParams {
     pub line_join: LineJoin,
     /// The miter limit (only relevant for `LineJoin::Miter`). Defaults to 4.0.
     pub miter_limit: f64,
+    /// Dash pattern, alternating on/off lengths. Empty means solid stroke.
+    pub dash_pattern: Vec<f64>,
+    /// Dash pattern offset.
+    pub dash_offset: f64,
 }
 
 impl Default for StrokeParams {
@@ -45,6 +49,8 @@ impl Default for StrokeParams {
             line_cap: LineCap::Butt,
             line_join: LineJoin::Miter,
             miter_limit: 4.0,
+            dash_pattern: Vec::new(),
+            dash_offset: 0.0,
         }
     }
 }
@@ -79,14 +85,19 @@ pub fn stroke_to_path(path: &BezPath, params: &StrokeParams, tolerance: f64) -> 
         LineJoin::Round => kurbo::Join::Round,
     };
 
+    let dash_pattern = normalized_dash_pattern(&params.dash_pattern);
     let style = kurbo::Stroke {
         width: params.width,
         join: kurbo_join,
         miter_limit: params.miter_limit,
         start_cap: kurbo_cap,
         end_cap: kurbo_cap,
-        dash_pattern: Default::default(),
-        dash_offset: 0.0,
+        dash_offset: if dash_pattern.is_empty() {
+            0.0
+        } else {
+            params.dash_offset
+        },
+        dash_pattern: dash_pattern.into(),
     };
 
     let opts = kurbo::StrokeOpts::default();
@@ -94,6 +105,21 @@ pub fn stroke_to_path(path: &BezPath, params: &StrokeParams, tolerance: f64) -> 
     let stroked = kurbo::stroke(kurbo_path.iter(), &style, &opts, tolerance);
 
     BezPath::from_kurbo(stroked)
+}
+
+fn normalized_dash_pattern(pattern: &[f64]) -> Vec<f64> {
+    let mut normalized: Vec<f64> = pattern
+        .iter()
+        .copied()
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .collect();
+    if normalized.is_empty() {
+        return normalized;
+    }
+    if normalized.len() % 2 == 1 {
+        normalized.extend_from_within(..);
+    }
+    normalized
 }
 
 /// Convenience: convert a stroked path with simple parameters.
@@ -110,7 +136,7 @@ pub fn stroke_to_path_simple(path: &BezPath, width: f64) -> BezPath {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sivgo_math::Point;
+    use sivgo_math::{PathSegment, Point};
 
     #[test]
     fn stroke_simple_line() {
@@ -123,6 +149,8 @@ mod tests {
             line_cap: LineCap::Butt,
             line_join: LineJoin::Miter,
             miter_limit: 4.0,
+            dash_pattern: Vec::new(),
+            dash_offset: 0.0,
         };
         let result = stroke_to_path(&path, &params, 0.25);
         assert!(!result.is_empty(), "stroked path should not be empty");
@@ -155,6 +183,8 @@ mod tests {
             line_cap: LineCap::Butt,
             line_join: LineJoin::Miter,
             miter_limit: 4.0,
+            dash_pattern: Vec::new(),
+            dash_offset: 0.0,
         };
         let result = stroke_to_path(&path, &params, 0.25);
         assert!(!result.is_empty());
@@ -178,6 +208,8 @@ mod tests {
             line_cap: LineCap::Round,
             line_join: LineJoin::Round,
             miter_limit: 4.0,
+            dash_pattern: Vec::new(),
+            dash_offset: 0.0,
         };
         let result = stroke_to_path(&path, &params, 0.25);
         assert!(!result.is_empty());
@@ -199,6 +231,8 @@ mod tests {
             line_cap: LineCap::Square,
             line_join: LineJoin::Miter,
             miter_limit: 4.0,
+            dash_pattern: Vec::new(),
+            dash_offset: 0.0,
         };
         let result = stroke_to_path(&path, &params, 0.25);
         assert!(!result.is_empty());
@@ -265,6 +299,8 @@ mod tests {
             line_cap: LineCap::Round,
             line_join: LineJoin::Round,
             miter_limit: 4.0,
+            dash_pattern: Vec::new(),
+            dash_offset: 0.0,
         };
         let result = stroke_to_path(&path, &params, 0.25);
         assert!(!result.is_empty());
@@ -273,6 +309,41 @@ mod tests {
             result.element_count() > 4,
             "stroked curve should have many elements, got {}",
             result.element_count()
+        );
+    }
+
+    #[test]
+    fn stroke_with_dash_pattern_creates_separate_outlines() {
+        let mut path = BezPath::new();
+        path.move_to(Point::new(0.0, 0.0));
+        path.line_to(Point::new(100.0, 0.0));
+
+        let params = StrokeParams {
+            width: 10.0,
+            line_cap: LineCap::Butt,
+            line_join: LineJoin::Miter,
+            miter_limit: 4.0,
+            dash_pattern: vec![20.0, 10.0],
+            dash_offset: 0.0,
+        };
+        let result = stroke_to_path(&path, &params, 0.25);
+
+        let move_count = result
+            .elements()
+            .iter()
+            .filter(|segment| matches!(segment, PathSegment::MoveTo(_)))
+            .count();
+        assert!(
+            move_count >= 2,
+            "dashed stroke should produce multiple outline subpaths, got {move_count}"
+        );
+    }
+
+    #[test]
+    fn odd_dash_patterns_are_repeated_for_svg_semantics() {
+        assert_eq!(
+            normalized_dash_pattern(&[4.0, 2.0, 1.0]),
+            vec![4.0, 2.0, 1.0, 4.0, 2.0, 1.0]
         );
     }
 }

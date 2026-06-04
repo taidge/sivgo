@@ -7,6 +7,8 @@
 
 use std::collections::HashMap;
 
+use crate::manifest::{Permission, PluginManifest};
+
 // ---------------------------------------------------------------------------
 // Dialog definition
 // ---------------------------------------------------------------------------
@@ -18,6 +20,98 @@ pub struct PluginDialog {
     pub title: String,
     /// Ordered list of UI elements to render.
     pub elements: Vec<DialogElement>,
+}
+
+/// One menu item contributed by a plugin to the host extension UI.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtensionMenuItem {
+    pub plugin_id: String,
+    pub id: String,
+    pub label: String,
+    pub action: String,
+}
+
+impl ExtensionMenuItem {
+    pub fn new(
+        plugin_id: impl Into<String>,
+        id: impl Into<String>,
+        label: impl Into<String>,
+        action: impl Into<String>,
+    ) -> Self {
+        Self {
+            plugin_id: plugin_id.into(),
+            id: id.into(),
+            label: label.into(),
+            action: action.into(),
+        }
+    }
+}
+
+/// Host-side registry for plugin UI contributions.
+#[derive(Debug, Clone, Default)]
+pub struct ExtensionUiRegistry {
+    menu_items: Vec<ExtensionMenuItem>,
+    dialogs: HashMap<String, PluginDialog>,
+}
+
+impl ExtensionUiRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn register_menu_item(
+        &mut self,
+        manifest: &PluginManifest,
+        id: impl Into<String>,
+        label: impl Into<String>,
+        action: impl Into<String>,
+    ) -> Result<(), String> {
+        manifest.validate()?;
+        let perms = manifest.permission_set();
+        if !perms.allows(&Permission::AddMenuItem) {
+            return Err(format!(
+                "permission denied: plugin '{}' requires AddMenuItem",
+                manifest.id
+            ));
+        }
+
+        let item = ExtensionMenuItem::new(manifest.id.clone(), id, label, action);
+        if self
+            .menu_items
+            .iter()
+            .any(|existing| existing.plugin_id == item.plugin_id && existing.id == item.id)
+        {
+            return Err(format!(
+                "extension menu item '{}.{}' already registered",
+                item.plugin_id, item.id
+            ));
+        }
+        self.menu_items.push(item);
+        Ok(())
+    }
+
+    pub fn register_dialog(
+        &mut self,
+        manifest: &PluginManifest,
+        id: impl Into<String>,
+        dialog: PluginDialog,
+    ) -> Result<(), String> {
+        manifest.validate()?;
+        let key = format!("{}:{}", manifest.id, id.into());
+        if self.dialogs.contains_key(&key) {
+            return Err(format!("extension dialog '{key}' already registered"));
+        }
+        self.dialogs.insert(key, dialog);
+        Ok(())
+    }
+
+    pub fn menu_items(&self) -> &[ExtensionMenuItem] {
+        &self.menu_items
+    }
+
+    pub fn dialog(&self, plugin_id: &str, id: &str) -> Option<&PluginDialog> {
+        self.dialogs.get(&format!("{plugin_id}:{id}"))
+    }
 }
 
 impl PluginDialog {
@@ -213,6 +307,18 @@ impl PluginDialog {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::manifest::{Permission, PluginManifest};
+
+    fn manifest(permissions: Vec<Permission>) -> PluginManifest {
+        PluginManifest {
+            id: "ext.ui".to_string(),
+            name: "UI Extension".to_string(),
+            version: "1.0.0".to_string(),
+            author: "Tester".to_string(),
+            description: "UI contribution tests".to_string(),
+            permissions,
+        }
+    }
 
     #[test]
     fn dialog_builder_and_defaults() {
@@ -310,5 +416,47 @@ mod tests {
         ];
 
         assert_eq!(elements.len(), 8);
+    }
+
+    #[test]
+    fn extension_ui_registry_enforces_menu_permission() {
+        let mut registry = ExtensionUiRegistry::new();
+        let denied = manifest(vec![Permission::ReadDocument]);
+        assert!(registry
+            .register_menu_item(&denied, "open", "Open", "ext.open")
+            .unwrap_err()
+            .contains("AddMenuItem"));
+
+        let allowed = manifest(vec![Permission::AddMenuItem]);
+        registry
+            .register_menu_item(&allowed, "open", "Open", "ext.open")
+            .unwrap();
+        assert_eq!(registry.menu_items().len(), 1);
+        assert!(registry
+            .register_menu_item(&allowed, "open", "Open", "ext.open")
+            .unwrap_err()
+            .contains("already registered"));
+    }
+
+    #[test]
+    fn extension_ui_registry_stores_dialogs() {
+        let mut registry = ExtensionUiRegistry::new();
+        let manifest = manifest(vec![Permission::ReadDocument]);
+        let dialog = PluginDialog::new("Settings").with(DialogElement::TextInput {
+            id: "name".to_string(),
+            label: "Name".to_string(),
+            default: "Layer".to_string(),
+        });
+        registry
+            .register_dialog(&manifest, "settings", dialog.clone())
+            .unwrap();
+        assert_eq!(
+            registry.dialog("ext.ui", "settings").unwrap().title,
+            "Settings"
+        );
+        assert!(registry
+            .register_dialog(&manifest, "settings", dialog)
+            .unwrap_err()
+            .contains("already registered"));
     }
 }

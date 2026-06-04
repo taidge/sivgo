@@ -1,22 +1,22 @@
-﻿//! Star tool: click-drag to create an n-pointed star shape.
+//! Star tool: click-drag to create an n-pointed star shape.
 
 use std::f64::consts::PI;
 
 use sivgo_dom::{PathAttrs, PresentationAttrs, SvgDocument, SvgElement};
-use sivgo_math::{BezPath, Point};
+use sivgo_math::{BezPath, Point, Rect};
 
 use crate::commands::AddNodeCommand;
 use crate::input::{KeyEvent, MouseButton, MouseEvent};
 use crate::selection::SelectionSet;
 use crate::tool::{Tool, ToolResponse};
+use crate::tools::drag::{drag_rect, fit_path_to_rect};
 use crate::viewport::Viewport;
 
 use sivgo_dom::types::{Color, LengthUnit, Paint, SvgLength};
 
 /// The star creation tool.
 ///
-/// Click-drag to create a star centered at the mouse-down point, with the
-/// outer radius determined by the distance to the current mouse position.
+/// Click-drag to create a star inside the dragged rectangle.
 #[derive(Debug)]
 pub struct StarTool {
     /// Center point in document space (recorded on mouse down).
@@ -88,6 +88,16 @@ fn build_star_path(center: Point, outer_r: f64, inner_r: f64, num_points: u32) -
     path
 }
 
+fn build_star_path_in_rect(bounds: Rect, inner_ratio: f64, num_points: u32) -> BezPath {
+    let base = build_star_path(
+        Point::new(0.0, 0.0),
+        1.0,
+        inner_ratio.clamp(0.05, 0.95),
+        num_points,
+    );
+    fit_path_to_rect(&base, bounds)
+}
+
 impl Tool for StarTool {
     fn name(&self) -> &str {
         "Star"
@@ -135,23 +145,20 @@ impl Tool for StarTool {
         }
         self.dragging = false;
 
-        let center = match self.start.take() {
+        let start = match self.start.take() {
             Some(p) => p,
             None => return ToolResponse::None,
         };
 
         let end = viewport.screen_to_document(Point::new(event.x, event.y));
-        let dx = end.x - center.x;
-        let dy = end.y - center.y;
-        let outer_r = (dx * dx + dy * dy).sqrt();
+        let bounds = drag_rect(start, end, event.modifiers.ctrl, event.modifiers.shift);
 
-        // Don't create a star with negligible radius.
-        if outer_r < 0.5 {
+        // Don't create a star with negligible bounds.
+        if bounds.width() < 0.5 || bounds.height() < 0.5 {
             return ToolResponse::None;
         }
 
-        let inner_r = outer_r * self.inner_ratio;
-        let bez = build_star_path(center, outer_r, inner_r, self.num_points);
+        let bez = build_star_path_in_rect(bounds, self.inner_ratio, self.num_points);
 
         let element = SvgElement::Path(PathAttrs {
             d: bez,
@@ -237,5 +244,17 @@ mod tests {
             }
             _ => panic!("expected MoveTo as first element"),
         }
+    }
+
+    #[test]
+    fn star_path_in_rect_matches_drag_bounds() {
+        let bounds = Rect::new(10.0, 20.0, 90.0, 70.0);
+        let path = build_star_path_in_rect(bounds, 0.4, 5);
+        let actual = path.bounding_box();
+
+        assert!((actual.x0 - bounds.x0).abs() < 1e-9);
+        assert!((actual.y0 - bounds.y0).abs() < 1e-9);
+        assert!((actual.x1 - bounds.x1).abs() < 1e-9);
+        assert!((actual.y1 - bounds.y1).abs() < 1e-9);
     }
 }

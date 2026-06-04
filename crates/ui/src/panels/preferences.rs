@@ -74,6 +74,8 @@ pub enum DisplayMode {
     Outline,
     NoFilters,
     EnhancedThinLine,
+    PrintPreview,
+    ProofColors,
 }
 
 impl DisplayMode {
@@ -84,6 +86,8 @@ impl DisplayMode {
             DisplayMode::Outline => "Outline",
             DisplayMode::NoFilters => "No Filters",
             DisplayMode::EnhancedThinLine => "Enhanced Thin Line",
+            DisplayMode::PrintPreview => "Print Preview",
+            DisplayMode::ProofColors => "Proof Colors",
         }
     }
 }
@@ -425,6 +429,8 @@ mod tests {
         assert_eq!(IconSize::Small.label(), "Small");
         assert_eq!(PanelLayout::Compact.label(), "Compact");
         assert_eq!(DisplayMode::Outline.label(), "Outline");
+        assert_eq!(DisplayMode::PrintPreview.label(), "Print Preview");
+        assert_eq!(DisplayMode::ProofColors.label(), "Proof Colors");
         assert_eq!(DefaultFormat::Png.label(), "PNG");
     }
 }

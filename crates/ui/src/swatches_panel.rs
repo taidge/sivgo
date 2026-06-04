@@ -89,20 +89,20 @@ pub fn SwatchesPanel(
 
             // Swatch grid
             div { class: "swatches-grid",
-                for swatch in swatches.iter() {
+                for (idx, swatch) in swatches.iter().enumerate() {
                     {
                         let hex = swatch.to_hex();
                         let swatch_name = swatch.name.clone();
-                        let fill_hex = hex.clone();
                         let stroke_hex = hex.clone();
                         rsx! {
                             div {
+                                key: "{idx}",
                                 class: "swatch-item",
                                 title: "{swatch_name}",
                                 div {
                                     class: "swatch-color",
                                     style: "background-color: {hex};",
-                                    onclick: move |_| on_action.call(SwatchesAction::ApplyAsFill(fill_hex.clone())),
+                                    onclick: move |_| on_action.call(SwatchesAction::ApplyAsFill(hex.clone())),
                                     oncontextmenu: move |_| on_action.call(SwatchesAction::ApplyAsStroke(stroke_hex.clone())),
                                 }
                             }

@@ -6,6 +6,7 @@ use dioxus::prelude::*;
 /// Events emitted by the text properties panel.
 #[derive(Debug, Clone)]
 pub enum TextAction {
+    SetTextContent(String),
     SetFontFamily(String),
     SetFontSize(f64),
     SetFontWeight(String),
@@ -22,6 +23,7 @@ pub enum TextAction {
 /// letter spacing, word spacing, and text alignment.
 #[component]
 pub fn TextPanel(
+    text_content: String,
     font_family: String,
     font_size: f64,
     font_weight: String,
@@ -43,6 +45,7 @@ pub fn TextPanel(
     }
 
     let font_family_val = font_family.clone();
+    let text_content_val = text_content.clone();
     let weight_val = font_weight.clone();
     let style_val = font_style.clone();
     let align_val = text_align.clone();
@@ -56,6 +59,20 @@ pub fn TextPanel(
     rsx! {
         div { class: "text-panel",
             div { class: "panel-header", "Text" }
+
+            div { class: "prop-section",
+                div { class: "prop-row stacked",
+                    label { class: "prop-label", "Content" }
+                    textarea {
+                        class: "prop-textarea text-content-input",
+                        rows: "4",
+                        value: "{text_content_val}",
+                        oninput: move |evt: Event<FormData>| {
+                            on_action.call(TextAction::SetTextContent(evt.value().to_string()));
+                        },
+                    }
+                }
+            }
 
             // ---- Font Family ----
             div { class: "prop-section",

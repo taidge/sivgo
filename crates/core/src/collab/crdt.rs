@@ -4,7 +4,7 @@
 //! multiple users to concurrently edit an SVG document. Each editing site gets
 //! a unique `site_id` and maintains a version vector to track causality.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 // ---------------------------------------------------------------------------
 // OpId – uniquely identifies a single operation across all sites
@@ -54,6 +54,12 @@ pub enum CrdtOp {
         key: String,
         value: String,
     },
+    /// Operation intentionally suppressed by OT/conflict handling.
+    NoOp {
+        site: u64,
+        clock: u64,
+        reason: String,
+    },
 }
 
 impl CrdtOp {
@@ -63,6 +69,7 @@ impl CrdtOp {
             CrdtOp::Insert { site, .. } => *site,
             CrdtOp::Delete { site, .. } => *site,
             CrdtOp::Update { site, .. } => *site,
+            CrdtOp::NoOp { site, .. } => *site,
         }
     }
 
@@ -72,12 +79,40 @@ impl CrdtOp {
             CrdtOp::Insert { clock, .. } => *clock,
             CrdtOp::Delete { clock, .. } => *clock,
             CrdtOp::Update { clock, .. } => *clock,
+            CrdtOp::NoOp { clock, .. } => *clock,
         }
     }
 
     /// Return the [`OpId`] that this operation represents.
     pub fn op_id(&self) -> OpId {
         OpId::new(self.site(), self.clock())
+    }
+}
+
+/// Materialized state for one CRDT node after replaying operations.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CrdtNodeState {
+    pub id: OpId,
+    pub parent: Option<OpId>,
+    pub node_type: String,
+    pub attrs: HashMap<String, String>,
+    pub deleted: bool,
+    attr_versions: HashMap<String, OpId>,
+    delete_version: Option<OpId>,
+}
+
+impl CrdtNodeState {
+    fn new(id: OpId, parent: Option<OpId>, node_type: String, attrs: HashMap<String, String>) -> Self {
+        let attr_versions = attrs.keys().map(|key| (key.clone(), id)).collect();
+        Self {
+            id,
+            parent,
+            node_type,
+            attrs,
+            deleted: false,
+            attr_versions,
+            delete_version: None,
+        }
     }
 }
 
@@ -95,6 +130,13 @@ pub struct CrdtDocument {
     pub version_vector: HashMap<u64, u64>,
     /// Ordered log of all operations applied to this document.
     pub operations: Vec<CrdtOp>,
+    /// Materialized node map derived from applied operations.
+    pub nodes: HashMap<OpId, CrdtNodeState>,
+    /// Tombstones for deleted nodes, including deletes that arrived before the
+    /// corresponding insert.
+    pub tombstones: HashSet<OpId>,
+    /// Causally future remote operations waiting for missing clocks.
+    pub pending_remote: Vec<CrdtOp>,
 }
 
 impl CrdtDocument {
@@ -106,6 +148,9 @@ impl CrdtDocument {
             site_id,
             version_vector,
             operations: Vec::new(),
+            nodes: HashMap::new(),
+            tombstones: HashSet::new(),
+            pending_remote: Vec::new(),
         }
     }
 
@@ -125,40 +170,43 @@ impl CrdtDocument {
         if clock > *entry {
             *entry = clock;
         }
+        self.materialize(&op);
         self.operations.push(op);
     }
 
     /// Apply a remotely-received operation.
     ///
-    /// Returns `Err` if the operation is causally inconsistent (i.e. its clock
-    /// is not the expected next value for its site) **and** the operation has
-    /// already been seen.  Duplicate operations are silently ignored.
+    /// Causally future operations are buffered until missing clocks arrive.
+    /// Duplicate operations are silently ignored.
     pub fn apply_remote(&mut self, op: CrdtOp) -> Result<(), String> {
         let site = op.site();
         let clock = op.clock();
         let current = *self.version_vector.get(&site).unwrap_or(&0);
 
-        // Duplicate – already applied.
         if clock <= current {
             return Ok(());
         }
 
-        // Accept the operation (we allow gaps for simplicity in this stub).
-        self.version_vector.insert(site, clock);
-        self.operations.push(op);
+        if clock > current + 1 {
+            if !self.pending_remote.iter().any(|pending| pending.op_id() == op.op_id()) {
+                self.pending_remote.push(op);
+                self.pending_remote
+                    .sort_by_key(|pending| (pending.site(), pending.clock()));
+            }
+            return Ok(());
+        }
+
+        self.commit_remote(op);
+        self.drain_pending();
         Ok(())
     }
 
     /// Merge all operations from `other` that this replica has not yet seen.
     pub fn merge(&mut self, other: &CrdtDocument) {
-        for op in &other.operations {
-            let site = op.site();
-            let clock = op.clock();
-            let current = *self.version_vector.get(&site).unwrap_or(&0);
-            if clock > current {
-                self.version_vector.insert(site, clock);
-                self.operations.push(op.clone());
-            }
+        let mut ops = other.operations.clone();
+        ops.sort_by_key(|op| (op.site(), op.clock()));
+        for op in ops {
+            let _ = self.apply_remote(op);
         }
     }
 
@@ -166,6 +214,93 @@ impl CrdtDocument {
     pub fn to_operations(&self) -> Vec<CrdtOp> {
         self.operations.clone()
     }
+
+    pub fn get_node(&self, id: OpId) -> Option<&CrdtNodeState> {
+        self.nodes.get(&id)
+    }
+
+    pub fn visible_nodes(&self) -> Vec<&CrdtNodeState> {
+        let mut nodes: Vec<&CrdtNodeState> = self.nodes.values().filter(|node| !node.deleted).collect();
+        nodes.sort_by_key(|node| (node.id.site, node.id.clock));
+        nodes
+    }
+
+    fn commit_remote(&mut self, op: CrdtOp) {
+        self.version_vector.insert(op.site(), op.clock());
+        self.materialize(&op);
+        self.operations.push(op);
+    }
+
+    fn drain_pending(&mut self) {
+        loop {
+            let Some(index) = self.pending_remote.iter().position(|op| {
+                let current = *self.version_vector.get(&op.site()).unwrap_or(&0);
+                op.clock() == current + 1
+            }) else {
+                break;
+            };
+            let op = self.pending_remote.remove(index);
+            self.commit_remote(op);
+        }
+    }
+
+    fn materialize(&mut self, op: &CrdtOp) {
+        match op {
+            CrdtOp::Insert {
+                parent,
+                node_type,
+                attrs,
+                ..
+            } => {
+                let id = op.op_id();
+                let mut node = CrdtNodeState::new(id, *parent, node_type.clone(), attrs.clone());
+                if self.tombstones.contains(&id) {
+                    node.deleted = true;
+                    node.delete_version = Some(id);
+                }
+                self.nodes.entry(id).or_insert(node);
+            }
+            CrdtOp::Delete { target, .. } => {
+                self.tombstones.insert(*target);
+                if let Some(node) = self.nodes.get_mut(target) {
+                    let delete_id = op.op_id();
+                    if node
+                        .delete_version
+                        .map(|prev| op_wins(delete_id, prev))
+                        .unwrap_or(true)
+                    {
+                        node.deleted = true;
+                        node.delete_version = Some(delete_id);
+                    }
+                }
+            }
+            CrdtOp::Update {
+                target, key, value, ..
+            } => {
+                if let Some(node) = self.nodes.get_mut(target) {
+                    if node.deleted {
+                        return;
+                    }
+                    let update_id = op.op_id();
+                    if node
+                        .attr_versions
+                        .get(key)
+                        .map(|prev| op_wins(update_id, *prev))
+                        .unwrap_or(true)
+                    {
+                        node.attrs.insert(key.clone(), value.clone());
+                        node.attr_versions.insert(key.clone(), update_id);
+                    }
+                }
+            }
+            CrdtOp::NoOp { .. } => {}
+        }
+    }
+}
+
+fn op_wins(candidate: OpId, current: OpId) -> bool {
+    candidate.clock > current.clock
+        || (candidate.clock == current.clock && candidate.site >= current.site)
 }
 
 // ---------------------------------------------------------------------------
@@ -329,6 +464,78 @@ mod tests {
             value: "#ff0000".into(),
         });
         assert_eq!(doc.operations.len(), 2);
+    }
+
+    #[test]
+    fn remote_gap_is_buffered_until_missing_clock_arrives() {
+        let mut doc = CrdtDocument::new(1);
+        doc.apply_remote(CrdtOp::Insert {
+            site: 2,
+            clock: 2,
+            parent: None,
+            node_type: "circle".into(),
+            attrs: HashMap::new(),
+        })
+        .unwrap();
+        assert_eq!(doc.operations.len(), 0);
+        assert_eq!(doc.pending_remote.len(), 1);
+
+        doc.apply_remote(CrdtOp::Insert {
+            site: 2,
+            clock: 1,
+            parent: None,
+            node_type: "rect".into(),
+            attrs: HashMap::new(),
+        })
+        .unwrap();
+        assert_eq!(doc.operations.len(), 2);
+        assert!(doc.pending_remote.is_empty());
+        assert_eq!(*doc.version_vector.get(&2).unwrap(), 2);
+    }
+
+    #[test]
+    fn materialized_state_converges_with_lww_updates_and_tombstones() {
+        let mut doc_a = CrdtDocument::new(1);
+        let mut doc_b = CrdtDocument::new(2);
+        let node = OpId::new(1, 1);
+
+        doc_a.apply_local(CrdtOp::Insert {
+            site: 1,
+            clock: 1,
+            parent: None,
+            node_type: "rect".into(),
+            attrs: HashMap::from([("fill".into(), "red".into())]),
+        });
+        doc_b.merge(&doc_a);
+
+        doc_a.apply_local(CrdtOp::Update {
+            site: 1,
+            clock: 2,
+            target: node,
+            key: "fill".into(),
+            value: "blue".into(),
+        });
+        doc_b.apply_local(CrdtOp::Update {
+            site: 2,
+            clock: 1,
+            target: node,
+            key: "fill".into(),
+            value: "green".into(),
+        });
+
+        doc_a.merge(&doc_b);
+        doc_b.merge(&doc_a);
+        assert_eq!(doc_a.get_node(node).unwrap().attrs["fill"], "blue");
+        assert_eq!(doc_b.get_node(node).unwrap().attrs["fill"], "blue");
+
+        doc_b.apply_local(CrdtOp::Delete {
+            site: 2,
+            clock: 2,
+            target: node,
+        });
+        doc_a.merge(&doc_b);
+        assert!(doc_a.get_node(node).unwrap().deleted);
+        assert!(doc_a.visible_nodes().is_empty());
     }
 
     #[test]

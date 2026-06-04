@@ -118,6 +118,7 @@ pub fn GuidesDialog(
                             };
                             rsx! {
                                 div {
+                                    key: "{guide.id}",
                                     class: if is_selected { "guide-item selected" } else { "guide-item" },
                                     onclick: move |_| on_action.call(GuidesAction::Select(gid_select.clone())),
 

@@ -7,6 +7,7 @@ use crate::commands::AddNodeCommand;
 use crate::input::{KeyEvent, MouseButton, MouseEvent};
 use crate::selection::SelectionSet;
 use crate::tool::{Tool, ToolResponse};
+use crate::tools::drag::drag_rect;
 use crate::viewport::Viewport;
 
 use sivgo_dom::types::{Color, LengthUnit, Paint, SvgLength};
@@ -149,21 +150,5 @@ impl Tool for RectTool {
 /// - `square`: constrain to square (Ctrl modifier)
 /// - `from_center`: draw from center (Shift modifier)
 fn compute_rect(start: Point, end: Point, square: bool, from_center: bool) -> Rect {
-    let mut dx = end.x - start.x;
-    let mut dy = end.y - start.y;
-
-    if square {
-        let side = dx.abs().max(dy.abs());
-        dx = side * dx.signum();
-        dy = side * dy.signum();
-    }
-
-    if from_center {
-        Rect::from_points(
-            Point::new(start.x - dx, start.y - dy),
-            Point::new(start.x + dx, start.y + dy),
-        )
-    } else {
-        Rect::from_points(start, Point::new(start.x + dx, start.y + dy))
-    }
+    drag_rect(start, end, square, from_center)
 }

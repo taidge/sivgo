@@ -1,9 +1,7 @@
-//! WebSocket transport layer for real-time collaboration.
+//! Transport layer for real-time collaboration.
 //!
-//! Provides message types and a stub transport that queues messages locally.
-//! In production this would wrap an actual WebSocket connection; here we use
-//! pure-Rust data structures so the crate compiles without external
-//! networking dependencies.
+//! Provides protocol messages and an in-memory room hub that behaves like a
+//! deterministic WebSocket broker in tests and local collaboration sessions.
 
 use std::collections::HashMap;
 
@@ -45,28 +43,30 @@ pub enum SyncMessage {
         cursor: Option<(f64, f64)>,
         selection: Vec<String>,
     },
+    /// Comment or comment-thread update.
+    Comment {
+        thread_id: String,
+        comment_id: String,
+        author_id: String,
+        text: String,
+        resolved: bool,
+    },
 }
 
-// ---------------------------------------------------------------------------
-// SyncTransport (stub)
-// ---------------------------------------------------------------------------
-
-/// Stub WebSocket transport for collaboration messages.
-///
-/// This is a local-only implementation: `send` pushes to `message_log` and
-/// `receive` pops from `pending_ops` / internally queued messages so that
-/// unit tests can exercise the protocol without a real network.
+/// Endpoint connected to a collaboration room.
 #[derive(Debug)]
 pub struct SyncTransport {
     /// Whether this transport is "connected" to a room.
     pub connected: bool,
     /// The room this transport is connected to, if any.
     pub room_id: Option<String>,
+    /// User id for hub fan-out.
+    pub user_id: Option<String>,
     /// Operations waiting to be sent.
     pub pending_ops: Vec<CrdtOp>,
     /// Log of all messages sent through this transport.
     pub message_log: Vec<SyncMessage>,
-    /// Inbound message queue (for stub/testing purposes).
+    /// Inbound message queue.
     inbound: Vec<SyncMessage>,
 }
 
@@ -76,16 +76,20 @@ impl SyncTransport {
         Self {
             connected: false,
             room_id: None,
+            user_id: None,
             pending_ops: Vec::new(),
             message_log: Vec::new(),
             inbound: Vec::new(),
         }
     }
 
-    /// Connect to a collaboration room.  In this stub this simply records the
-    /// room id and flips the `connected` flag.
     pub fn connect(&mut self, room_id: &str) {
+        self.connect_as(room_id, "");
+    }
+
+    pub fn connect_as(&mut self, room_id: &str, user_id: &str) {
         self.room_id = Some(room_id.to_string());
+        self.user_id = (!user_id.is_empty()).then(|| user_id.to_string());
         self.connected = true;
     }
 
@@ -93,11 +97,33 @@ impl SyncTransport {
     pub fn disconnect(&mut self) {
         self.connected = false;
         self.room_id = None;
+        self.user_id = None;
     }
 
     /// Send a message.  The message is appended to the `message_log`.
     pub fn send(&mut self, msg: SyncMessage) {
         self.message_log.push(msg);
+    }
+
+    pub fn send_to_hub(
+        &mut self,
+        hub: &mut InMemorySyncHub,
+        msg: SyncMessage,
+    ) -> Result<(), String> {
+        if !self.connected {
+            return Err("transport is not connected".to_string());
+        }
+        let room_id = self
+            .room_id
+            .as_deref()
+            .ok_or_else(|| "transport has no room".to_string())?;
+        let user_id = self
+            .user_id
+            .as_deref()
+            .ok_or_else(|| "transport has no user id".to_string())?;
+        hub.broadcast(room_id, user_id, msg.clone())?;
+        self.send(msg);
+        Ok(())
     }
 
     /// Receive the next inbound message, if any.
@@ -118,11 +144,89 @@ impl SyncTransport {
     pub fn enqueue_inbound(&mut self, msg: SyncMessage) {
         self.inbound.push(msg);
     }
+
+    pub fn poll_hub(&mut self, hub: &mut InMemorySyncHub) -> Result<usize, String> {
+        let room_id = self
+            .room_id
+            .as_deref()
+            .ok_or_else(|| "transport has no room".to_string())?;
+        let user_id = self
+            .user_id
+            .as_deref()
+            .ok_or_else(|| "transport has no user id".to_string())?;
+        let messages = hub.drain_user(room_id, user_id)?;
+        let count = messages.len();
+        self.inbound.extend(messages);
+        Ok(count)
+    }
 }
 
 impl Default for SyncTransport {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Deterministic room broker for collaboration transport tests and local
+/// embedded sessions.
+#[derive(Debug, Default)]
+pub struct InMemorySyncHub {
+    rooms: HashMap<String, HashMap<String, Vec<SyncMessage>>>,
+}
+
+impl InMemorySyncHub {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn join(&mut self, room_id: &str, user_id: &str) {
+        self.rooms
+            .entry(room_id.to_string())
+            .or_default()
+            .entry(user_id.to_string())
+            .or_default();
+    }
+
+    pub fn leave(&mut self, room_id: &str, user_id: &str) {
+        if let Some(room) = self.rooms.get_mut(room_id) {
+            room.remove(user_id);
+        }
+    }
+
+    pub fn broadcast(
+        &mut self,
+        room_id: &str,
+        sender_id: &str,
+        msg: SyncMessage,
+    ) -> Result<usize, String> {
+        let Some(room) = self.rooms.get_mut(room_id) else {
+            return Err(format!("room not found: {room_id}"));
+        };
+        if !room.contains_key(sender_id) {
+            return Err(format!("sender is not in room: {sender_id}"));
+        }
+        let mut delivered = 0;
+        for (user_id, queue) in room.iter_mut() {
+            if user_id != sender_id {
+                queue.push(msg.clone());
+                delivered += 1;
+            }
+        }
+        Ok(delivered)
+    }
+
+    pub fn drain_user(
+        &mut self,
+        room_id: &str,
+        user_id: &str,
+    ) -> Result<Vec<SyncMessage>, String> {
+        let Some(room) = self.rooms.get_mut(room_id) else {
+            return Err(format!("room not found: {room_id}"));
+        };
+        let Some(queue) = room.get_mut(user_id) else {
+            return Err(format!("user is not in room: {user_id}"));
+        };
+        Ok(std::mem::take(queue))
     }
 }
 
@@ -139,6 +243,7 @@ mod tests {
         let t = SyncTransport::new();
         assert!(!t.is_connected());
         assert!(t.room_id.is_none());
+        assert!(t.user_id.is_none());
         assert!(t.pending_ops.is_empty());
         assert!(t.message_log.is_empty());
     }
@@ -153,6 +258,7 @@ mod tests {
         t.disconnect();
         assert!(!t.is_connected());
         assert!(t.room_id.is_none());
+        assert!(t.user_id.is_none());
     }
 
     #[test]
@@ -254,5 +360,69 @@ mod tests {
         } else {
             panic!("Expected Leave");
         }
+    }
+
+    #[test]
+    fn test_in_memory_hub_fans_out_messages_by_room() {
+        let mut hub = InMemorySyncHub::new();
+        hub.join("room-1", "alice");
+        hub.join("room-1", "bob");
+        hub.join("room-2", "mallory");
+
+        let mut alice = SyncTransport::new();
+        let mut bob = SyncTransport::new();
+        let mut mallory = SyncTransport::new();
+        alice.connect_as("room-1", "alice");
+        bob.connect_as("room-1", "bob");
+        mallory.connect_as("room-2", "mallory");
+
+        alice
+            .send_to_hub(
+                &mut hub,
+                SyncMessage::Presence {
+                    user_id: "alice".into(),
+                    cursor: Some((1.0, 2.0)),
+                    selection: vec!["n1".into()],
+                },
+            )
+            .unwrap();
+
+        assert_eq!(bob.poll_hub(&mut hub).unwrap(), 1);
+        assert_eq!(mallory.poll_hub(&mut hub).unwrap(), 0);
+        assert!(matches!(bob.receive(), Some(SyncMessage::Presence { .. })));
+    }
+
+    #[test]
+    fn test_comment_message_roundtrip_through_hub() {
+        let mut hub = InMemorySyncHub::new();
+        hub.join("room", "alice");
+        hub.join("room", "bob");
+
+        let mut alice = SyncTransport::new();
+        let mut bob = SyncTransport::new();
+        alice.connect_as("room", "alice");
+        bob.connect_as("room", "bob");
+
+        alice
+            .send_to_hub(
+                &mut hub,
+                SyncMessage::Comment {
+                    thread_id: "thread-1".into(),
+                    comment_id: "comment-1".into(),
+                    author_id: "alice".into(),
+                    text: "Please check this".into(),
+                    resolved: false,
+                },
+            )
+            .unwrap();
+        bob.poll_hub(&mut hub).unwrap();
+        assert!(matches!(
+            bob.receive(),
+            Some(SyncMessage::Comment {
+                comment_id,
+                resolved: false,
+                ..
+            }) if comment_id == "comment-1"
+        ));
     }
 }

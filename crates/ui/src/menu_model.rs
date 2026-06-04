@@ -1,4 +1,4 @@
-﻿//! Menu bar data model (11.3.1-11.3.10).
+//! Menu bar data model (11.3.1-11.3.10).
 //!
 //! Defines a hierarchical menu structure with actions, shortcuts, separators,
 //! and a builder for the full Inkscape-style menu layout.
@@ -113,14 +113,122 @@ fn item(label: &str, action: &str, shortcut: &str) -> MenuItem {
             Some(shortcut.to_string())
         },
     )
+    .with_enabled(is_action_wired(action))
 }
 
 fn item_d(label: &str, action: &str, shortcut: &str, enabled: bool) -> MenuItem {
-    item(label, action, shortcut).with_enabled(enabled)
+    item(label, action, shortcut).with_enabled(enabled && is_action_wired(action))
 }
 
 fn sep() -> MenuItem {
     MenuItem::separator()
+}
+
+/// Whether a menu action is currently connected to a real desktop operation.
+///
+/// Unsupported Inkscape-parity actions remain visible in the menu model, but
+/// disabled, so the UI does not advertise inert commands as usable.
+pub fn is_action_wired(action: &str) -> bool {
+    matches!(
+        action,
+        "file.new"
+            | "file.open"
+            | "file.save"
+            | "file.save_as"
+            | "file.save_copy"
+            | "file.export_png"
+            | "file.export_svg"
+            | "file.export_pages_svg"
+            | "file.export_pages_pdf"
+            | "file.print"
+            | "file.document_properties"
+            | "file.close"
+            | "file.quit"
+            | "edit.undo"
+            | "edit.redo"
+            | "edit.cut"
+            | "edit.copy"
+            | "edit.copy_bitmap"
+            | "edit.paste"
+            | "edit.paste_in_place"
+            | "edit.paste_style"
+            | "edit.delete"
+            | "edit.duplicate"
+            | "edit.clone"
+            | "edit.unlink_clone"
+            | "edit.select_all"
+            | "edit.select_all_layers"
+            | "edit.invert_selection"
+            | "edit.select_none"
+            | "edit.preferences"
+            | "view.zoom_in"
+            | "view.zoom_out"
+            | "view.zoom_100"
+            | "view.zoom_50"
+            | "view.zoom_fit"
+            | "view.zoom_selection"
+            | "view.toggle_grid"
+            | "view.toggle_guides"
+            | "view.toggle_snapping"
+            | "view.display_mode_normal"
+            | "view.display_mode_outline"
+            | "view.display_mode_no_filters"
+            | "view.display_mode_hairlines"
+            | "view.display_mode_print"
+            | "view.display_mode_proof"
+            | "view.fullscreen"
+            | "layer.add"
+            | "layer.delete"
+            | "layer.raise"
+            | "layer.lower"
+            | "layer.to_top"
+            | "layer.to_bottom"
+            | "layer.toggle_visible"
+            | "layer.toggle_lock"
+            | "layer.move_selection_to_active"
+            | "layer.merge_down"
+            | "layer.flatten"
+            | "object.group"
+            | "object.ungroup"
+            | "object.raise"
+            | "object.lower"
+            | "object.to_front"
+            | "object.to_back"
+            | "object.flip_h"
+            | "object.flip_v"
+            | "object.rotate_90_cw"
+            | "object.rotate_90_ccw"
+            | "object.align"
+            | "object.transform"
+            | "object.clip_set"
+            | "object.clip_release"
+            | "object.mask_set"
+            | "object.mask_release"
+            | "object.object_properties"
+            | "path.object_to_path"
+            | "path.stroke_to_path"
+            | "path.union"
+            | "path.difference"
+            | "path.intersection"
+            | "path.exclusion"
+            | "path.division"
+            | "path.cut_path"
+            | "path.combine"
+            | "path.break_apart"
+            | "path.simplify"
+            | "path.reverse"
+            | "path.inset"
+            | "path.outset"
+            | "path.dynamic_offset"
+            | "path.linked_offset"
+            | "text.font_size_inc"
+            | "text.font_size_dec"
+            | "text.bold"
+            | "text.italic"
+            | "text.to_path"
+            | "text.text_properties"
+            | "help.about"
+    )
 }
 
 /// Build the full default menu bar structure for the Sivgo editor.
@@ -155,6 +263,8 @@ pub fn default_menu_bar_with_state(
                 item("Import...", "file.import", "Ctrl+I"),
                 item("Export PNG Image...", "file.export_png", "Ctrl+Shift+E"),
                 item("Export Plain SVG...", "file.export_svg", ""),
+                item("Export Pages as SVG...", "file.export_pages_svg", ""),
+                item("Export Pages as PDF...", "file.export_pages_pdf", ""),
                 sep(),
                 item("Print...", "file.print", "Ctrl+P"),
                 sep(),
@@ -178,6 +288,7 @@ pub fn default_menu_bar_with_state(
                 sep(),
                 item_d("Cut", "edit.cut", "Ctrl+X", has_selection),
                 item_d("Copy", "edit.copy", "Ctrl+C", has_selection),
+                item("Copy as Bitmap", "edit.copy_bitmap", ""),
                 item("Paste", "edit.paste", "Ctrl+V"),
                 item("Paste in Place", "edit.paste_in_place", "Ctrl+Alt+V"),
                 item("Paste Style", "edit.paste_style", "Ctrl+Shift+V"),
@@ -222,6 +333,13 @@ pub fn default_menu_bar_with_state(
                 item("Normal Display", "view.display_mode_normal", ""),
                 item("Outline Display", "view.display_mode_outline", ""),
                 item("No Filters Display", "view.display_mode_no_filters", ""),
+                item(
+                    "Visible Hairlines Display",
+                    "view.display_mode_hairlines",
+                    "",
+                ),
+                item("Print Preview Display", "view.display_mode_print", ""),
+                item("Proof Colors Display", "view.display_mode_proof", ""),
                 sep(),
                 item("Fullscreen", "view.fullscreen", "F11"),
                 item("Command Palette", "view.toggle_palette", "Ctrl+Shift+P"),
@@ -242,6 +360,12 @@ pub fn default_menu_bar_with_state(
                 sep(),
                 item("Toggle Visibility", "layer.toggle_visible", ""),
                 item("Toggle Lock", "layer.toggle_lock", ""),
+                item_d(
+                    "Move Selection to Active Layer",
+                    "layer.move_selection_to_active",
+                    "",
+                    has_selection,
+                ),
                 sep(),
                 item("Merge Down", "layer.merge_down", ""),
                 item("Flatten All Layers", "layer.flatten", ""),
@@ -351,6 +475,7 @@ pub fn default_menu_bar_with_state(
                 item("Unflow", "text.unflow", ""),
                 item("Put on Path", "text.put_on_path", ""),
                 item("Remove from Path", "text.remove_from_path", ""),
+                item_d("Text to Path", "text.to_path", "", has_selection),
                 sep(),
                 item("Check Spelling...", "text.spell_check", ""),
                 item("Text and Font...", "text.text_properties", "Ctrl+Shift+T"),
@@ -434,5 +559,128 @@ mod tests {
         let cut = edit.children.iter().find(|i| i.label == "Cut");
         assert!(cut.is_some());
         assert!(!cut.unwrap().enabled);
+    }
+
+    #[test]
+    fn copy_as_bitmap_is_wired_without_selection() {
+        let menu = default_menu_bar_with_state(false, false, false);
+        let edit = &menu[1];
+        let copy_bitmap = edit
+            .children
+            .iter()
+            .find(|i| i.action.as_deref() == Some("edit.copy_bitmap"));
+        assert!(copy_bitmap.is_some());
+        assert!(copy_bitmap.unwrap().enabled);
+        assert!(is_action_wired("edit.copy_bitmap"));
+    }
+
+    #[test]
+    fn dynamic_and_linked_offset_are_wired_when_selection_exists() {
+        let menu = default_menu_bar_with_state(false, false, true);
+        let path = menu.iter().find(|item| item.label == "Path").unwrap();
+
+        let dynamic = path
+            .children
+            .iter()
+            .find(|item| item.action.as_deref() == Some("path.dynamic_offset"))
+            .unwrap();
+        let linked = path
+            .children
+            .iter()
+            .find(|item| item.action.as_deref() == Some("path.linked_offset"))
+            .unwrap();
+
+        assert!(dynamic.enabled);
+        assert!(linked.enabled);
+        assert!(is_action_wired("path.dynamic_offset"));
+        assert!(is_action_wired("path.linked_offset"));
+    }
+
+    #[test]
+    fn all_display_mode_actions_are_wired() {
+        let menu = default_menu_bar();
+        let view = menu.iter().find(|item| item.label == "View").unwrap();
+        for action in [
+            "view.display_mode_normal",
+            "view.display_mode_outline",
+            "view.display_mode_no_filters",
+            "view.display_mode_hairlines",
+            "view.display_mode_print",
+            "view.display_mode_proof",
+        ] {
+            let item = view
+                .children
+                .iter()
+                .find(|item| item.action.as_deref() == Some(action))
+                .unwrap_or_else(|| panic!("missing {action}"));
+            assert!(item.enabled, "{action} should be enabled");
+            assert!(is_action_wired(action));
+        }
+    }
+
+    #[test]
+    fn layer_aware_selection_actions_are_wired() {
+        let menu = default_menu_bar_with_state(false, false, true);
+        let edit = menu.iter().find(|item| item.label == "Edit").unwrap();
+        let layer = menu.iter().find(|item| item.label == "Layer").unwrap();
+
+        let select_all_layers = edit
+            .children
+            .iter()
+            .find(|item| item.action.as_deref() == Some("edit.select_all_layers"))
+            .unwrap();
+        let move_to_active = layer
+            .children
+            .iter()
+            .find(|item| item.action.as_deref() == Some("layer.move_selection_to_active"))
+            .unwrap();
+
+        assert!(select_all_layers.enabled);
+        assert!(move_to_active.enabled);
+        assert!(is_action_wired("edit.select_all_layers"));
+        assert!(is_action_wired("layer.move_selection_to_active"));
+    }
+
+    #[test]
+    fn menu_covers_file_text_view_and_layer_interactions() {
+        let menu = default_menu_bar_with_state(true, true, true);
+        let find_action = |action: &str| {
+            fn walk<'a>(items: &'a [MenuItem], action: &str) -> Option<&'a MenuItem> {
+                for item in items {
+                    if item.action.as_deref() == Some(action) {
+                        return Some(item);
+                    }
+                    if let Some(found) = walk(&item.children, action) {
+                        return Some(found);
+                    }
+                }
+                None
+            }
+            walk(&menu, action).unwrap_or_else(|| panic!("missing menu action {action}"))
+        };
+
+        for action in [
+            "file.open",
+            "file.save",
+            "file.export_png",
+            "file.export_pages_svg",
+            "file.export_pages_pdf",
+            "text.font_size_inc",
+            "text.font_size_dec",
+            "text.bold",
+            "text.italic",
+            "text.text_properties",
+            "text.to_path",
+            "view.zoom_in",
+            "view.zoom_out",
+            "view.zoom_fit",
+            "view.zoom_selection",
+            "layer.add",
+            "layer.move_selection_to_active",
+        ] {
+            let item = find_action(action);
+            assert!(item.enabled, "{action} should be enabled");
+            assert!(is_action_wired(action), "{action} should be wired");
+        }
     }
 }

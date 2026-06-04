@@ -12,3 +12,4 @@ dioxus = { workspace = true }
 base64 = { workspace = true }
 png = { workspace = true }
 log = { workspace = true }
+serde = { workspace = true }

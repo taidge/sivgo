@@ -43,7 +43,7 @@ pub async fn list_installed_plugins(depot: &mut Depot, res: &mut Response) {
         }
     };
 
-    let plugins = registry.user_plugins(&user_id.to_string());
+    let plugins = registry.user_plugins(user_id);
     res.render(Json(plugins));
 }
 
@@ -75,7 +75,7 @@ pub async fn install_plugin(req: &mut Request, depot: &mut Depot, res: &mut Resp
         }
     };
 
-    if registry.install(&user_id.to_string(), &plugin_id) {
+    if registry.install(user_id, &plugin_id) {
         res.render(Json(serde_json::json!({
             "status": "installed",
             "plugin_id": plugin_id,
@@ -114,7 +114,7 @@ pub async fn uninstall_plugin(req: &mut Request, depot: &mut Depot, res: &mut Re
         }
     };
 
-    if registry.uninstall(&user_id.to_string(), &plugin_id) {
+    if registry.uninstall(user_id, &plugin_id) {
         res.render(Json(serde_json::json!({
             "status": "uninstalled",
             "plugin_id": plugin_id,

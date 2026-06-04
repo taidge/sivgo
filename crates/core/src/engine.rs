@@ -1,27 +1,56 @@
-﻿//! Editor engine facade.
+//! Editor engine facade.
 //!
 //! [`EditorEngine`] ties together the document, command history, selection,
 //! tools, viewport, snapping, and event bus into one coherent API.
 
-use sivgo_dom::{GroupAttrs, NodeId, PresentationAttrs, SvgDocument, SvgElement, SvgSvgAttrs};
-use sivgo_math::{Point, Rect, Transform2D};
+use std::collections::{HashMap, HashSet};
+
+use sivgo_dom::{
+    BlendMode as SvgBlendMode, ChannelSelector as SvgChannelSelector, Color,
+    ColorMatrixType as SvgColorMatrixType, CompositeOperator as SvgCompositeOperator, DefsAttrs,
+    DescAttrs, FeBlendAttrs, FeColorMatrixAttrs, FeCompositeAttrs, FeConvolveMatrixAttrs,
+    FeDisplacementMapAttrs, FeFloodAttrs, FeGaussianBlurAttrs, FeMergeAttrs, FeMergeNodeAttrs,
+    FeMorphologyAttrs, FeOffsetAttrs, FeTurbulenceAttrs, FilterAttrs, FilterInput,
+    FilterPrimitiveAttrs, GroupAttrs, InkscapePageAttrs, LineCap as SvgLineCap,
+    LineJoin as SvgLineJoin, MetadataAttrs, MorphologyOperator as SvgMorphologyOperator, NodeId,
+    Paint, PathAttrs, PresentationAttrs, SodipodiGuideAttrs, SvgDocument, SvgElement, SvgNode,
+    SvgSvgAttrs, TextAnchor as SvgTextAnchor, TitleAttrs, TurbulenceType as SvgTurbulenceType,
+    UseAttrs,
+};
+use sivgo_math::{BezPath, Point, Rect, Transform2D, Vector};
+use sivgo_path_ops::{
+    boolean_op, break_apart, combine_paths, cut, element_to_path, offset_path, reverse_path,
+    simplify_path, stroke_to_path, BooleanOp, DynamicOffset, LineCap as PathLineCap,
+    LineJoin as PathLineJoin, LinkedOffset, StrokeParams,
+};
+use sivgo_text::{FontStyleKind, TextAnchor as TextEngineAnchor, TextEngine};
 
 use crate::selection::element_bounding_box;
 
 use crate::command::Command;
 use crate::command::CommandHistory;
 use crate::commands::{
-    AddNodeCommand, CompoundCommand, GroupCommand, ModifyAttributeCommand, RemoveNodeCommand,
-    ReorderCommand, ReorderDirection, SetLockCommand, SetVisibilityCommand, UngroupCommand,
+    AddGuideCommand, AddNodeCommand, AddPageCommand, ClipMaskMode, CompoundCommand, GroupCommand,
+    MergeLayerCommand, ModifyAttributeCommand, ModifyElementCommand, ModifyObjectLabelCommand,
+    ModifyPageCommand, ModifyPathCommand, ModifyXmlIdCommand, ReleaseClipMaskCommand,
+    RemoveNodeCommand, ReorderCommand, ReorderDirection, ReparentNodeCommand,
+    RouteToActiveLayerCommand, SetClipMaskCommand, SetLockCommand, SetVisibilityCommand,
+    UngroupCommand, UnlinkCloneCommand,
 };
 use crate::event::{EditorEvent, EventBus};
 use crate::input::{KeyEvent, MouseButton, MouseEvent};
+use crate::lpe::{
+    LivePathEffect, MeasureSegmentsLpe, MirrorSymmetryLpe, OffsetJoin, OffsetLpe, PowerStrokeLpe,
+    RoughenLpe, SimplifyLpe,
+};
 use crate::selection::SelectionSet;
-use crate::snap::SnappingEngine;
+use crate::snap::{SnapContext, SnapGuide, SnapIndicator, SnapSourceKind, SnappingEngine};
 use crate::tool::{ToolId, ToolManager, ToolResponse};
 use crate::tools::{
-    DropperTool, EllipseTool, EraserTool, LpeTool, MeasureTool, PenTool, RectTool, SelectTool,
-    ZoomTool,
+    Box3dTool, BucketFillTool, CalligraphyTool, ConnectorTool, DropperTool, EllipseTool,
+    EraserTool, GradientTool, LpeTool, MarkerTool, MeasureTool, MeshTool, NodeTool, PagesTool,
+    PenTool, PencilTool, RectTool, SelectTool, SpiralTool, SprayTool, StarTool, TextTool,
+    TweakTool, ZoomTool,
 };
 use crate::viewport::{DisplayMode, Viewport};
 
@@ -36,6 +65,112 @@ pub struct ClipboardEntry {
     pub svg_xml: String,
 }
 
+#[derive(Debug, Clone)]
+struct PathSelectionItem {
+    id: NodeId,
+    element: SvgElement,
+    presentation: PresentationAttrs,
+    baked_presentation: PresentationAttrs,
+    path: BezPath,
+}
+
+/// Decomposed affine transform values for inspector display and absolute edits.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct TransformDecomposition {
+    pub translate_x: f64,
+    pub translate_y: f64,
+    pub scale_x: f64,
+    pub scale_y: f64,
+    pub rotation_degrees: f64,
+    pub skew_x_degrees: f64,
+}
+
+/// Editable numeric parameter persisted for a selected-path LPE entry.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EngineLpeParam {
+    pub name: String,
+    pub value: f64,
+}
+
+/// One non-destructive Live Path Effect entry on a selected path.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EngineLpeEntry {
+    pub id: String,
+    pub kind: String,
+    pub enabled: bool,
+    pub params: Vec<EngineLpeParam>,
+}
+
+/// Editable string parameter persisted for an SVG filter primitive.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EngineFilterParam {
+    pub name: String,
+    pub value: String,
+}
+
+/// One primitive in the selected object's SVG filter chain.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EngineFilterPrimitiveEntry {
+    pub id: String,
+    pub kind: String,
+    pub enabled: bool,
+    pub params: Vec<EngineFilterParam>,
+}
+
+/// One reusable document resource discovered in the SVG tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EngineResourceEntry {
+    pub id: String,
+    pub kind: String,
+    pub name: String,
+    pub usage_count: usize,
+}
+
+/// Editable state for the primary selected text-like node.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EngineTextState {
+    pub content: String,
+    pub font_family: String,
+    pub font_size: f64,
+    pub font_weight: String,
+    pub font_style: String,
+    pub line_height: f64,
+    pub letter_spacing: f64,
+    pub word_spacing: f64,
+    pub text_anchor: String,
+}
+
+#[derive(Debug, Clone)]
+struct DocumentSnapshotCommand {
+    description: String,
+    before: SvgDocument,
+    after: SvgDocument,
+}
+
+impl DocumentSnapshotCommand {
+    fn new(description: impl Into<String>, before: SvgDocument, after: SvgDocument) -> Self {
+        Self {
+            description: description.into(),
+            before,
+            after,
+        }
+    }
+}
+
+impl Command for DocumentSnapshotCommand {
+    fn execute(&mut self, doc: &mut SvgDocument) {
+        *doc = self.after.clone();
+    }
+
+    fn undo(&mut self, doc: &mut SvgDocument) {
+        *doc = self.before.clone();
+    }
+
+    fn description(&self) -> &str {
+        &self.description
+    }
+}
+
 /// The top-level editor engine.
 pub struct EditorEngine {
     pub document: SvgDocument,
@@ -44,6 +179,8 @@ pub struct EditorEngine {
     pub tools: ToolManager,
     pub viewport: Viewport,
     pub snapping: SnappingEngine,
+    /// Last snap feedback generated by tool mouse input.
+    pub last_snap_indicator: Option<SnapIndicator>,
     pub events: EventBus,
     /// Internal clipboard holding serialized copies of elements.
     pub clipboard: Vec<ClipboardEntry>,
@@ -57,13 +194,28 @@ impl EditorEngine {
     pub fn new(width: f64, height: f64) -> Self {
         let mut tools = ToolManager::new();
         tools.register(ToolId::Select, Box::new(SelectTool::new()));
+        tools.register(ToolId::Node, Box::new(NodeTool::new()));
         tools.register(ToolId::Rect, Box::new(RectTool::new()));
         tools.register(ToolId::Ellipse, Box::new(EllipseTool::new()));
+        tools.register(ToolId::Star, Box::new(StarTool::new()));
+        tools.register(ToolId::Spiral, Box::new(SpiralTool::new()));
         tools.register(ToolId::Pen, Box::new(PenTool::new()));
+        tools.register(ToolId::Pencil, Box::new(PencilTool::new()));
+        tools.register(ToolId::Calligraphy, Box::new(CalligraphyTool::new()));
+        tools.register(ToolId::Text, Box::new(TextTool::new()));
+        tools.register(ToolId::Gradient, Box::new(GradientTool::new()));
         tools.register(ToolId::Dropper, Box::new(DropperTool::new()));
+        tools.register(ToolId::BucketFill, Box::new(BucketFillTool::new()));
+        tools.register(ToolId::Connector, Box::new(ConnectorTool::new()));
         tools.register(ToolId::Eraser, Box::new(EraserTool::new()));
+        tools.register(ToolId::Spray, Box::new(SprayTool::new()));
+        tools.register(ToolId::Tweak, Box::new(TweakTool::new()));
         tools.register(ToolId::Measure, Box::new(MeasureTool::new()));
         tools.register(ToolId::Zoom, Box::new(ZoomTool::new()));
+        tools.register(ToolId::Mesh, Box::new(MeshTool::new()));
+        tools.register(ToolId::Box3d, Box::new(Box3dTool::new()));
+        tools.register(ToolId::Marker, Box::new(MarkerTool::new()));
+        tools.register(ToolId::Pages, Box::new(PagesTool::new()));
         tools.register(ToolId::Lpe, Box::new(LpeTool::new()));
 
         let mut engine = Self {
@@ -73,6 +225,7 @@ impl EditorEngine {
             tools,
             viewport: Viewport::new(width, height),
             snapping: SnappingEngine::new(),
+            last_snap_indicator: None,
             events: EventBus::new(),
             clipboard: Vec::new(),
             active_layer: None,
@@ -88,6 +241,7 @@ impl EditorEngine {
         self.history.clear();
         self.selection.clear();
         self.active_layer = None;
+        self.last_snap_indicator = None;
         self.events.emit(EditorEvent::DocumentModified);
         self.events.emit(EditorEvent::SelectionChanged);
         self.events.emit(EditorEvent::UndoRedoChanged);
@@ -120,6 +274,7 @@ impl EditorEngine {
     /// Undo the last command.
     pub fn undo(&mut self) {
         if self.history.undo(&mut self.document) {
+            self.validate_active_layer();
             self.events.emit(EditorEvent::DocumentModified);
             self.events.emit(EditorEvent::UndoRedoChanged);
         }
@@ -128,8 +283,19 @@ impl EditorEngine {
     /// Redo the last undone command.
     pub fn redo(&mut self) {
         if self.history.redo(&mut self.document) {
+            self.validate_active_layer();
             self.events.emit(EditorEvent::DocumentModified);
             self.events.emit(EditorEvent::UndoRedoChanged);
+        }
+    }
+
+    fn validate_active_layer(&mut self) {
+        if self
+            .active_layer
+            .map(|id| !self.is_layer(id))
+            .unwrap_or(false)
+        {
+            self.active_layer = None;
         }
     }
 
@@ -139,6 +305,7 @@ impl EditorEngine {
 
     /// Dispatch a mouse-down event to the active tool.
     pub fn on_mouse_down(&mut self, event: MouseEvent) {
+        let event = self.snapped_tool_mouse_event(event);
         let response = self.tools.active_tool_mut().on_mouse_down(
             event,
             &self.document,
@@ -169,6 +336,7 @@ impl EditorEngine {
 
     /// Dispatch a mouse-move event to the active tool.
     pub fn on_mouse_move(&mut self, event: MouseEvent) {
+        self.last_snap_indicator = None;
         let response = self.tools.active_tool_mut().on_mouse_move(
             event,
             &self.document,
@@ -180,6 +348,7 @@ impl EditorEngine {
 
     /// Dispatch a mouse-up event to the active tool.
     pub fn on_mouse_up(&mut self, event: MouseEvent) {
+        let event = self.snapped_tool_mouse_event(event);
         let response = self.tools.active_tool_mut().on_mouse_up(
             event,
             &self.document,
@@ -214,10 +383,199 @@ impl EditorEngine {
     fn handle_tool_response(&mut self, response: ToolResponse) {
         match response {
             ToolResponse::ExecuteCommand(cmd) => {
-                self.execute(cmd);
+                let command: Box<dyn Command> = if let Some(layer_id) = self.active_layer {
+                    if self.is_layer(layer_id) {
+                        Box::new(RouteToActiveLayerCommand::new(cmd, layer_id))
+                    } else {
+                        cmd
+                    }
+                } else {
+                    cmd
+                };
+                self.execute(command);
             }
             ToolResponse::Handled | ToolResponse::None => {}
         }
+    }
+
+    fn snapped_tool_mouse_event(&mut self, event: MouseEvent) -> MouseEvent {
+        self.last_snap_indicator = None;
+        if !self.should_snap_active_tool()
+            || !self.snapping.prefs.source_enabled(SnapSourceKind::Cursor)
+            || event.modifiers.alt
+        {
+            return event;
+        }
+
+        let doc_point = self
+            .viewport
+            .screen_to_document(Point::new(event.x, event.y));
+        let context = self.snap_context();
+        let snapped = self.snapping.snap_all(doc_point, &context, &self.viewport);
+        if snapped.target.is_none() {
+            return event;
+        }
+        self.last_snap_indicator = self.snapping.build_indicator(&snapped);
+        let screen_point = self.viewport.document_to_screen(snapped.point);
+        MouseEvent {
+            x: screen_point.x,
+            y: screen_point.y,
+            ..event
+        }
+    }
+
+    fn should_snap_active_tool(&self) -> bool {
+        matches!(
+            self.tools.active_id(),
+            ToolId::Rect
+                | ToolId::Ellipse
+                | ToolId::Star
+                | ToolId::Spiral
+                | ToolId::Pen
+                | ToolId::Pencil
+                | ToolId::Calligraphy
+                | ToolId::Text
+                | ToolId::Connector
+                | ToolId::Box3d
+                | ToolId::Marker
+                | ToolId::Mesh
+        )
+    }
+
+    fn snap_context(&self) -> SnapContext {
+        let mut context = SnapContext::default();
+        let Some(root) = self.document.root() else {
+            return context;
+        };
+
+        for id in self.document.traverse_pre_order(root) {
+            if id == root {
+                continue;
+            }
+            let Some(node) = self.document.get_node(id) else {
+                continue;
+            };
+            if node.hidden {
+                continue;
+            }
+
+            if let SvgElement::SodipodiGuide(attrs) = &node.element {
+                if let Some(guide) = Self::guide_line_from_attrs(attrs) {
+                    context.guides.push(guide);
+                }
+                continue;
+            }
+
+            if let Some(bbox) = element_bounding_box(&node.element) {
+                context.bboxes.push(bbox);
+                let center = bbox.center();
+                context.neighbor_centers_x.push(center.x);
+                context.neighbor_centers_y.push(center.y);
+            }
+
+            if let Some(path) = element_to_path(&node.element) {
+                if !path.is_empty() {
+                    context.paths.push(path);
+                }
+            }
+        }
+
+        context
+    }
+
+    /// Return all document guide lines in snap-ready geometry.
+    pub fn guide_lines(&self) -> Vec<SnapGuide> {
+        let Some(root) = self.document.root() else {
+            return Vec::new();
+        };
+        self.document
+            .traverse_pre_order(root)
+            .into_iter()
+            .filter_map(|id| {
+                let node = self.document.get_node(id)?;
+                if let SvgElement::SodipodiGuide(attrs) = &node.element {
+                    Self::guide_line_from_attrs(attrs)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Add a horizontal visual guide at document y.
+    pub fn add_horizontal_guide(&mut self, y: f64) -> Option<NodeId> {
+        if !y.is_finite() {
+            return None;
+        }
+        let cmd = AddGuideCommand::new(
+            &self.document,
+            (0.0, y),
+            (0.0, 1.0),
+            Some(format!("H {:.1}", y)),
+        )?;
+        let guide_id = cmd.guide_id();
+        self.execute(Box::new(cmd));
+        Some(guide_id)
+    }
+
+    /// Add a vertical visual guide at document x.
+    pub fn add_vertical_guide(&mut self, x: f64) -> Option<NodeId> {
+        if !x.is_finite() {
+            return None;
+        }
+        let cmd = AddGuideCommand::new(
+            &self.document,
+            (x, 0.0),
+            (1.0, 0.0),
+            Some(format!("V {:.1}", x)),
+        )?;
+        let guide_id = cmd.guide_id();
+        self.execute(Box::new(cmd));
+        Some(guide_id)
+    }
+
+    fn guide_line_from_attrs(attrs: &SodipodiGuideAttrs) -> Option<SnapGuide> {
+        let normal = Self::guide_normal(attrs);
+        let origin = attrs
+            .position
+            .as_deref()
+            .and_then(|value| {
+                Self::parse_number_pair(value).map(Point::from).or_else(|| {
+                    Self::parse_number(value).map(|position| {
+                        if matches!(attrs.orientation.as_deref(), Some("horizontal")) {
+                            Point::new(0.0, position)
+                        } else {
+                            Point::new(position, 0.0)
+                        }
+                    })
+                })
+            })
+            .unwrap_or(Point::ZERO);
+        SnapGuide::new(origin, normal)
+    }
+
+    fn guide_normal(attrs: &SodipodiGuideAttrs) -> Vector {
+        match attrs.orientation.as_deref() {
+            Some("horizontal") => Vector::new(0.0, 1.0),
+            Some("vertical") => Vector::new(1.0, 0.0),
+            Some(value) => Self::parse_number_pair(value)
+                .map(Vector::from)
+                .unwrap_or_else(|| Vector::new(1.0, 0.0)),
+            None => Vector::new(1.0, 0.0),
+        }
+    }
+
+    fn parse_number_pair(value: &str) -> Option<(f64, f64)> {
+        let mut parts = value
+            .split(|ch: char| ch == ',' || ch.is_ascii_whitespace())
+            .filter(|part| !part.is_empty());
+        let x = parts.next()?.parse::<f64>().ok()?;
+        let y = parts.next()?.parse::<f64>().ok()?;
+        Some((x, y))
+    }
+
+    fn parse_number(value: &str) -> Option<f64> {
+        value.trim().parse::<f64>().ok()
     }
 
     // -----------------------------------------------------------------------
@@ -283,18 +641,125 @@ impl EditorEngine {
         }
     }
 
-    /// Select all elements that are direct children of the root.
+    /// Select all objects in the active layer, falling back to all document
+    /// objects when no active layer exists.
     pub fn select_all(&mut self) {
+        self.select_all_current_layer();
+    }
+
+    /// Select all selectable objects in the active layer.
+    pub fn select_all_current_layer(&mut self) {
+        let scope = self
+            .active_layer
+            .filter(|id| self.is_layer(*id))
+            .or_else(|| self.document.root());
+        self.select_all_in_scope(scope);
+    }
+
+    /// Select all selectable objects across the entire document.
+    pub fn select_all_in_all_layers(&mut self) {
+        self.select_all_in_scope(self.document.root());
+    }
+
+    fn select_all_in_scope(&mut self, scope: Option<NodeId>) {
         self.selection.clear();
-        if let Some(root) = self.document.root() {
-            for &child in self.document.children(root) {
-                // Skip non-graphical children like defs.
-                if let Some(node) = self.document.get_node(child) {
-                    match &node.element {
-                        SvgElement::Defs(_) => continue,
-                        _ => self.selection.add(child),
-                    }
+        if let Some(scope) = scope {
+            for id in self.document.traverse_pre_order(scope) {
+                if id == scope {
+                    continue;
                 }
+                if self.is_selectable_object(id) {
+                    self.selection.add(id);
+                }
+            }
+        }
+        self.events.emit(EditorEvent::SelectionChanged);
+    }
+
+    fn is_selectable_object(&self, id: NodeId) -> bool {
+        let Some(node) = self.document.get_node(id) else {
+            return false;
+        };
+        if self.document.root() == Some(id) || self.is_layer(id) {
+            return false;
+        }
+        if self.is_inside_resource_tree(id) {
+            return false;
+        }
+        node.element.is_renderable()
+    }
+
+    fn is_inside_resource_tree(&self, id: NodeId) -> bool {
+        let mut parent = self.document.get_node(id).and_then(|node| node.parent);
+        while let Some(parent_id) = parent {
+            let Some(parent_node) = self.document.get_node(parent_id) else {
+                return false;
+            };
+            if matches!(
+                &parent_node.element,
+                SvgElement::Defs(_)
+                    | SvgElement::ClipPath(_)
+                    | SvgElement::Mask(_)
+                    | SvgElement::Marker(_)
+                    | SvgElement::Pattern(_)
+                    | SvgElement::Filter(_)
+                    | SvgElement::Symbol(_)
+                    | SvgElement::LinearGradient(_)
+                    | SvgElement::RadialGradient(_)
+                    | SvgElement::MeshGradient(_)
+            ) {
+                return true;
+            }
+            parent = parent_node.parent;
+        }
+        false
+    }
+
+    /// Clear the current selection.
+    pub fn select_none(&mut self) {
+        if !self.selection.is_empty() {
+            self.selection.clear();
+            self.events.emit(EditorEvent::SelectionChanged);
+        }
+    }
+
+    /// Replace the current selection with a specific node, if it exists.
+    pub fn select_node(&mut self, id: NodeId) {
+        if self.document.get_node(id).is_none() {
+            return;
+        }
+        self.selection.select(id);
+        self.events.emit(EditorEvent::SelectionChanged);
+    }
+
+    /// Invert selection among selectable direct children of the root element.
+    pub fn invert_selection(&mut self) {
+        let Some(root) = self.document.root() else {
+            return;
+        };
+
+        let selectables: Vec<NodeId> = self
+            .document
+            .children(root)
+            .iter()
+            .copied()
+            .filter(|id| {
+                self.document
+                    .get_node(*id)
+                    .map(|node| !matches!(node.element, SvgElement::Defs(_)))
+                    .unwrap_or(false)
+            })
+            .collect();
+
+        if selectables.is_empty() {
+            return;
+        }
+
+        let previously_selected = self.selection.selected().to_vec();
+        self.selection.clear();
+        for id in selectables {
+            if !previously_selected.contains(&id) {
+                self.selection.add(id);
             }
         }
         self.events.emit(EditorEvent::SelectionChanged);
@@ -373,6 +838,116 @@ impl EditorEngine {
         }
     }
 
+    /// Reparent a node if it is legal to do so.
+    pub fn reparent_node(
+        &mut self,
+        node_id: NodeId,
+        new_parent: NodeId,
+        new_index: Option<usize>,
+    ) -> bool {
+        if !self.can_reparent_node(node_id, new_parent) {
+            return false;
+        }
+
+        self.execute(Box::new(ReparentNodeCommand::new(
+            node_id, new_parent, new_index,
+        )));
+        self.events.emit(EditorEvent::SelectionChanged);
+        true
+    }
+
+    /// Reparent a node according to an Objects-panel drop target.
+    ///
+    /// Dropping onto a container appends the node as a child. Dropping onto a
+    /// leaf object moves the node after that target in the target's parent.
+    pub fn reparent_node_for_object_drop(&mut self, node_id: NodeId, target_id: NodeId) -> bool {
+        if node_id == target_id {
+            return false;
+        }
+
+        let Some(target) = self.document.get_node(target_id) else {
+            return false;
+        };
+
+        if target.element.is_container() {
+            self.reparent_node(node_id, target_id, None)
+        } else {
+            let Some(parent) = target.parent else {
+                return false;
+            };
+            let index = self.document.child_index(target_id).map(|idx| idx + 1);
+            self.reparent_node(node_id, parent, index)
+        }
+    }
+
+    /// Move a node to the root level, preserving visual order by appending it.
+    pub fn reparent_node_to_root(&mut self, node_id: NodeId) -> bool {
+        let Some(root) = self.document.root() else {
+            return false;
+        };
+        self.reparent_node(node_id, root, None)
+    }
+
+    /// Move selected non-layer objects into the active layer.
+    pub fn move_selection_to_active_layer(&mut self) -> bool {
+        let Some(layer_id) = self.active_layer.filter(|id| self.is_layer(*id)) else {
+            return false;
+        };
+
+        let ids = self.selected_in_document_order();
+        if ids.is_empty() {
+            return false;
+        }
+
+        let mut commands: Vec<Box<dyn Command>> = Vec::new();
+        for id in ids {
+            if id == layer_id || self.is_layer(id) || !self.is_selectable_object(id) {
+                continue;
+            }
+            if self.document.parent(id) == Some(layer_id) {
+                continue;
+            }
+            if !self.can_reparent_node(id, layer_id) {
+                continue;
+            }
+            commands.push(Box::new(ReparentNodeCommand::new(id, layer_id, None)));
+        }
+
+        if commands.is_empty() {
+            return false;
+        }
+
+        self.execute_command_batch("Move selection to active layer", commands);
+        self.events.emit(EditorEvent::SelectionChanged);
+        true
+    }
+
+    fn can_reparent_node(&self, node_id: NodeId, new_parent: NodeId) -> bool {
+        if node_id == new_parent {
+            return false;
+        }
+        let Some(root) = self.document.root() else {
+            return false;
+        };
+        if node_id == root {
+            return false;
+        }
+        let Some(parent_node) = self.document.get_node(new_parent) else {
+            return false;
+        };
+        if !parent_node.element.is_container() {
+            return false;
+        }
+        if self.document.get_node(node_id).is_none() {
+            return false;
+        }
+
+        !self
+            .document
+            .traverse_pre_order(node_id)
+            .contains(&new_parent)
+    }
+
     /// Duplicate selected elements (add copies with a small offset).
     pub fn duplicate_selected(&mut self) {
         let ids: Vec<NodeId> = self.selection.selected().to_vec();
@@ -411,6 +986,407 @@ impl EditorEngine {
         }
     }
 
+    /// Create SVG `<use>` clones for the selected elements.
+    ///
+    /// Sources without an SVG `id` receive one in the same undoable command,
+    /// so the clone reference remains valid after save/reload.
+    pub fn clone_selected(&mut self) {
+        let ids: Vec<NodeId> = self.selection.selected().to_vec();
+        if ids.is_empty() {
+            return;
+        }
+
+        let mut used_xml_ids = self.used_xml_ids();
+        let mut commands: Vec<Box<dyn Command>> = Vec::new();
+
+        for &id in &ids {
+            let Some(node) = self.document.get_node(id) else {
+                continue;
+            };
+            let Some(parent) = node.parent else {
+                continue;
+            };
+
+            let source_xml_id = match node.xml_id.clone() {
+                Some(xml_id) => {
+                    used_xml_ids.insert(xml_id.clone());
+                    xml_id
+                }
+                None => {
+                    let generated = self.generate_clone_source_xml_id(id, &mut used_xml_ids);
+                    commands.push(Box::new(ModifyXmlIdCommand::new(
+                        id,
+                        None,
+                        Some(generated.clone()),
+                    )));
+                    generated
+                }
+            };
+
+            let element = SvgElement::Use(UseAttrs {
+                href: Some(format!("#{source_xml_id}")),
+                x: Some(SvgLength::zero()),
+                y: Some(SvgLength::zero()),
+                width: None,
+                height: None,
+            });
+
+            let mut pres = PresentationAttrs::default();
+            pres.transform = Some(Transform2D::translate(10.0, 10.0));
+            let insert_index = self.document.child_index(id).map(|idx| idx + 1);
+
+            commands.push(Box::new(AddNodeCommand::new(
+                parent,
+                element,
+                pres,
+                insert_index,
+            )));
+        }
+
+        if !commands.is_empty() {
+            self.execute(Box::new(CompoundCommand::new("Create clone", commands)));
+        }
+    }
+
+    /// Replace selected SVG `<use>` clones with independent object subtrees.
+    pub fn unlink_selected_clones(&mut self) {
+        let ids: Vec<NodeId> = self.selection.selected().to_vec();
+        if ids.is_empty() {
+            return;
+        }
+
+        let mut commands: Vec<Box<dyn Command>> = Vec::new();
+        for &id in &ids {
+            let Some(clone_node) = self.document.get_node(id).cloned() else {
+                continue;
+            };
+            let SvgElement::Use(use_attrs) = &clone_node.element else {
+                continue;
+            };
+            let Some(href) = use_attrs.href.as_deref() else {
+                continue;
+            };
+            let Some(source_xml_id) = Self::href_target_id(href) else {
+                continue;
+            };
+            let Some(source_id) = self.document.find_by_xml_id(&source_xml_id) else {
+                continue;
+            };
+            if source_id == id {
+                continue;
+            }
+
+            let Some(old_subtree) = self.snapshot_subtree_nodes(id) else {
+                continue;
+            };
+            let Some(new_subtree) =
+                self.build_unlinked_clone_subtree(id, &clone_node, source_id, use_attrs)
+            else {
+                continue;
+            };
+
+            commands.push(Box::new(UnlinkCloneCommand::new(
+                id,
+                old_subtree,
+                new_subtree,
+            )));
+        }
+
+        if !commands.is_empty() {
+            self.execute(Box::new(CompoundCommand::new("Unlink clone", commands)));
+        }
+    }
+
+    fn used_xml_ids(&self) -> HashSet<String> {
+        self.document
+            .nodes()
+            .filter_map(|(_, node)| node.xml_id.clone())
+            .collect()
+    }
+
+    fn generate_clone_source_xml_id(
+        &self,
+        source_id: NodeId,
+        used_xml_ids: &mut HashSet<String>,
+    ) -> String {
+        let tag = self
+            .document
+            .get_node(source_id)
+            .map(|node| Self::xml_id_token(node.element.tag_name()))
+            .unwrap_or_else(|| "object".to_string());
+        let compact_id = source_id.to_string().replace('-', "");
+        let suffix_len = compact_id.len().min(8);
+        let base = format!("sivgo-{tag}-{}", &compact_id[..suffix_len]);
+
+        let mut candidate = base.clone();
+        let mut counter = 2;
+        while used_xml_ids.contains(&candidate) {
+            candidate = format!("{base}-{counter}");
+            counter += 1;
+        }
+        used_xml_ids.insert(candidate.clone());
+        candidate
+    }
+
+    fn xml_id_token(value: &str) -> String {
+        let mut token = String::new();
+        for ch in value.chars() {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                token.push(ch.to_ascii_lowercase());
+            } else {
+                token.push('-');
+            }
+        }
+        if token
+            .chars()
+            .next()
+            .map(|ch| ch.is_ascii_alphabetic() || ch == '_')
+            .unwrap_or(false)
+        {
+            token
+        } else {
+            format!("object-{token}")
+        }
+    }
+
+    fn href_target_id(href: &str) -> Option<String> {
+        let href = href.trim();
+        if let Some(id) = href.strip_prefix('#') {
+            return (!id.is_empty()).then(|| id.to_string());
+        }
+
+        let inner = href.strip_prefix("url(")?.strip_suffix(')')?.trim();
+        let inner = inner.trim_matches('"').trim_matches('\'');
+        inner
+            .strip_prefix('#')
+            .filter(|id| !id.is_empty())
+            .map(|id| id.to_string())
+    }
+
+    fn snapshot_subtree_nodes(&self, root: NodeId) -> Option<Vec<SvgNode>> {
+        if self.document.get_node(root).is_none() {
+            return None;
+        }
+        let mut nodes = Vec::new();
+        for id in self.document.traverse_pre_order(root) {
+            nodes.push(self.document.get_node(id)?.clone());
+        }
+        Some(nodes)
+    }
+
+    fn build_unlinked_clone_subtree(
+        &self,
+        clone_id: NodeId,
+        clone_node: &SvgNode,
+        source_id: NodeId,
+        use_attrs: &UseAttrs,
+    ) -> Option<Vec<SvgNode>> {
+        let source_ids = self.document.traverse_pre_order(source_id);
+        if source_ids.is_empty() {
+            return None;
+        }
+
+        let mut id_map = HashMap::new();
+        for &source_node_id in &source_ids {
+            let new_id = if source_node_id == source_id {
+                clone_id
+            } else {
+                NodeId::new()
+            };
+            id_map.insert(source_node_id, new_id);
+        }
+
+        let mut snapshots = Vec::new();
+        for &source_node_id in &source_ids {
+            let source_node = self.document.get_node(source_node_id)?;
+            let mut node = source_node.clone();
+            node.id = *id_map.get(&source_node_id)?;
+            node.parent = if source_node_id == source_id {
+                clone_node.parent
+            } else {
+                source_node
+                    .parent
+                    .and_then(|parent| id_map.get(&parent).copied())
+            };
+            node.children = source_node
+                .children
+                .iter()
+                .filter_map(|child| id_map.get(child).copied())
+                .collect();
+
+            if source_node_id == source_id {
+                node.xml_id = clone_node.xml_id.clone();
+                node.presentation = Self::presentation_for_unlinked_clone(
+                    &source_node.presentation,
+                    &clone_node.presentation,
+                    use_attrs,
+                );
+                node.attributes = source_node.attributes.clone();
+                let mut clone_attrs = clone_node.attributes.clone();
+                clone_attrs.remove("href");
+                clone_attrs.remove("xlink:href");
+                node.attributes.extend(clone_attrs);
+                node.namespaces = source_node.namespaces.clone();
+                node.namespaces.extend(clone_node.namespaces.clone());
+                node.required_features = clone_node
+                    .required_features
+                    .clone()
+                    .or_else(|| source_node.required_features.clone());
+                node.required_extensions = clone_node
+                    .required_extensions
+                    .clone()
+                    .or_else(|| source_node.required_extensions.clone());
+                node.system_language = clone_node
+                    .system_language
+                    .clone()
+                    .or_else(|| source_node.system_language.clone());
+                node.locked = clone_node.locked;
+                node.hidden = clone_node.hidden;
+            } else {
+                node.xml_id = None;
+            }
+
+            snapshots.push(node);
+        }
+
+        Some(snapshots)
+    }
+
+    fn presentation_for_unlinked_clone(
+        source: &PresentationAttrs,
+        clone: &PresentationAttrs,
+        use_attrs: &UseAttrs,
+    ) -> PresentationAttrs {
+        let mut pres = source.clone();
+
+        macro_rules! clone_override {
+            ($field:ident) => {
+                if clone.$field.is_some() {
+                    pres.$field = clone.$field.clone();
+                }
+            };
+        }
+
+        clone_override!(color);
+        clone_override!(fill);
+        clone_override!(stroke);
+        clone_override!(stroke_width);
+        clone_override!(opacity);
+        clone_override!(display);
+        clone_override!(visibility);
+        clone_override!(fill_opacity);
+        clone_override!(stroke_opacity);
+        clone_override!(stroke_linecap);
+        clone_override!(stroke_linejoin);
+        clone_override!(stroke_miterlimit);
+        clone_override!(stroke_dasharray);
+        clone_override!(stroke_dashoffset);
+        clone_override!(fill_rule);
+        clone_override!(clip_rule);
+        clone_override!(clip_path);
+        clone_override!(mask);
+        clone_override!(filter);
+        clone_override!(marker_start);
+        clone_override!(marker_mid);
+        clone_override!(marker_end);
+        clone_override!(mix_blend_mode);
+        clone_override!(isolation);
+        clone_override!(font_family);
+        clone_override!(font_size);
+        clone_override!(font_weight);
+        clone_override!(font_style);
+        clone_override!(text_anchor);
+        clone_override!(letter_spacing);
+        clone_override!(word_spacing);
+        clone_override!(text_decoration);
+        clone_override!(vector_effect);
+
+        let source_transform = source.transform.unwrap_or(Transform2D::IDENTITY);
+        let x = use_attrs.x.map(|length| length.to_px()).unwrap_or(0.0);
+        let y = use_attrs.y.map(|length| length.to_px()).unwrap_or(0.0);
+        let use_position = Transform2D::translate(x, y);
+        let clone_transform = clone.transform.unwrap_or(Transform2D::IDENTITY);
+        let transform = source_transform.then(&use_position).then(&clone_transform);
+        pres.transform = (!transform.is_identity()).then_some(transform);
+
+        pres
+    }
+
+    /// Set selected objects' clip path using the topmost selected object.
+    pub fn set_clip_selected(&mut self) {
+        self.set_clip_mask_selected(ClipMaskMode::Clip);
+    }
+
+    /// Release selected objects' clip path references.
+    pub fn release_clip_selected(&mut self) {
+        self.release_clip_mask_selected(ClipMaskMode::Clip);
+    }
+
+    /// Set selected objects' mask using the topmost selected object.
+    pub fn set_mask_selected(&mut self) {
+        self.set_clip_mask_selected(ClipMaskMode::Mask);
+    }
+
+    /// Release selected objects' mask references.
+    pub fn release_mask_selected(&mut self) {
+        self.release_clip_mask_selected(ClipMaskMode::Mask);
+    }
+
+    fn set_clip_mask_selected(&mut self, mode: ClipMaskMode) {
+        let ordered = self.selected_in_document_order();
+        if ordered.len() < 2 {
+            return;
+        }
+
+        let source_id = *ordered.last().expect("len checked");
+        let target_ids: Vec<NodeId> = ordered.into_iter().filter(|id| *id != source_id).collect();
+        if target_ids.is_empty() {
+            return;
+        }
+
+        self.execute(Box::new(SetClipMaskCommand::new(
+            mode,
+            target_ids.clone(),
+            source_id,
+        )));
+        self.selection.clear();
+        for target_id in target_ids {
+            self.selection.add(target_id);
+        }
+        self.events.emit(EditorEvent::SelectionChanged);
+    }
+
+    fn release_clip_mask_selected(&mut self, mode: ClipMaskMode) {
+        let target_ids: Vec<NodeId> = self.selection.selected().to_vec();
+        if target_ids.is_empty() {
+            return;
+        }
+        self.execute(Box::new(ReleaseClipMaskCommand::new(mode, target_ids)));
+    }
+
+    fn selected_in_document_order(&self) -> Vec<NodeId> {
+        let selected = self.selection.selected().to_vec();
+        if selected.is_empty() {
+            return Vec::new();
+        }
+
+        let mut ordered = Vec::new();
+        if let Some(root) = self.document.root() {
+            for id in self.document.traverse_pre_order(root) {
+                if selected.contains(&id) {
+                    ordered.push(id);
+                }
+            }
+        }
+
+        for id in selected {
+            if !ordered.contains(&id) {
+                ordered.push(id);
+            }
+        }
+        ordered
+    }
+
     // -----------------------------------------------------------------------
     // Clipboard operations (9.6.3)
     // -----------------------------------------------------------------------
@@ -435,7 +1411,16 @@ impl EditorEngine {
         target_parent: NodeId,
         target_doc: &mut SvgDocument,
     ) -> Option<NodeId> {
-        let source = self.document.get_node(source_id)?;
+        Self::deep_clone_between(&self.document, source_id, target_parent, target_doc)
+    }
+
+    fn deep_clone_between(
+        source_doc: &SvgDocument,
+        source_id: NodeId,
+        target_parent: NodeId,
+        target_doc: &mut SvgDocument,
+    ) -> Option<NodeId> {
+        let source = source_doc.get_node(source_id)?;
         let new_id = target_doc.add_node(source.element.clone());
         if let Some(new_node) = target_doc.get_node_mut(new_id) {
             new_node.presentation = source.presentation.clone();
@@ -448,12 +1433,21 @@ impl EditorEngine {
         }
         target_doc.append_child(target_parent, new_id);
 
-        let children: Vec<NodeId> = self.document.children(source_id).to_vec();
+        let children: Vec<NodeId> = source_doc.children(source_id).to_vec();
         for child_id in children {
-            self.deep_clone_into(child_id, new_id, target_doc);
+            Self::deep_clone_between(source_doc, child_id, new_id, target_doc);
         }
 
         Some(new_id)
+    }
+
+    fn insertion_parent(&self) -> Option<NodeId> {
+        if let Some(layer_id) = self.active_layer {
+            if self.is_layer(layer_id) {
+                return Some(layer_id);
+            }
+        }
+        self.document.root()
     }
 
     /// Copy the selected elements' SVG XML into the clipboard without
@@ -470,6 +1464,99 @@ impl EditorEngine {
                 self.clipboard.push(ClipboardEntry { svg_xml: xml });
             }
         }
+    }
+
+    /// Return plain text for a text-only selection.
+    pub fn selected_plain_text(&self) -> Option<String> {
+        let selected: HashSet<NodeId> = self.selection.selected().iter().copied().collect();
+        if selected.is_empty() {
+            return None;
+        }
+
+        let mut roots = Vec::new();
+        for id in self.selected_in_document_order() {
+            let mut parent = self.document.get_node(id).and_then(|node| node.parent);
+            let mut has_selected_ancestor = false;
+            while let Some(parent_id) = parent {
+                if selected.contains(&parent_id) {
+                    has_selected_ancestor = true;
+                    break;
+                }
+                parent = self
+                    .document
+                    .get_node(parent_id)
+                    .and_then(|node| node.parent);
+            }
+            if !has_selected_ancestor {
+                roots.push(id);
+            }
+        }
+
+        let mut chunks = Vec::new();
+        for id in roots {
+            let mut text = String::new();
+            self.collect_plain_text(id, &mut text);
+            if text.trim().is_empty() {
+                return None;
+            }
+            chunks.push(text);
+        }
+
+        (!chunks.is_empty()).then(|| chunks.join("\n"))
+    }
+
+    fn collect_plain_text(&self, id: NodeId, out: &mut String) {
+        let Some(node) = self.document.get_node(id) else {
+            return;
+        };
+        match &node.element {
+            SvgElement::Text(attrs) => out.push_str(&attrs.text_content),
+            SvgElement::TSpan(attrs) => out.push_str(&attrs.text_content),
+            SvgElement::TextPath(attrs) => out.push_str(&attrs.text_content),
+            SvgElement::FlowPara(attrs) => out.push_str(&attrs.text_content),
+            SvgElement::FlowSpan(attrs) => out.push_str(&attrs.text_content),
+            _ => {}
+        }
+
+        for &child in self.document.children(id) {
+            self.collect_plain_text(child, out);
+        }
+    }
+
+    /// Return the internal clipboard as one SVG document suitable for a native
+    /// text clipboard.
+    pub fn clipboard_svg_text(&self) -> Option<String> {
+        if self.clipboard.is_empty() {
+            return None;
+        }
+
+        if self.clipboard.len() == 1 {
+            return Some(self.clipboard[0].svg_xml.clone());
+        }
+
+        let mut tmp_doc = SvgDocument::new();
+        let svg_id = tmp_doc.add_node(SvgElement::Svg(SvgSvgAttrs::default()));
+        tmp_doc.set_root(svg_id);
+
+        for entry in &self.clipboard {
+            let parsed_doc = sivgo_dom::parse_svg(&entry.svg_xml).ok()?;
+            let parsed_root = parsed_doc.root()?;
+            let children: Vec<NodeId> = parsed_doc.children(parsed_root).to_vec();
+            for child_id in children {
+                Self::deep_clone_between(&parsed_doc, child_id, svg_id, &mut tmp_doc)?;
+            }
+        }
+
+        Some(sivgo_dom::serialize_svg(&tmp_doc))
+    }
+
+    /// Replace the internal clipboard with one SVG document read from an
+    /// external clipboard.
+    pub fn set_clipboard_svg_text(&mut self, svg_xml: impl Into<String>) {
+        self.clipboard.clear();
+        self.clipboard.push(ClipboardEntry {
+            svg_xml: svg_xml.into(),
+        });
     }
 
     /// Copy the selected elements to the clipboard, then delete them.
@@ -497,8 +1584,8 @@ impl EditorEngine {
             return;
         }
 
-        let root = match self.document.root() {
-            Some(r) => r,
+        let parent = match self.insertion_parent() {
+            Some(parent) => parent,
             None => return,
         };
 
@@ -532,7 +1619,7 @@ impl EditorEngine {
                     if child_children.is_empty() {
                         // Leaf node -- use AddNodeCommand directly.
                         commands.push(Box::new(AddNodeCommand::new(
-                            root,
+                            parent,
                             child_node.element.clone(),
                             pres,
                             None,
@@ -542,7 +1629,7 @@ impl EditorEngine {
                         commands.push(Box::new(PasteSubtreeCommand::from_parsed(
                             &parsed_doc,
                             child_id,
-                            root,
+                            parent,
                             pres,
                         )));
                     }
@@ -630,6 +1717,2483 @@ impl EditorEngine {
         let first_child_id = children.first()?;
         let node = parsed_doc.get_node(*first_child_id)?;
         Some(node.presentation.clone())
+    }
+
+    // -----------------------------------------------------------------------
+    // Filter editor operations
+    // -----------------------------------------------------------------------
+
+    fn normalize_filter_kind(kind: &str) -> Option<&'static str> {
+        let normalized = kind.trim().to_ascii_lowercase().replace([' ', '-'], "_");
+        match normalized.as_str() {
+            "gaussian_blur" | "fegaussianblur" | "blur" => Some("gaussian_blur"),
+            "offset" | "feoffset" => Some("offset"),
+            "color_matrix" | "fecolormatrix" => Some("color_matrix"),
+            "blend" | "feblend" => Some("blend"),
+            "composite" | "fecomposite" => Some("composite"),
+            "morphology" | "femorphology" => Some("morphology"),
+            "turbulence" | "feturbulence" => Some("turbulence"),
+            "displacement_map" | "fedisplacementmap" => Some("displacement_map"),
+            "convolve_matrix" | "feconvolvematrix" => Some("convolve_matrix"),
+            "flood" | "feflood" => Some("flood"),
+            "merge" | "femerge" => Some("merge"),
+            _ => None,
+        }
+    }
+
+    fn default_filter_params(kind: &str) -> Vec<EngineFilterParam> {
+        fn param(name: &str, value: &str) -> EngineFilterParam {
+            EngineFilterParam {
+                name: name.to_string(),
+                value: value.to_string(),
+            }
+        }
+
+        match Self::normalize_filter_kind(kind).unwrap_or(kind) {
+            "gaussian_blur" => vec![
+                param("input", "SourceGraphic"),
+                param("stdDeviationX", "3"),
+                param("stdDeviationY", "3"),
+                param("result", "blur"),
+            ],
+            "offset" => vec![
+                param("input", "SourceGraphic"),
+                param("dx", "4"),
+                param("dy", "4"),
+                param("result", "offset"),
+            ],
+            "color_matrix" => vec![
+                param("input", "SourceGraphic"),
+                param("type", "saturate"),
+                param("values", "0"),
+                param("result", "color"),
+            ],
+            "blend" => vec![
+                param("input", "SourceGraphic"),
+                param("in2", "SourceGraphic"),
+                param("mode", "normal"),
+                param("result", "blend"),
+            ],
+            "composite" => vec![
+                param("input", "SourceGraphic"),
+                param("in2", "SourceGraphic"),
+                param("operator", "over"),
+                param("k1", "0"),
+                param("k2", "1"),
+                param("k3", "1"),
+                param("k4", "0"),
+                param("result", "composite"),
+            ],
+            "morphology" => vec![
+                param("input", "SourceAlpha"),
+                param("operator", "dilate"),
+                param("radiusX", "2"),
+                param("radiusY", "2"),
+                param("result", "morphology"),
+            ],
+            "turbulence" => vec![
+                param("type", "turbulence"),
+                param("baseFrequencyX", "0.05"),
+                param("baseFrequencyY", "0.05"),
+                param("numOctaves", "2"),
+                param("seed", "0"),
+                param("result", "noise"),
+            ],
+            "displacement_map" => vec![
+                param("input", "SourceGraphic"),
+                param("in2", "noise"),
+                param("scale", "10"),
+                param("xChannelSelector", "R"),
+                param("yChannelSelector", "G"),
+                param("result", "displaced"),
+            ],
+            "convolve_matrix" => vec![
+                param("input", "SourceGraphic"),
+                param("orderX", "3"),
+                param("orderY", "3"),
+                param("kernelMatrix", "0 -1 0 -1 5 -1 0 -1 0"),
+                param("divisor", "1"),
+                param("bias", "0"),
+                param("result", "convolved"),
+            ],
+            "flood" => vec![
+                param("flood-color", "#000000"),
+                param("flood-opacity", "0.5"),
+                param("result", "flood"),
+            ],
+            "merge" => vec![param("inputs", "SourceGraphic"), param("result", "merge")],
+            _ => Vec::new(),
+        }
+    }
+
+    fn filter_param_string(
+        entry: &EngineFilterPrimitiveEntry,
+        name: &str,
+        fallback: &str,
+    ) -> String {
+        entry
+            .params
+            .iter()
+            .find(|param| param.name == name)
+            .map(|param| param.value.clone())
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| fallback.to_string())
+    }
+
+    fn filter_param_f64(entry: &EngineFilterPrimitiveEntry, name: &str, fallback: f64) -> f64 {
+        Self::filter_param_string(entry, name, "")
+            .parse::<f64>()
+            .ok()
+            .filter(|value| value.is_finite())
+            .unwrap_or(fallback)
+    }
+
+    fn filter_param_i32(entry: &EngineFilterPrimitiveEntry, name: &str, fallback: i32) -> i32 {
+        Self::filter_param_f64(entry, name, fallback as f64).round() as i32
+    }
+
+    fn common_filter_attrs(
+        entry: &EngineFilterPrimitiveEntry,
+        fallback: &str,
+    ) -> FilterPrimitiveAttrs {
+        FilterPrimitiveAttrs {
+            result: Some(Self::filter_param_string(entry, "result", fallback)),
+            ..Default::default()
+        }
+    }
+
+    fn filter_input_param(
+        entry: &EngineFilterPrimitiveEntry,
+        name: &str,
+        fallback: &str,
+    ) -> Option<FilterInput> {
+        Some(FilterInput::parse(&Self::filter_param_string(
+            entry, name, fallback,
+        )))
+    }
+
+    fn next_filter_entry_id(entries: &[EngineFilterPrimitiveEntry]) -> String {
+        let next = entries
+            .iter()
+            .filter_map(|entry| entry.id.strip_prefix("fp"))
+            .filter_map(|suffix| suffix.parse::<usize>().ok())
+            .max()
+            .unwrap_or(0)
+            + 1;
+        format!("fp{next}")
+    }
+
+    fn selected_filter_target_id(&self) -> Option<NodeId> {
+        let id = self.selection.primary()?;
+        let node = self.document.get_node(id)?;
+        if node.element.is_renderable() && !matches!(node.element, SvgElement::Svg(_)) {
+            Some(id)
+        } else {
+            None
+        }
+    }
+
+    /// Whether the primary selection can receive an SVG filter.
+    pub fn selected_filter_target_available(&self) -> bool {
+        self.selected_filter_target_id().is_some()
+    }
+
+    fn filter_id_from_ref(filter_ref: &str) -> Option<String> {
+        let trimmed = filter_ref.trim();
+        trimmed
+            .strip_prefix("url(#")
+            .and_then(|value| value.strip_suffix(')'))
+            .map(str::to_string)
+    }
+
+    fn selected_filter_node_id_in_doc(doc: &SvgDocument, target_id: NodeId) -> Option<NodeId> {
+        let target = doc.get_node(target_id)?;
+        let filter_ref = target
+            .presentation
+            .filter
+            .as_deref()
+            .or_else(|| target.attributes.get("filter").map(String::as_str))?;
+        let filter_id = Self::filter_id_from_ref(filter_ref)?;
+        let node_id = doc.find_by_xml_id(&filter_id)?;
+        matches!(doc.get_node(node_id)?.element, SvgElement::Filter(_)).then_some(node_id)
+    }
+
+    fn unique_xml_id(doc: &SvgDocument, base: &str) -> String {
+        if doc.find_by_xml_id(base).is_none() {
+            return base.to_string();
+        }
+        for index in 2..10_000 {
+            let candidate = format!("{base}-{index}");
+            if doc.find_by_xml_id(&candidate).is_none() {
+                return candidate;
+            }
+        }
+        format!("{base}-{}", NodeId::new())
+    }
+
+    fn filter_xml_id_for_target(target_id: NodeId) -> String {
+        let raw = target_id.to_string();
+        let suffix: String = raw
+            .chars()
+            .filter(|ch| ch.is_ascii_alphanumeric() || *ch == '-' || *ch == '_')
+            .take(16)
+            .collect();
+        let suffix = if suffix.is_empty() {
+            "target".to_string()
+        } else {
+            suffix
+        };
+        format!("sivgo-filter-{suffix}")
+    }
+
+    fn ensure_defs_in_doc(doc: &mut SvgDocument) -> Option<NodeId> {
+        let root = doc.root()?;
+        if let Some(id) = doc.children(root).iter().copied().find(|id| {
+            matches!(
+                doc.get_node(*id).map(|n| &n.element),
+                Some(SvgElement::Defs(_))
+            )
+        }) {
+            return Some(id);
+        }
+
+        let defs_id = doc.add_node(SvgElement::Defs(DefsAttrs));
+        doc.insert_child_at(root, defs_id, 0);
+        Some(defs_id)
+    }
+
+    fn ensure_filter_for_target_in_doc(doc: &mut SvgDocument, target_id: NodeId) -> Option<NodeId> {
+        if let Some(filter_id) = Self::selected_filter_node_id_in_doc(doc, target_id) {
+            return Some(filter_id);
+        }
+
+        let defs_id = Self::ensure_defs_in_doc(doc)?;
+        let base_id = Self::filter_xml_id_for_target(target_id);
+        let xml_id = Self::unique_xml_id(doc, &base_id);
+        let filter_id = doc.add_node(SvgElement::Filter(FilterAttrs {
+            x: Some(SvgLength::new(-25.0, LengthUnit::Percent)),
+            y: Some(SvgLength::new(-25.0, LengthUnit::Percent)),
+            width: Some(SvgLength::new(150.0, LengthUnit::Percent)),
+            height: Some(SvgLength::new(150.0, LengthUnit::Percent)),
+            ..Default::default()
+        }));
+        if let Some(filter_node) = doc.get_node_mut(filter_id) {
+            filter_node.xml_id = Some(xml_id.clone());
+        }
+        doc.append_child(defs_id, filter_id);
+
+        if let Some(target) = doc.get_node_mut(target_id) {
+            let reference = format!("url(#{xml_id})");
+            target.presentation.filter = Some(reference.clone());
+            target.attributes.insert("filter".to_string(), reference);
+        }
+
+        Some(filter_id)
+    }
+
+    fn filter_entry_attrs(entry: &EngineFilterPrimitiveEntry) -> HashMap<String, String> {
+        let mut attrs = HashMap::new();
+        attrs.insert("data-sivgo-filter-entry-id".to_string(), entry.id.clone());
+        attrs.insert(
+            "data-sivgo-enabled".to_string(),
+            if entry.enabled { "true" } else { "false" }.to_string(),
+        );
+        attrs
+    }
+
+    fn parse_kernel_matrix(value: &str) -> Vec<f64> {
+        value
+            .split_ascii_whitespace()
+            .filter_map(|part| part.parse::<f64>().ok())
+            .collect()
+    }
+
+    fn filter_entry_to_node(entry: &EngineFilterPrimitiveEntry) -> SvgNode {
+        let element = match entry.kind.as_str() {
+            "gaussian_blur" => SvgElement::FeGaussianBlur(FeGaussianBlurAttrs {
+                common: Self::common_filter_attrs(entry, "blur"),
+                input: Self::filter_input_param(entry, "input", "SourceGraphic"),
+                std_deviation_x: Self::filter_param_f64(entry, "stdDeviationX", 3.0),
+                std_deviation_y: Self::filter_param_f64(entry, "stdDeviationY", 3.0),
+            }),
+            "offset" => SvgElement::FeOffset(FeOffsetAttrs {
+                common: Self::common_filter_attrs(entry, "offset"),
+                input: Self::filter_input_param(entry, "input", "SourceGraphic"),
+                dx: Self::filter_param_f64(entry, "dx", 4.0),
+                dy: Self::filter_param_f64(entry, "dy", 4.0),
+            }),
+            "color_matrix" => SvgElement::FeColorMatrix(FeColorMatrixAttrs {
+                common: Self::common_filter_attrs(entry, "color"),
+                input: Self::filter_input_param(entry, "input", "SourceGraphic"),
+                matrix_type: SvgColorMatrixType::parse(&Self::filter_param_string(
+                    entry, "type", "saturate",
+                )),
+                values: Some(Self::filter_param_string(entry, "values", "0")),
+            }),
+            "blend" => SvgElement::FeBlend(FeBlendAttrs {
+                common: Self::common_filter_attrs(entry, "blend"),
+                input: Self::filter_input_param(entry, "input", "SourceGraphic"),
+                in2: Self::filter_input_param(entry, "in2", "SourceGraphic"),
+                mode: SvgBlendMode::parse(&Self::filter_param_string(entry, "mode", "normal")),
+            }),
+            "composite" => SvgElement::FeComposite(FeCompositeAttrs {
+                common: Self::common_filter_attrs(entry, "composite"),
+                input: Self::filter_input_param(entry, "input", "SourceGraphic"),
+                in2: Self::filter_input_param(entry, "in2", "SourceGraphic"),
+                operator: SvgCompositeOperator::parse(&Self::filter_param_string(
+                    entry, "operator", "over",
+                )),
+                k1: Self::filter_param_f64(entry, "k1", 0.0),
+                k2: Self::filter_param_f64(entry, "k2", 1.0),
+                k3: Self::filter_param_f64(entry, "k3", 1.0),
+                k4: Self::filter_param_f64(entry, "k4", 0.0),
+            }),
+            "morphology" => SvgElement::FeMorphology(FeMorphologyAttrs {
+                common: Self::common_filter_attrs(entry, "morphology"),
+                input: Self::filter_input_param(entry, "input", "SourceAlpha"),
+                operator: SvgMorphologyOperator::parse(&Self::filter_param_string(
+                    entry, "operator", "dilate",
+                )),
+                radius_x: Self::filter_param_f64(entry, "radiusX", 2.0),
+                radius_y: Self::filter_param_f64(entry, "radiusY", 2.0),
+            }),
+            "turbulence" => SvgElement::FeTurbulence(FeTurbulenceAttrs {
+                common: Self::common_filter_attrs(entry, "noise"),
+                turbulence_type: SvgTurbulenceType::parse(&Self::filter_param_string(
+                    entry,
+                    "type",
+                    "turbulence",
+                )),
+                base_frequency_x: Self::filter_param_f64(entry, "baseFrequencyX", 0.05),
+                base_frequency_y: Self::filter_param_f64(entry, "baseFrequencyY", 0.05),
+                num_octaves: Some(Self::filter_param_i32(entry, "numOctaves", 2).max(0)),
+                seed: Some(Self::filter_param_f64(entry, "seed", 0.0)),
+                stitch_tiles: None,
+            }),
+            "displacement_map" => SvgElement::FeDisplacementMap(FeDisplacementMapAttrs {
+                common: Self::common_filter_attrs(entry, "displaced"),
+                input: Self::filter_input_param(entry, "input", "SourceGraphic"),
+                in2: Self::filter_input_param(entry, "in2", "noise"),
+                scale: Some(Self::filter_param_f64(entry, "scale", 10.0)),
+                x_channel_selector: SvgChannelSelector::parse(&Self::filter_param_string(
+                    entry,
+                    "xChannelSelector",
+                    "R",
+                )),
+                y_channel_selector: SvgChannelSelector::parse(&Self::filter_param_string(
+                    entry,
+                    "yChannelSelector",
+                    "G",
+                )),
+            }),
+            "convolve_matrix" => SvgElement::FeConvolveMatrix(FeConvolveMatrixAttrs {
+                common: Self::common_filter_attrs(entry, "convolved"),
+                input: Self::filter_input_param(entry, "input", "SourceGraphic"),
+                order_x: Self::filter_param_i32(entry, "orderX", 3).max(1),
+                order_y: Self::filter_param_i32(entry, "orderY", 3).max(1),
+                kernel_matrix: Self::parse_kernel_matrix(&Self::filter_param_string(
+                    entry,
+                    "kernelMatrix",
+                    "0 -1 0 -1 5 -1 0 -1 0",
+                )),
+                divisor: Some(Self::filter_param_f64(entry, "divisor", 1.0)),
+                bias: Self::filter_param_f64(entry, "bias", 0.0),
+                target_x: None,
+                target_y: None,
+                edge_mode: None,
+                preserve_alpha: false,
+            }),
+            "flood" => SvgElement::FeFlood(FeFloodAttrs {
+                common: Self::common_filter_attrs(entry, "flood"),
+                flood_color: Color::parse(&Self::filter_param_string(
+                    entry,
+                    "flood-color",
+                    "#000000",
+                )),
+                flood_opacity: Some(Self::filter_param_f64(entry, "flood-opacity", 0.5)),
+            }),
+            "merge" => SvgElement::FeMerge(FeMergeAttrs {
+                common: Self::common_filter_attrs(entry, "merge"),
+            }),
+            _ => SvgElement::FeGaussianBlur(FeGaussianBlurAttrs {
+                common: Self::common_filter_attrs(entry, "blur"),
+                input: Some(FilterInput::SourceGraphic),
+                std_deviation_x: 3.0,
+                std_deviation_y: 3.0,
+            }),
+        };
+
+        let mut node = SvgNode::new(NodeId::new(), element);
+        node.attributes = Self::filter_entry_attrs(entry);
+        node
+    }
+
+    fn append_filter_entry_to_doc(
+        doc: &mut SvgDocument,
+        filter_id: NodeId,
+        entry: &EngineFilterPrimitiveEntry,
+    ) {
+        let node = Self::filter_entry_to_node(entry);
+        let primitive_id = node.id;
+        doc.insert_node(node);
+        doc.append_child(filter_id, primitive_id);
+
+        if entry.kind == "merge" {
+            let inputs = Self::filter_param_string(entry, "inputs", "SourceGraphic");
+            for input in inputs
+                .split([',', ';'])
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                let merge_node_id = doc.add_node(SvgElement::FeMergeNode(FeMergeNodeAttrs {
+                    input: Some(FilterInput::parse(input)),
+                }));
+                doc.append_child(primitive_id, merge_node_id);
+            }
+        }
+    }
+
+    fn filter_entry_from_node(
+        doc: &SvgDocument,
+        node_id: NodeId,
+        fallback_index: usize,
+    ) -> Option<EngineFilterPrimitiveEntry> {
+        let node = doc.get_node(node_id)?;
+        let id = node
+            .attributes
+            .get("data-sivgo-filter-entry-id")
+            .or_else(|| node.attributes.get("sivgo:filter-entry-id"))
+            .cloned()
+            .unwrap_or_else(|| format!("fp{}", fallback_index + 1));
+        let enabled = node
+            .attributes
+            .get("data-sivgo-enabled")
+            .or_else(|| node.attributes.get("sivgo:enabled"))
+            .map(|value| value != "false" && value != "0")
+            .unwrap_or(true);
+        let result = |common: &FilterPrimitiveAttrs, fallback: &str| {
+            common
+                .result
+                .clone()
+                .unwrap_or_else(|| fallback.to_string())
+        };
+        let param = |name: &str, value: String| EngineFilterParam {
+            name: name.to_string(),
+            value,
+        };
+        let input_value = |input: &Option<FilterInput>, fallback: &str| {
+            input
+                .as_ref()
+                .map(FilterInput::to_svg)
+                .unwrap_or_else(|| fallback.to_string())
+        };
+
+        let (kind, params) = match &node.element {
+            SvgElement::FeGaussianBlur(attrs) => (
+                "gaussian_blur",
+                vec![
+                    param("input", input_value(&attrs.input, "SourceGraphic")),
+                    param("stdDeviationX", attrs.std_deviation_x.to_string()),
+                    param("stdDeviationY", attrs.std_deviation_y.to_string()),
+                    param("result", result(&attrs.common, "blur")),
+                ],
+            ),
+            SvgElement::FeOffset(attrs) => (
+                "offset",
+                vec![
+                    param("input", input_value(&attrs.input, "SourceGraphic")),
+                    param("dx", attrs.dx.to_string()),
+                    param("dy", attrs.dy.to_string()),
+                    param("result", result(&attrs.common, "offset")),
+                ],
+            ),
+            SvgElement::FeColorMatrix(attrs) => (
+                "color_matrix",
+                vec![
+                    param("input", input_value(&attrs.input, "SourceGraphic")),
+                    param(
+                        "type",
+                        attrs
+                            .matrix_type
+                            .map(|kind| kind.to_svg().to_string())
+                            .unwrap_or_else(|| "matrix".to_string()),
+                    ),
+                    param("values", attrs.values.clone().unwrap_or_default()),
+                    param("result", result(&attrs.common, "color")),
+                ],
+            ),
+            SvgElement::FeBlend(attrs) => (
+                "blend",
+                vec![
+                    param("input", input_value(&attrs.input, "SourceGraphic")),
+                    param("in2", input_value(&attrs.in2, "SourceGraphic")),
+                    param(
+                        "mode",
+                        attrs
+                            .mode
+                            .map(|mode| mode.to_svg().to_string())
+                            .unwrap_or_else(|| "normal".to_string()),
+                    ),
+                    param("result", result(&attrs.common, "blend")),
+                ],
+            ),
+            SvgElement::FeComposite(attrs) => (
+                "composite",
+                vec![
+                    param("input", input_value(&attrs.input, "SourceGraphic")),
+                    param("in2", input_value(&attrs.in2, "SourceGraphic")),
+                    param(
+                        "operator",
+                        attrs
+                            .operator
+                            .map(|op| op.to_svg().to_string())
+                            .unwrap_or_else(|| "over".to_string()),
+                    ),
+                    param("k1", attrs.k1.to_string()),
+                    param("k2", attrs.k2.to_string()),
+                    param("k3", attrs.k3.to_string()),
+                    param("k4", attrs.k4.to_string()),
+                    param("result", result(&attrs.common, "composite")),
+                ],
+            ),
+            SvgElement::FeMorphology(attrs) => (
+                "morphology",
+                vec![
+                    param("input", input_value(&attrs.input, "SourceAlpha")),
+                    param(
+                        "operator",
+                        attrs
+                            .operator
+                            .map(|op| op.to_svg().to_string())
+                            .unwrap_or_else(|| "dilate".to_string()),
+                    ),
+                    param("radiusX", attrs.radius_x.to_string()),
+                    param("radiusY", attrs.radius_y.to_string()),
+                    param("result", result(&attrs.common, "morphology")),
+                ],
+            ),
+            SvgElement::FeTurbulence(attrs) => (
+                "turbulence",
+                vec![
+                    param(
+                        "type",
+                        attrs
+                            .turbulence_type
+                            .map(|kind| kind.to_svg().to_string())
+                            .unwrap_or_else(|| "turbulence".to_string()),
+                    ),
+                    param("baseFrequencyX", attrs.base_frequency_x.to_string()),
+                    param("baseFrequencyY", attrs.base_frequency_y.to_string()),
+                    param("numOctaves", attrs.num_octaves.unwrap_or(1).to_string()),
+                    param("seed", attrs.seed.unwrap_or(0.0).to_string()),
+                    param("result", result(&attrs.common, "noise")),
+                ],
+            ),
+            SvgElement::FeDisplacementMap(attrs) => (
+                "displacement_map",
+                vec![
+                    param("input", input_value(&attrs.input, "SourceGraphic")),
+                    param("in2", input_value(&attrs.in2, "noise")),
+                    param("scale", attrs.scale.unwrap_or(10.0).to_string()),
+                    param(
+                        "xChannelSelector",
+                        attrs
+                            .x_channel_selector
+                            .map(|channel| channel.to_svg().to_string())
+                            .unwrap_or_else(|| "R".to_string()),
+                    ),
+                    param(
+                        "yChannelSelector",
+                        attrs
+                            .y_channel_selector
+                            .map(|channel| channel.to_svg().to_string())
+                            .unwrap_or_else(|| "G".to_string()),
+                    ),
+                    param("result", result(&attrs.common, "displaced")),
+                ],
+            ),
+            SvgElement::FeConvolveMatrix(attrs) => (
+                "convolve_matrix",
+                vec![
+                    param("input", input_value(&attrs.input, "SourceGraphic")),
+                    param("orderX", attrs.order_x.to_string()),
+                    param("orderY", attrs.order_y.to_string()),
+                    param(
+                        "kernelMatrix",
+                        attrs
+                            .kernel_matrix
+                            .iter()
+                            .map(ToString::to_string)
+                            .collect::<Vec<_>>()
+                            .join(" "),
+                    ),
+                    param("divisor", attrs.divisor.unwrap_or(1.0).to_string()),
+                    param("bias", attrs.bias.to_string()),
+                    param("result", result(&attrs.common, "convolved")),
+                ],
+            ),
+            SvgElement::FeFlood(attrs) => (
+                "flood",
+                vec![
+                    param(
+                        "flood-color",
+                        attrs
+                            .flood_color
+                            .map(|color| format!("#{:02x}{:02x}{:02x}", color.r, color.g, color.b))
+                            .unwrap_or_else(|| "#000000".to_string()),
+                    ),
+                    param(
+                        "flood-opacity",
+                        attrs.flood_opacity.unwrap_or(1.0).to_string(),
+                    ),
+                    param("result", result(&attrs.common, "flood")),
+                ],
+            ),
+            SvgElement::FeMerge(attrs) => {
+                let inputs = doc
+                    .children(node_id)
+                    .iter()
+                    .filter_map(|child_id| match &doc.get_node(*child_id)?.element {
+                        SvgElement::FeMergeNode(attrs) => Some(input_value(&attrs.input, "")),
+                        _ => None,
+                    })
+                    .filter(|input| !input.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                (
+                    "merge",
+                    vec![
+                        param("inputs", inputs),
+                        param("result", result(&attrs.common, "merge")),
+                    ],
+                )
+            }
+            _ => return None,
+        };
+
+        Some(EngineFilterPrimitiveEntry {
+            id,
+            kind: kind.to_string(),
+            enabled,
+            params,
+        })
+    }
+
+    fn selected_filter_primitives_in_doc(
+        doc: &SvgDocument,
+        target_id: NodeId,
+    ) -> Vec<EngineFilterPrimitiveEntry> {
+        let Some(filter_id) = Self::selected_filter_node_id_in_doc(doc, target_id) else {
+            return Vec::new();
+        };
+        doc.children(filter_id)
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, child_id)| Self::filter_entry_from_node(doc, *child_id, idx))
+            .collect()
+    }
+
+    fn rebuild_filter_in_doc(
+        doc: &mut SvgDocument,
+        target_id: NodeId,
+        entries: &[EngineFilterPrimitiveEntry],
+    ) -> Option<()> {
+        if entries.is_empty() {
+            if let Some(filter_id) = Self::selected_filter_node_id_in_doc(doc, target_id) {
+                doc.remove_node(filter_id);
+            }
+            if let Some(target) = doc.get_node_mut(target_id) {
+                target.presentation.filter = None;
+                target.attributes.remove("filter");
+            }
+            return Some(());
+        }
+
+        let filter_id = Self::ensure_filter_for_target_in_doc(doc, target_id)?;
+        for child in doc.children(filter_id).to_vec() {
+            doc.remove_node(child);
+        }
+        for entry in entries {
+            Self::append_filter_entry_to_doc(doc, filter_id, entry);
+        }
+        Some(())
+    }
+
+    fn modify_selected_filter_stack<F>(&mut self, description: &str, update: F) -> bool
+    where
+        F: FnOnce(&mut Vec<EngineFilterPrimitiveEntry>),
+    {
+        let Some(target_id) = self.selected_filter_target_id() else {
+            return false;
+        };
+        let mut after = self.document.clone();
+        let mut entries = Self::selected_filter_primitives_in_doc(&after, target_id);
+        update(&mut entries);
+        if Self::rebuild_filter_in_doc(&mut after, target_id, &entries).is_none() {
+            return false;
+        }
+        let before = self.document.clone();
+        self.execute(Box::new(DocumentSnapshotCommand::new(
+            description,
+            before,
+            after,
+        )));
+        self.events.emit(EditorEvent::SelectionChanged);
+        true
+    }
+
+    /// Return the editable SVG filter chain for the primary selected object.
+    pub fn selected_filter_primitives(&self) -> Vec<EngineFilterPrimitiveEntry> {
+        let Some(target_id) = self.selected_filter_target_id() else {
+            return Vec::new();
+        };
+        Self::selected_filter_primitives_in_doc(&self.document, target_id)
+    }
+
+    /// Add an SVG filter primitive to the primary selected object.
+    pub fn add_filter_primitive_to_selected(&mut self, kind: &str) -> Option<String> {
+        let kind = Self::normalize_filter_kind(kind)?.to_string();
+        let mut added_id = None;
+        let updated = self.modify_selected_filter_stack("Add filter primitive", |entries| {
+            let id = Self::next_filter_entry_id(entries);
+            let params = Self::default_filter_params(&kind);
+            added_id = Some(id.clone());
+            entries.push(EngineFilterPrimitiveEntry {
+                id,
+                kind: kind.clone(),
+                enabled: true,
+                params,
+            });
+        });
+        updated.then_some(added_id).flatten()
+    }
+
+    /// Remove an SVG filter primitive from the selected object's chain.
+    pub fn remove_filter_primitive_from_selected(&mut self, primitive_id: &str) -> bool {
+        self.modify_selected_filter_stack("Remove filter primitive", |entries| {
+            entries.retain(|entry| entry.id != primitive_id);
+        })
+    }
+
+    /// Toggle one SVG filter primitive.
+    pub fn toggle_filter_primitive_on_selected(&mut self, primitive_id: &str) -> bool {
+        self.modify_selected_filter_stack("Toggle filter primitive", |entries| {
+            if let Some(entry) = entries.iter_mut().find(|entry| entry.id == primitive_id) {
+                entry.enabled = !entry.enabled;
+            }
+        })
+    }
+
+    /// Move a filter primitive up or down in the chain.
+    pub fn move_filter_primitive_on_selected(&mut self, primitive_id: &str, delta: isize) -> bool {
+        self.modify_selected_filter_stack("Move filter primitive", |entries| {
+            let Some(index) = entries.iter().position(|entry| entry.id == primitive_id) else {
+                return;
+            };
+            let target = if delta < 0 {
+                index.saturating_sub(1)
+            } else {
+                (index + 1).min(entries.len().saturating_sub(1))
+            };
+            if target != index {
+                let entry = entries.remove(index);
+                entries.insert(target, entry);
+            }
+        })
+    }
+
+    /// Set one parameter on a selected object's filter primitive.
+    pub fn set_filter_param_on_selected(
+        &mut self,
+        primitive_id: &str,
+        param_name: &str,
+        value: String,
+    ) -> bool {
+        self.modify_selected_filter_stack("Set filter parameter", |entries| {
+            let Some(entry) = entries.iter_mut().find(|entry| entry.id == primitive_id) else {
+                return;
+            };
+            if let Some(param) = entry
+                .params
+                .iter_mut()
+                .find(|param| param.name == param_name)
+            {
+                param.value = value;
+            } else {
+                entry.params.push(EngineFilterParam {
+                    name: param_name.to_string(),
+                    value,
+                });
+            }
+        })
+    }
+
+    /// Apply a built-in filter preset to the selected object.
+    pub fn apply_filter_preset_to_selected(&mut self, preset: &str) -> bool {
+        let entries = match preset {
+            "blur" | "simple_blur" => vec![EngineFilterPrimitiveEntry {
+                id: "fp1".to_string(),
+                kind: "gaussian_blur".to_string(),
+                enabled: true,
+                params: Self::default_filter_params("gaussian_blur"),
+            }],
+            "drop_shadow" => Self::drop_shadow_filter_entries(),
+            _ => return false,
+        };
+
+        self.modify_selected_filter_stack("Apply filter preset", |current| {
+            *current = entries;
+        })
+    }
+
+    fn filter_param(name: &str, value: &str) -> EngineFilterParam {
+        EngineFilterParam {
+            name: name.to_string(),
+            value: value.to_string(),
+        }
+    }
+
+    fn drop_shadow_filter_entries() -> Vec<EngineFilterPrimitiveEntry> {
+        vec![
+            EngineFilterPrimitiveEntry {
+                id: "fp1".to_string(),
+                kind: "gaussian_blur".to_string(),
+                enabled: true,
+                params: vec![
+                    Self::filter_param("input", "SourceAlpha"),
+                    Self::filter_param("stdDeviationX", "3"),
+                    Self::filter_param("stdDeviationY", "3"),
+                    Self::filter_param("result", "blur"),
+                ],
+            },
+            EngineFilterPrimitiveEntry {
+                id: "fp2".to_string(),
+                kind: "offset".to_string(),
+                enabled: true,
+                params: vec![
+                    Self::filter_param("input", "blur"),
+                    Self::filter_param("dx", "4"),
+                    Self::filter_param("dy", "4"),
+                    Self::filter_param("result", "offsetBlur"),
+                ],
+            },
+            EngineFilterPrimitiveEntry {
+                id: "fp3".to_string(),
+                kind: "flood".to_string(),
+                enabled: true,
+                params: vec![
+                    Self::filter_param("flood-color", "#000000"),
+                    Self::filter_param("flood-opacity", "0.5"),
+                    Self::filter_param("result", "flood"),
+                ],
+            },
+            EngineFilterPrimitiveEntry {
+                id: "fp4".to_string(),
+                kind: "composite".to_string(),
+                enabled: true,
+                params: vec![
+                    Self::filter_param("input", "flood"),
+                    Self::filter_param("in2", "offsetBlur"),
+                    Self::filter_param("operator", "in"),
+                    Self::filter_param("k1", "0"),
+                    Self::filter_param("k2", "1"),
+                    Self::filter_param("k3", "1"),
+                    Self::filter_param("k4", "0"),
+                    Self::filter_param("result", "shadow"),
+                ],
+            },
+            EngineFilterPrimitiveEntry {
+                id: "fp5".to_string(),
+                kind: "merge".to_string(),
+                enabled: true,
+                params: vec![
+                    Self::filter_param("inputs", "shadow,SourceGraphic"),
+                    Self::filter_param("result", "merge"),
+                ],
+            },
+        ]
+    }
+
+    // -----------------------------------------------------------------------
+    // Document resource inventory
+    // -----------------------------------------------------------------------
+
+    fn resource_kind_for_element(element: &SvgElement) -> Option<&'static str> {
+        match element {
+            SvgElement::LinearGradient(_)
+            | SvgElement::RadialGradient(_)
+            | SvgElement::MeshGradient(_) => Some("gradient"),
+            SvgElement::Pattern(_) => Some("pattern"),
+            SvgElement::Marker(_) => Some("marker"),
+            SvgElement::Symbol(_) => Some("symbol"),
+            SvgElement::Filter(_) => Some("filter"),
+            SvgElement::ClipPath(_) => Some("clip_path"),
+            SvgElement::Mask(_) => Some("mask"),
+            SvgElement::Image(_) => Some("image"),
+            SvgElement::SvgFont(_)
+            | SvgElement::FontFace(_)
+            | SvgElement::Glyph(_)
+            | SvgElement::MissingGlyph(_) => Some("font"),
+            _ => None,
+        }
+    }
+
+    fn resource_name_for_node(node: &SvgNode, xml_id: &str) -> String {
+        node.attributes
+            .get("inkscape:label")
+            .or_else(|| node.attributes.get("aria-label"))
+            .cloned()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| xml_id.to_string())
+    }
+
+    fn url_value_matches(value: &str, xml_id: &str) -> bool {
+        let needle = format!("#{xml_id}");
+        value.contains(&needle)
+    }
+
+    fn paint_uses_resource(paint: &Option<Paint>, xml_id: &str) -> bool {
+        matches!(paint, Some(Paint::Url(url)) if Self::url_value_matches(url, xml_id))
+    }
+
+    fn href_uses_resource(href: &Option<String>, xml_id: &str) -> bool {
+        href.as_deref()
+            .is_some_and(|href| Self::url_value_matches(href, xml_id))
+    }
+
+    fn node_uses_resource(node: &SvgNode, xml_id: &str) -> bool {
+        let pres = &node.presentation;
+        Self::paint_uses_resource(&pres.fill, xml_id)
+            || Self::paint_uses_resource(&pres.stroke, xml_id)
+            || pres
+                .filter
+                .as_deref()
+                .is_some_and(|value| Self::url_value_matches(value, xml_id))
+            || pres
+                .clip_path
+                .as_deref()
+                .is_some_and(|value| Self::url_value_matches(value, xml_id))
+            || pres
+                .mask
+                .as_deref()
+                .is_some_and(|value| Self::url_value_matches(value, xml_id))
+            || pres
+                .marker_start
+                .as_deref()
+                .is_some_and(|value| Self::url_value_matches(value, xml_id))
+            || pres
+                .marker_mid
+                .as_deref()
+                .is_some_and(|value| Self::url_value_matches(value, xml_id))
+            || pres
+                .marker_end
+                .as_deref()
+                .is_some_and(|value| Self::url_value_matches(value, xml_id))
+            || node
+                .attributes
+                .values()
+                .any(|value| Self::url_value_matches(value, xml_id))
+            || match &node.element {
+                SvgElement::Use(attrs) => Self::href_uses_resource(&attrs.href, xml_id),
+                SvgElement::LinearGradient(attrs) => Self::href_uses_resource(&attrs.href, xml_id),
+                SvgElement::RadialGradient(attrs) => Self::href_uses_resource(&attrs.href, xml_id),
+                SvgElement::Pattern(attrs) => Self::href_uses_resource(&attrs.href, xml_id),
+                _ => false,
+            }
+    }
+
+    fn resource_usage_count(&self, resource_node_id: NodeId, xml_id: &str) -> usize {
+        self.document
+            .nodes()
+            .filter(|(id, node)| **id != resource_node_id && Self::node_uses_resource(node, xml_id))
+            .count()
+    }
+
+    /// Return all reusable resources currently defined in the document.
+    pub fn document_resources(&self) -> Vec<EngineResourceEntry> {
+        let mut resources = self
+            .document
+            .nodes()
+            .filter_map(|(&node_id, node)| {
+                let kind = Self::resource_kind_for_element(&node.element)?;
+                let xml_id = node
+                    .xml_id
+                    .clone()
+                    .unwrap_or_else(|| format!("node-{}", node_id));
+                let usage_count = if node.xml_id.is_some() {
+                    self.resource_usage_count(node_id, &xml_id)
+                } else if matches!(node.element, SvgElement::Image(_)) {
+                    1
+                } else {
+                    0
+                };
+                Some(EngineResourceEntry {
+                    id: xml_id.clone(),
+                    kind: kind.to_string(),
+                    name: Self::resource_name_for_node(node, &xml_id),
+                    usage_count,
+                })
+            })
+            .collect::<Vec<_>>();
+
+        resources.sort_by(|a, b| a.kind.cmp(&b.kind).then_with(|| a.id.cmp(&b.id)));
+        resources
+    }
+
+    fn unused_resource_node_ids(&self) -> Vec<NodeId> {
+        self.document
+            .nodes()
+            .filter_map(|(&node_id, node)| {
+                let _ = Self::resource_kind_for_element(&node.element)?;
+                let xml_id = node.xml_id.as_deref()?;
+                (self.resource_usage_count(node_id, xml_id) == 0).then_some(node_id)
+            })
+            .collect()
+    }
+
+    /// Delete one unused resource by SVG id.
+    pub fn delete_unused_resource(&mut self, resource_id: &str) -> bool {
+        let Some(node_id) = self.document.find_by_xml_id(resource_id) else {
+            return false;
+        };
+        let Some(node) = self.document.get_node(node_id) else {
+            return false;
+        };
+        if Self::resource_kind_for_element(&node.element).is_none()
+            || self.resource_usage_count(node_id, resource_id) != 0
+        {
+            return false;
+        }
+        self.execute(Box::new(RemoveNodeCommand::new(node_id)));
+        true
+    }
+
+    /// Delete every unused resource with an SVG id.
+    pub fn delete_all_unused_resources(&mut self) -> usize {
+        let ids = self.unused_resource_node_ids();
+        if ids.is_empty() {
+            return 0;
+        }
+        let count = ids.len();
+        let commands = ids
+            .into_iter()
+            .map(|id| Box::new(RemoveNodeCommand::new(id)) as Box<dyn Command>)
+            .collect();
+        self.execute_command_batch("Delete unused resources", commands);
+        count
+    }
+
+    // -----------------------------------------------------------------------
+    // Text editing operations
+    // -----------------------------------------------------------------------
+
+    fn text_content_from_element(element: &SvgElement) -> Option<String> {
+        match element {
+            SvgElement::Text(attrs) => Some(attrs.text_content.clone()),
+            SvgElement::TSpan(attrs) => Some(attrs.text_content.clone()),
+            SvgElement::TextPath(attrs) => Some(attrs.text_content.clone()),
+            SvgElement::FlowPara(attrs) => Some(attrs.text_content.clone()),
+            SvgElement::FlowSpan(attrs) => Some(attrs.text_content.clone()),
+            _ => None,
+        }
+    }
+
+    fn set_text_content_on_element(element: &mut SvgElement, content: String) -> bool {
+        match element {
+            SvgElement::Text(attrs) => attrs.text_content = content,
+            SvgElement::TSpan(attrs) => attrs.text_content = content,
+            SvgElement::TextPath(attrs) => attrs.text_content = content,
+            SvgElement::FlowPara(attrs) => attrs.text_content = content,
+            SvgElement::FlowSpan(attrs) => attrs.text_content = content,
+            _ => return false,
+        }
+        true
+    }
+
+    fn selected_text_node_id(&self) -> Option<NodeId> {
+        let id = self.selection.primary()?;
+        let node = self.document.get_node(id)?;
+        Self::text_content_from_element(&node.element).map(|_| id)
+    }
+
+    fn text_font_family(node: &SvgNode) -> String {
+        match &node.element {
+            SvgElement::Text(attrs) => attrs
+                .font_family
+                .clone()
+                .or_else(|| node.presentation.font_family.clone()),
+            SvgElement::TSpan(attrs) => attrs
+                .font_family
+                .clone()
+                .or_else(|| node.presentation.font_family.clone()),
+            _ => node.presentation.font_family.clone(),
+        }
+        .unwrap_or_else(|| "sans-serif".to_string())
+    }
+
+    fn text_font_size(node: &SvgNode) -> f64 {
+        match &node.element {
+            SvgElement::Text(attrs) => attrs.font_size.or(node.presentation.font_size),
+            SvgElement::TSpan(attrs) => attrs.font_size.or(node.presentation.font_size),
+            _ => node.presentation.font_size,
+        }
+        .map(|length| length.to_px())
+        .unwrap_or(16.0)
+    }
+
+    fn text_font_weight(node: &SvgNode) -> String {
+        let weight = match &node.element {
+            SvgElement::Text(attrs) => attrs.font_weight.or(node.presentation.font_weight),
+            SvgElement::TSpan(attrs) => attrs.font_weight.or(node.presentation.font_weight),
+            _ => node.presentation.font_weight,
+        }
+        .unwrap_or(sivgo_dom::FontWeight::Normal);
+        match weight {
+            sivgo_dom::FontWeight::Normal => "Normal".to_string(),
+            sivgo_dom::FontWeight::Bold => "Bold".to_string(),
+            sivgo_dom::FontWeight::Number(value) => value.to_string(),
+        }
+    }
+
+    fn text_font_style(node: &SvgNode) -> String {
+        let style = match &node.element {
+            SvgElement::Text(attrs) => attrs.font_style.or(node.presentation.font_style),
+            SvgElement::TSpan(attrs) => attrs.font_style.or(node.presentation.font_style),
+            _ => node.presentation.font_style,
+        }
+        .unwrap_or(sivgo_dom::FontStyle::Normal);
+        match style {
+            sivgo_dom::FontStyle::Normal => "Normal",
+            sivgo_dom::FontStyle::Italic => "Italic",
+            sivgo_dom::FontStyle::Oblique => "Oblique",
+        }
+        .to_string()
+    }
+
+    fn text_anchor(node: &SvgNode) -> String {
+        let anchor = match &node.element {
+            SvgElement::Text(attrs) => attrs.text_anchor.or(node.presentation.text_anchor),
+            SvgElement::TSpan(attrs) => attrs.text_anchor.or(node.presentation.text_anchor),
+            _ => node.presentation.text_anchor,
+        }
+        .unwrap_or(SvgTextAnchor::Start);
+        match anchor {
+            SvgTextAnchor::Start => "Start",
+            SvgTextAnchor::Middle => "Middle",
+            SvgTextAnchor::End => "End",
+        }
+        .to_string()
+    }
+
+    /// Return editable text state for the primary selected text-like node.
+    pub fn selected_text_state(&self) -> Option<EngineTextState> {
+        let id = self.selected_text_node_id()?;
+        let node = self.document.get_node(id)?;
+        Some(EngineTextState {
+            content: Self::text_content_from_element(&node.element)?,
+            font_family: Self::text_font_family(node),
+            font_size: Self::text_font_size(node),
+            font_weight: Self::text_font_weight(node),
+            font_style: Self::text_font_style(node),
+            line_height: node
+                .attributes
+                .get("line-height")
+                .and_then(|value| value.parse::<f64>().ok())
+                .unwrap_or(1.2),
+            letter_spacing: node
+                .presentation
+                .letter_spacing
+                .map(|length| length.to_px())
+                .unwrap_or(0.0),
+            word_spacing: node
+                .presentation
+                .word_spacing
+                .map(|length| length.to_px())
+                .unwrap_or(0.0),
+            text_anchor: Self::text_anchor(node),
+        })
+    }
+
+    /// Set text content on the primary selected text-like node.
+    pub fn set_selected_text_content(&mut self, content: String) -> bool {
+        let Some(id) = self.selected_text_node_id() else {
+            return false;
+        };
+        let Some(node) = self.document.get_node(id) else {
+            return false;
+        };
+        let old_element = node.element.clone();
+        let old_presentation = node.presentation.clone();
+        let mut new_element = old_element.clone();
+        if !Self::set_text_content_on_element(&mut new_element, content) {
+            return false;
+        }
+        self.execute(Box::new(ModifyElementCommand::new(
+            id,
+            old_element,
+            new_element,
+            old_presentation.clone(),
+            old_presentation,
+        )));
+        true
+    }
+
+    fn modify_selected_text_presentation<F>(&mut self, description: &str, update: F) -> bool
+    where
+        F: FnOnce(&mut PresentationAttrs),
+    {
+        let Some(id) = self.selected_text_node_id() else {
+            return false;
+        };
+        let Some(node) = self.document.get_node(id) else {
+            return false;
+        };
+        let old = node.presentation.clone();
+        let mut new = old.clone();
+        update(&mut new);
+        self.execute_command_batch(
+            description,
+            vec![Box::new(ModifyAttributeCommand::new(id, old, new))],
+        );
+        true
+    }
+
+    fn modify_selected_text_style<F>(&mut self, update: F) -> bool
+    where
+        F: FnOnce(&mut SvgElement, &mut PresentationAttrs),
+    {
+        let Some(id) = self.selected_text_node_id() else {
+            return false;
+        };
+        let Some(node) = self.document.get_node(id) else {
+            return false;
+        };
+        let old_element = node.element.clone();
+        let old_presentation = node.presentation.clone();
+        let mut new_element = old_element.clone();
+        let mut new_presentation = old_presentation.clone();
+        update(&mut new_element, &mut new_presentation);
+        self.execute(Box::new(ModifyElementCommand::new(
+            id,
+            old_element,
+            new_element,
+            old_presentation,
+            new_presentation,
+        )));
+        true
+    }
+
+    pub fn set_selected_text_font_family(&mut self, family: String) -> bool {
+        let family = if family.trim().is_empty() {
+            "sans-serif".to_string()
+        } else {
+            family
+        };
+        self.modify_selected_text_style(|element, presentation| {
+            match element {
+                SvgElement::Text(attrs) => attrs.font_family = Some(family.clone()),
+                SvgElement::TSpan(attrs) => attrs.font_family = Some(family.clone()),
+                _ => {}
+            }
+            presentation.font_family = Some(family);
+        })
+    }
+
+    pub fn set_selected_text_font_size(&mut self, size: f64) -> bool {
+        let length = SvgLength::new(size.clamp(1.0, 1000.0), LengthUnit::None);
+        self.modify_selected_text_style(|element, presentation| {
+            match element {
+                SvgElement::Text(attrs) => attrs.font_size = Some(length),
+                SvgElement::TSpan(attrs) => attrs.font_size = Some(length),
+                _ => {}
+            }
+            presentation.font_size = Some(length);
+        })
+    }
+
+    pub fn set_selected_text_font_weight(&mut self, weight: &str) -> bool {
+        let parsed = match weight.trim() {
+            "Bold" | "bold" => sivgo_dom::FontWeight::Bold,
+            "Normal" | "normal" => sivgo_dom::FontWeight::Normal,
+            value => value
+                .parse::<f64>()
+                .map(sivgo_dom::FontWeight::Number)
+                .unwrap_or(sivgo_dom::FontWeight::Normal),
+        };
+        self.modify_selected_text_style(|element, presentation| {
+            match element {
+                SvgElement::Text(attrs) => attrs.font_weight = Some(parsed),
+                SvgElement::TSpan(attrs) => attrs.font_weight = Some(parsed),
+                _ => {}
+            }
+            presentation.font_weight = Some(parsed);
+        })
+    }
+
+    pub fn set_selected_text_font_style(&mut self, style: &str) -> bool {
+        let parsed = match style.trim() {
+            "Italic" | "italic" => sivgo_dom::FontStyle::Italic,
+            "Oblique" | "oblique" => sivgo_dom::FontStyle::Oblique,
+            _ => sivgo_dom::FontStyle::Normal,
+        };
+        self.modify_selected_text_style(|element, presentation| {
+            match element {
+                SvgElement::Text(attrs) => attrs.font_style = Some(parsed),
+                SvgElement::TSpan(attrs) => attrs.font_style = Some(parsed),
+                _ => {}
+            }
+            presentation.font_style = Some(parsed);
+        })
+    }
+
+    pub fn set_selected_text_letter_spacing(&mut self, spacing: f64) -> bool {
+        self.modify_selected_text_presentation("Set text letter spacing", |presentation| {
+            presentation.letter_spacing = Some(SvgLength::new(spacing, LengthUnit::None));
+        })
+    }
+
+    pub fn set_selected_text_word_spacing(&mut self, spacing: f64) -> bool {
+        self.modify_selected_text_presentation("Set text word spacing", |presentation| {
+            presentation.word_spacing = Some(SvgLength::new(spacing, LengthUnit::None));
+        })
+    }
+
+    pub fn set_selected_text_anchor(&mut self, anchor: &str) -> bool {
+        let parsed = match anchor.trim() {
+            "Middle" | "middle" => SvgTextAnchor::Middle,
+            "End" | "end" => SvgTextAnchor::End,
+            _ => SvgTextAnchor::Start,
+        };
+        self.modify_selected_text_style(|element, presentation| {
+            match element {
+                SvgElement::Text(attrs) => attrs.text_anchor = Some(parsed),
+                SvgElement::TSpan(attrs) => attrs.text_anchor = Some(parsed),
+                _ => {}
+            }
+            presentation.text_anchor = Some(parsed);
+        })
+    }
+
+    pub fn set_selected_text_line_height(&mut self, line_height: f64) -> bool {
+        let Some(id) = self.selected_text_node_id() else {
+            return false;
+        };
+        let mut after = self.document.clone();
+        if let Some(node) = after.get_node_mut(id) {
+            node.attributes.insert(
+                "line-height".to_string(),
+                line_height.clamp(0.1, 20.0).to_string(),
+            );
+        }
+        let before = self.document.clone();
+        self.execute(Box::new(DocumentSnapshotCommand::new(
+            "Set text line height",
+            before,
+            after,
+        )));
+        true
+    }
+
+    // -----------------------------------------------------------------------
+    // Path operations
+    // -----------------------------------------------------------------------
+
+    fn path_element(path: BezPath) -> SvgElement {
+        SvgElement::Path(PathAttrs {
+            d: path,
+            inkscape_path_effect: None,
+            inkscape_original_d: None,
+        })
+    }
+
+    fn execute_command_batch(&mut self, description: &str, mut commands: Vec<Box<dyn Command>>) {
+        if commands.is_empty() {
+            return;
+        }
+
+        if commands.len() == 1 {
+            self.execute(commands.pop().unwrap());
+        } else {
+            self.execute(Box::new(CompoundCommand::new(description, commands)));
+        }
+    }
+
+    fn selected_convertible_paths(&self) -> Vec<PathSelectionItem> {
+        self.selection
+            .selected()
+            .iter()
+            .filter_map(|&id| {
+                let node = self.document.get_node(id)?;
+                let mut path = element_to_path(&node.element)?;
+                if path.is_empty() {
+                    return None;
+                }
+                let mut baked_presentation = node.presentation.clone();
+                if let Some(transform) = baked_presentation.transform {
+                    if !transform.is_identity() {
+                        path = path.transformed(&transform);
+                    }
+                    baked_presentation.transform = None;
+                }
+                Some(PathSelectionItem {
+                    id,
+                    element: node.element.clone(),
+                    presentation: node.presentation.clone(),
+                    baked_presentation,
+                    path,
+                })
+            })
+            .collect()
+    }
+
+    fn replace_primary_path_and_remove_rest(
+        &mut self,
+        description: &str,
+        items: Vec<PathSelectionItem>,
+        path: BezPath,
+        presentation: Option<PresentationAttrs>,
+    ) {
+        if items.is_empty() || path.is_empty() {
+            return;
+        }
+
+        let primary = &items[0];
+        let new_presentation = presentation.unwrap_or_else(|| primary.baked_presentation.clone());
+        let mut commands: Vec<Box<dyn Command>> = vec![Box::new(ModifyElementCommand::new(
+            primary.id,
+            primary.element.clone(),
+            Self::path_element(path),
+            primary.presentation.clone(),
+            new_presentation,
+        ))];
+
+        commands.extend(
+            items
+                .iter()
+                .skip(1)
+                .map(|item| Box::new(RemoveNodeCommand::new(item.id)) as Box<dyn Command>),
+        );
+
+        let primary_id = primary.id;
+        self.execute_command_batch(description, commands);
+        self.selection.select(primary_id);
+        self.events.emit(EditorEvent::SelectionChanged);
+    }
+
+    fn stroke_params_from_presentation(presentation: &PresentationAttrs) -> Option<StrokeParams> {
+        let width = presentation
+            .stroke_width
+            .unwrap_or(SvgLength::new(1.0, LengthUnit::None))
+            .to_px();
+        if width <= 0.0 {
+            return None;
+        }
+
+        Some(StrokeParams {
+            width,
+            line_cap: match presentation.stroke_linecap.unwrap_or(SvgLineCap::Butt) {
+                SvgLineCap::Butt => PathLineCap::Butt,
+                SvgLineCap::Round => PathLineCap::Round,
+                SvgLineCap::Square => PathLineCap::Square,
+            },
+            line_join: match presentation.stroke_linejoin.unwrap_or(SvgLineJoin::Miter) {
+                SvgLineJoin::Miter => PathLineJoin::Miter,
+                SvgLineJoin::Round => PathLineJoin::Round,
+                SvgLineJoin::Bevel => PathLineJoin::Bevel,
+            },
+            miter_limit: presentation.stroke_miterlimit.unwrap_or(4.0),
+            dash_pattern: presentation.stroke_dasharray.clone().unwrap_or_default(),
+            dash_offset: presentation.stroke_dashoffset.unwrap_or(0.0),
+        })
+    }
+
+    fn non_scaling_stroke(presentation: &PresentationAttrs) -> bool {
+        presentation.vector_effect.as_deref().is_some_and(|value| {
+            value
+                .split_ascii_whitespace()
+                .any(|token| token.eq_ignore_ascii_case("non-scaling-stroke"))
+        })
+    }
+
+    fn transform_stroke_scale(transform: Option<Transform2D>) -> f64 {
+        let Some(transform) = transform else {
+            return 1.0;
+        };
+        if transform.is_identity() {
+            return 1.0;
+        }
+
+        let [a, b, c, d, _, _] = transform.as_coeffs();
+        let scale_x = a.hypot(b);
+        let scale_y = c.hypot(d);
+        let scale = if scale_x > f64::EPSILON && scale_y > f64::EPSILON {
+            (scale_x + scale_y) * 0.5
+        } else {
+            scale_x.max(scale_y)
+        };
+
+        if scale.is_finite() && scale > f64::EPSILON {
+            scale
+        } else {
+            1.0
+        }
+    }
+
+    fn stroke_params_for_item(item: &PathSelectionItem) -> Option<StrokeParams> {
+        let mut params = Self::stroke_params_from_presentation(&item.presentation)?;
+        if !Self::non_scaling_stroke(&item.presentation) {
+            let scale = Self::transform_stroke_scale(item.presentation.transform);
+            params.width *= scale;
+            for dash in &mut params.dash_pattern {
+                *dash *= scale;
+            }
+            params.dash_offset *= scale;
+        }
+
+        if params.width <= 0.0 {
+            return None;
+        }
+        Some(params)
+    }
+
+    fn stroke_to_path_effect_marker(presentation: &PresentationAttrs) -> Option<String> {
+        let mut parts = Vec::new();
+
+        if let Some(marker) = &presentation.marker_start {
+            parts.push(format!("marker-start={marker}"));
+        }
+        if let Some(marker) = &presentation.marker_mid {
+            parts.push(format!("marker-mid={marker}"));
+        }
+        if let Some(marker) = &presentation.marker_end {
+            parts.push(format!("marker-end={marker}"));
+        }
+        if let Some(vector_effect) = &presentation.vector_effect {
+            parts.push(format!("vector-effect={vector_effect}"));
+        }
+
+        if parts.is_empty() {
+            None
+        } else {
+            Some(format!("sivgo:stroke-to-path({})", parts.join(";")))
+        }
+    }
+
+    fn text_to_path_geometry(
+        attrs: &sivgo_dom::TextAttrs,
+        presentation: &PresentationAttrs,
+        text_engine: &mut TextEngine,
+    ) -> Option<BezPath> {
+        let text = attrs.text_content.trim_matches('\0');
+        if text.is_empty() {
+            return None;
+        }
+
+        let parent_font_size = 16.0_f64;
+        let font_family = attrs
+            .font_family
+            .as_deref()
+            .or(presentation.font_family.as_deref())
+            .unwrap_or("sans-serif");
+        let font_size = attrs
+            .font_size
+            .or(presentation.font_size)
+            .map(|l| l.resolve_px(parent_font_size, parent_font_size))
+            .unwrap_or(parent_font_size);
+        let font_weight = match attrs
+            .font_weight
+            .or(presentation.font_weight)
+            .unwrap_or(sivgo_dom::FontWeight::Normal)
+        {
+            sivgo_dom::FontWeight::Normal => 400,
+            sivgo_dom::FontWeight::Bold => 700,
+            sivgo_dom::FontWeight::Number(n) => n as u16,
+        };
+        let font_style = match attrs
+            .font_style
+            .or(presentation.font_style)
+            .unwrap_or(sivgo_dom::FontStyle::Normal)
+        {
+            sivgo_dom::FontStyle::Normal => FontStyleKind::Normal,
+            sivgo_dom::FontStyle::Italic | sivgo_dom::FontStyle::Oblique => FontStyleKind::Italic,
+        };
+        let anchor = match attrs
+            .text_anchor
+            .or(presentation.text_anchor)
+            .unwrap_or(SvgTextAnchor::Start)
+        {
+            SvgTextAnchor::Start => TextEngineAnchor::Start,
+            SvgTextAnchor::Middle => TextEngineAnchor::Middle,
+            SvgTextAnchor::End => TextEngineAnchor::End,
+        };
+        let x = attrs.x.first().map_or(0.0, |l| l.to_px())
+            + attrs.dx.first().map_or(0.0, |l| l.to_px());
+        let y = attrs.y.first().map_or(0.0, |l| l.to_px())
+            + attrs.dy.first().map_or(0.0, |l| l.to_px());
+        let letter_spacing = presentation.letter_spacing.map_or(0.0, |l| l.to_px());
+        let word_spacing = presentation.word_spacing.map_or(0.0, |l| l.to_px());
+        let x_list: Vec<f64> = attrs.x.iter().map(|l| l.to_px()).collect();
+        let y_list: Vec<f64> = attrs.y.iter().map(|l| l.to_px()).collect();
+        let dx_list: Vec<f64> = attrs.dx.iter().map(|l| l.to_px()).collect();
+        let dy_list: Vec<f64> = attrs.dy.iter().map(|l| l.to_px()).collect();
+
+        if x_list.len() > 1 || y_list.len() > 1 || !dx_list.is_empty() || !dy_list.is_empty() {
+            sivgo_text::text_to_path_positioned(
+                text_engine,
+                text,
+                x,
+                y,
+                font_family,
+                font_size,
+                font_weight,
+                font_style,
+                anchor,
+                letter_spacing,
+                word_spacing,
+                &x_list,
+                &y_list,
+                &dx_list,
+                &dy_list,
+            )
+        } else {
+            sivgo_text::text_to_path(
+                text_engine,
+                text,
+                x,
+                y,
+                font_family,
+                font_size,
+                font_weight,
+                font_style,
+                anchor,
+                letter_spacing,
+                word_spacing,
+            )
+        }
+    }
+
+    fn presentation_without_text_state(mut presentation: PresentationAttrs) -> PresentationAttrs {
+        presentation.transform = None;
+        presentation.font_family = None;
+        presentation.font_size = None;
+        presentation.font_weight = None;
+        presentation.font_style = None;
+        presentation.text_anchor = None;
+        presentation.text_decoration = None;
+        presentation.letter_spacing = None;
+        presentation.word_spacing = None;
+        presentation
+    }
+
+    fn boolean_selected_paths(&mut self, op: BooleanOp, description: &str) {
+        let items = self.selected_convertible_paths();
+        if items.len() < 2 {
+            return;
+        }
+
+        let mut result = items[0].path.clone();
+        for item in &items[1..] {
+            result = boolean_op(&result, &item.path, op, 0.25);
+            if result.is_empty() {
+                return;
+            }
+        }
+
+        self.replace_primary_path_and_remove_rest(description, items, result, None);
+    }
+
+    fn cut_primary_path_with_selected_knives(&mut self, description: &str) {
+        let items = self.selected_convertible_paths();
+        if items.len() < 2 {
+            return;
+        }
+
+        let subject = &items[0];
+        let knife_paths: Vec<BezPath> =
+            items.iter().skip(1).map(|item| item.path.clone()).collect();
+        let knife = combine_paths(&knife_paths);
+        let fragments = cut(&subject.path, &knife, 0.25);
+        if fragments.len() <= 1 {
+            return;
+        }
+
+        let Some(parent_id) = self.document.parent(subject.id) else {
+            return;
+        };
+        let insert_index = self
+            .document
+            .child_index(subject.id)
+            .unwrap_or_else(|| self.document.children(parent_id).len().saturating_sub(1));
+        let presentation = subject.baked_presentation.clone();
+        let mut commands: Vec<Box<dyn Command>> = vec![Box::new(ModifyElementCommand::new(
+            subject.id,
+            subject.element.clone(),
+            Self::path_element(fragments[0].clone()),
+            subject.presentation.clone(),
+            presentation.clone(),
+        ))];
+
+        for (offset, fragment) in fragments.into_iter().skip(1).enumerate() {
+            commands.push(Box::new(AddNodeCommand::new(
+                parent_id,
+                Self::path_element(fragment),
+                presentation.clone(),
+                Some(insert_index + 1 + offset),
+            )));
+        }
+
+        commands.extend(
+            items
+                .iter()
+                .skip(1)
+                .map(|item| Box::new(RemoveNodeCommand::new(item.id)) as Box<dyn Command>),
+        );
+
+        let primary_id = subject.id;
+        self.execute_command_batch(description, commands);
+        self.selection.select(primary_id);
+        self.events.emit(EditorEvent::SelectionChanged);
+    }
+
+    fn modify_selected_path_data<F>(&mut self, description: &str, transform_path: F)
+    where
+        F: Fn(&sivgo_math::BezPath) -> sivgo_math::BezPath,
+    {
+        let ids: Vec<NodeId> = self.selection.selected().to_vec();
+        if ids.is_empty() {
+            return;
+        }
+
+        let mut commands: Vec<Box<dyn Command>> = Vec::new();
+        for id in ids {
+            let Some(node) = self.document.get_node(id) else {
+                continue;
+            };
+            let SvgElement::Path(attrs) = &node.element else {
+                continue;
+            };
+            let old_path = attrs.d.clone();
+            let new_path = transform_path(&old_path);
+            if new_path != old_path {
+                commands.push(Box::new(ModifyPathCommand::new(id, old_path, new_path)));
+            }
+        }
+
+        if commands.is_empty() {
+            return;
+        }
+
+        if commands.len() == 1 {
+            self.execute(commands.into_iter().next().unwrap());
+        } else {
+            self.execute(Box::new(CompoundCommand::new(description, commands)));
+        }
+    }
+
+    /// Simplify selected path elements with the given tolerance.
+    pub fn simplify_selected_paths(&mut self, tolerance: f64) {
+        let tolerance = tolerance.clamp(0.01, 10_000.0);
+        self.modify_selected_path_data("Simplify paths", |path| simplify_path(path, tolerance));
+    }
+
+    /// Reverse selected path elements.
+    pub fn reverse_selected_paths(&mut self) {
+        self.modify_selected_path_data("Reverse paths", reverse_path);
+    }
+
+    /// Offset selected path elements. Positive values outset; negative values inset.
+    pub fn offset_selected_paths(&mut self, distance: f64) {
+        if distance.abs() < f64::EPSILON {
+            return;
+        }
+        self.modify_selected_path_data("Offset paths", |path| offset_path(path, distance, 0.25));
+    }
+
+    fn offset_effect_marker(kind: &str, amount: f64, source: Option<&str>) -> String {
+        match source {
+            Some(source) => format!("sivgo:{kind}(amount={amount};source={source})"),
+            None => format!("sivgo:{kind}(amount={amount})"),
+        }
+    }
+
+    fn normalize_lpe_kind(kind: &str) -> Option<&'static str> {
+        let normalized = kind.trim().to_ascii_lowercase().replace([' ', '-'], "_");
+        match normalized.as_str() {
+            "bend_path" | "bend" => Some("bend_path"),
+            "pattern_along_path" | "pattern" => Some("pattern_along_path"),
+            "stitch_sub_paths" | "stitch_subpaths" | "stitch" => Some("stitch_sub_paths"),
+            "offset" | "dynamic_offset" | "linked_offset" => Some("offset"),
+            "simplify" => Some("simplify"),
+            "power_stroke" => Some("power_stroke"),
+            "roughen" => Some("roughen"),
+            "mirror" | "mirror_symmetry" => Some("mirror"),
+            "boolean_operation" | "boolean" => Some("boolean_operation"),
+            "measure" | "measure_segments" => Some("measure"),
+            _ => None,
+        }
+    }
+
+    fn default_lpe_params(kind: &str) -> Vec<EngineLpeParam> {
+        fn param(name: &str, value: f64) -> EngineLpeParam {
+            EngineLpeParam {
+                name: name.to_string(),
+                value,
+            }
+        }
+
+        match Self::normalize_lpe_kind(kind).unwrap_or(kind) {
+            "bend_path" => vec![param("bend_amount", 1.0)],
+            "pattern_along_path" => vec![
+                param("spacing", 10.0),
+                param("normal_offset", 0.0),
+                param("tangential_offset", 0.0),
+            ],
+            "stitch_sub_paths" => vec![param("gap", 5.0)],
+            "offset" => vec![param("offset", 5.0)],
+            "simplify" => vec![param("threshold", 2.0)],
+            "power_stroke" => vec![param("width", 5.0)],
+            "roughen" => vec![
+                param("max_displacement", 2.0),
+                param("segment_length", 10.0),
+                param("seed", 42.0),
+            ],
+            "mirror" => vec![
+                param("axis_origin_x", 0.0),
+                param("axis_origin_y", 0.0),
+                param("axis_angle", 0.0),
+            ],
+            "boolean_operation" => vec![param("operation", 0.0)],
+            "measure" => vec![param("font_size", 12.0), param("measure_offset", 10.0)],
+            _ => Vec::new(),
+        }
+    }
+
+    fn lpe_param_value(entry: &EngineLpeEntry, name: &str, fallback: f64) -> f64 {
+        entry
+            .params
+            .iter()
+            .find(|param| param.name == name)
+            .map(|param| param.value)
+            .filter(|value| value.is_finite())
+            .unwrap_or(fallback)
+    }
+
+    fn encode_lpe_stack(entries: &[EngineLpeEntry]) -> Option<String> {
+        if entries.is_empty() {
+            return None;
+        }
+
+        let encoded = entries
+            .iter()
+            .map(|entry| {
+                let mut fields = vec![
+                    format!("id={}", entry.id),
+                    format!("kind={}", entry.kind),
+                    format!("enabled={}", if entry.enabled { 1 } else { 0 }),
+                ];
+                for param in &entry.params {
+                    fields.push(format!("{}={}", param.name, param.value));
+                }
+                fields.join(",")
+            })
+            .collect::<Vec<_>>()
+            .join("|");
+        Some(format!("sivgo:lpe-stack:{encoded}"))
+    }
+
+    fn decode_lpe_stack(marker: Option<&str>) -> Vec<EngineLpeEntry> {
+        let Some(marker) = marker else {
+            return Vec::new();
+        };
+        let Some(encoded) = marker.strip_prefix("sivgo:lpe-stack:") else {
+            return Vec::new();
+        };
+
+        encoded
+            .split('|')
+            .filter_map(|entry_text| {
+                let mut id = None;
+                let mut kind = None;
+                let mut enabled = true;
+                let mut values: HashMap<String, f64> = HashMap::new();
+
+                for field in entry_text.split(',') {
+                    let Some((name, value)) = field.split_once('=') else {
+                        continue;
+                    };
+                    match name {
+                        "id" => id = Some(value.to_string()),
+                        "kind" => kind = Self::normalize_lpe_kind(value).map(str::to_string),
+                        "enabled" => enabled = value != "0" && !value.eq_ignore_ascii_case("false"),
+                        _ => {
+                            if let Ok(number) = value.parse::<f64>() {
+                                if number.is_finite() {
+                                    values.insert(name.to_string(), number);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                let kind = kind?;
+                let mut params = Self::default_lpe_params(&kind);
+                for param in &mut params {
+                    if let Some(value) = values.remove(&param.name) {
+                        param.value = value;
+                    }
+                }
+                for (name, value) in values {
+                    params.push(EngineLpeParam { name, value });
+                }
+
+                Some(EngineLpeEntry {
+                    id: id.unwrap_or_else(|| "lpe1".to_string()),
+                    kind,
+                    enabled,
+                    params,
+                })
+            })
+            .collect()
+    }
+
+    fn next_lpe_id(entries: &[EngineLpeEntry]) -> String {
+        let next = entries
+            .iter()
+            .filter_map(|entry| entry.id.strip_prefix("lpe"))
+            .filter_map(|suffix| suffix.parse::<usize>().ok())
+            .max()
+            .unwrap_or(0)
+            + 1;
+        format!("lpe{next}")
+    }
+
+    fn apply_lpe_entry(input: &BezPath, entry: &EngineLpeEntry) -> BezPath {
+        let effect: Option<Box<dyn LivePathEffect>> = match entry.kind.as_str() {
+            "offset" => Some(Box::new(OffsetLpe::new(
+                Self::lpe_param_value(entry, "offset", 5.0),
+                OffsetJoin::Miter,
+            ))),
+            "simplify" => Some(Box::new(SimplifyLpe::new(Self::lpe_param_value(
+                entry,
+                "threshold",
+                2.0,
+            )))),
+            "power_stroke" => {
+                let width = Self::lpe_param_value(entry, "width", 5.0).max(0.0);
+                Some(Box::new(PowerStrokeLpe::new(vec![
+                    (0.0, width),
+                    (1.0, width),
+                ])))
+            }
+            "roughen" => {
+                let seed = Self::lpe_param_value(entry, "seed", 42.0).max(0.0) as u64;
+                Some(Box::new(RoughenLpe::new(
+                    Self::lpe_param_value(entry, "max_displacement", 2.0),
+                    Self::lpe_param_value(entry, "segment_length", 10.0),
+                    seed,
+                )))
+            }
+            "mirror" => Some(Box::new(MirrorSymmetryLpe::new(
+                Point::new(
+                    Self::lpe_param_value(entry, "axis_origin_x", 0.0),
+                    Self::lpe_param_value(entry, "axis_origin_y", 0.0),
+                ),
+                Self::lpe_param_value(entry, "axis_angle", 0.0),
+            ))),
+            "measure" => {
+                let mut lpe =
+                    MeasureSegmentsLpe::new("px", Self::lpe_param_value(entry, "font_size", 12.0));
+                lpe.set_param(
+                    "measure_offset",
+                    Self::lpe_param_value(entry, "measure_offset", 10.0),
+                );
+                Some(Box::new(lpe))
+            }
+            // These effects need external helper geometry or multi-object
+            // context. They are still persisted and editable, but their
+            // viewport preview remains the original path until that context is
+            // available.
+            "bend_path" | "pattern_along_path" | "stitch_sub_paths" | "boolean_operation" => None,
+            _ => None,
+        };
+
+        effect.map_or_else(|| input.clone(), |effect| effect.apply(input))
+    }
+
+    fn apply_lpe_stack(original: &BezPath, entries: &[EngineLpeEntry]) -> BezPath {
+        let mut current = original.clone();
+        for entry in entries {
+            if entry.enabled {
+                current = Self::apply_lpe_entry(&current, entry);
+            }
+        }
+        current
+    }
+
+    fn rebuild_lpe_path_attrs(attrs: &PathAttrs, entries: &[EngineLpeEntry]) -> PathAttrs {
+        let original = attrs
+            .inkscape_original_d
+            .clone()
+            .unwrap_or_else(|| attrs.d.clone());
+        if entries.is_empty() {
+            return PathAttrs {
+                d: original,
+                inkscape_path_effect: None,
+                inkscape_original_d: None,
+            };
+        }
+
+        PathAttrs {
+            d: Self::apply_lpe_stack(&original, entries),
+            inkscape_path_effect: Self::encode_lpe_stack(entries),
+            inkscape_original_d: Some(original),
+        }
+    }
+
+    fn modify_primary_lpe_stack<F>(&mut self, _description: &str, update: F) -> bool
+    where
+        F: FnOnce(&mut Vec<EngineLpeEntry>),
+    {
+        let Some(id) = self.selection.primary() else {
+            return false;
+        };
+        let Some(node) = self.document.get_node(id) else {
+            return false;
+        };
+        let SvgElement::Path(attrs) = &node.element else {
+            return false;
+        };
+
+        let mut entries = Self::decode_lpe_stack(attrs.inkscape_path_effect.as_deref());
+        update(&mut entries);
+        let new_attrs = Self::rebuild_lpe_path_attrs(attrs, &entries);
+        let old_element = node.element.clone();
+        let old_presentation = node.presentation.clone();
+        self.execute(Box::new(ModifyElementCommand::new(
+            id,
+            old_element,
+            SvgElement::Path(new_attrs),
+            old_presentation.clone(),
+            old_presentation,
+        )));
+        self.events.emit(EditorEvent::SelectionChanged);
+        true
+    }
+
+    /// Return the editable LPE stack for the primary selected path.
+    pub fn selected_lpe_entries(&self) -> Vec<EngineLpeEntry> {
+        let Some(id) = self.selection.primary() else {
+            return Vec::new();
+        };
+        let Some(node) = self.document.get_node(id) else {
+            return Vec::new();
+        };
+        let SvgElement::Path(attrs) = &node.element else {
+            return Vec::new();
+        };
+        Self::decode_lpe_stack(attrs.inkscape_path_effect.as_deref())
+    }
+
+    /// Add an LPE to the primary selected path and return its generated id.
+    pub fn add_lpe_to_selected_path(&mut self, kind: &str) -> Option<String> {
+        let kind = Self::normalize_lpe_kind(kind)?.to_string();
+        let mut added_id = None;
+        let updated = self.modify_primary_lpe_stack("Add LPE", |entries| {
+            let id = Self::next_lpe_id(entries);
+            let params = Self::default_lpe_params(kind.as_str());
+            added_id = Some(id.clone());
+            entries.push(EngineLpeEntry {
+                id,
+                kind: kind.clone(),
+                enabled: true,
+                params,
+            });
+        });
+        updated.then_some(added_id).flatten()
+    }
+
+    /// Remove an LPE from the primary selected path.
+    pub fn remove_lpe_from_selected_path(&mut self, effect_id: &str) -> bool {
+        self.modify_primary_lpe_stack("Remove LPE", |entries| {
+            entries.retain(|entry| entry.id != effect_id);
+        })
+    }
+
+    /// Toggle one LPE entry on the primary selected path.
+    pub fn toggle_lpe_on_selected_path(&mut self, effect_id: &str) -> bool {
+        self.modify_primary_lpe_stack("Toggle LPE", |entries| {
+            if let Some(entry) = entries.iter_mut().find(|entry| entry.id == effect_id) {
+                entry.enabled = !entry.enabled;
+            }
+        })
+    }
+
+    /// Move one LPE entry up or down in the stack on the primary selected path.
+    pub fn move_lpe_on_selected_path(&mut self, effect_id: &str, delta: isize) -> bool {
+        self.modify_primary_lpe_stack("Move LPE", |entries| {
+            let Some(index) = entries.iter().position(|entry| entry.id == effect_id) else {
+                return;
+            };
+            let target = if delta < 0 {
+                index.saturating_sub(1)
+            } else {
+                (index + 1).min(entries.len().saturating_sub(1))
+            };
+            if target != index {
+                let entry = entries.remove(index);
+                entries.insert(target, entry);
+            }
+        })
+    }
+
+    /// Set a numeric LPE parameter on the primary selected path.
+    pub fn set_lpe_param_on_selected_path(
+        &mut self,
+        effect_id: &str,
+        param_name: &str,
+        value: f64,
+    ) -> bool {
+        if !value.is_finite() {
+            return false;
+        }
+
+        self.modify_primary_lpe_stack("Set LPE parameter", |entries| {
+            let Some(entry) = entries.iter_mut().find(|entry| entry.id == effect_id) else {
+                return;
+            };
+            if let Some(param) = entry
+                .params
+                .iter_mut()
+                .find(|param| param.name == param_name)
+            {
+                param.value = value;
+            } else {
+                entry.params.push(EngineLpeParam {
+                    name: param_name.to_string(),
+                    value,
+                });
+            }
+        })
+    }
+
+    /// Create dynamic offset paths in place, preserving the original path in
+    /// `inkscape:original-d` so later UI can expose interactive adjustment.
+    pub fn dynamic_offset_selected_paths(&mut self, distance: f64) {
+        if distance.abs() < f64::EPSILON {
+            return;
+        }
+
+        let items = self.selected_convertible_paths();
+        let mut commands: Vec<Box<dyn Command>> = Vec::new();
+        let mut selected_ids = Vec::new();
+
+        for item in items {
+            let dynamic = DynamicOffset::new(item.path.clone(), distance);
+            let offset_path = dynamic.compute();
+            if offset_path.is_empty() {
+                continue;
+            }
+
+            commands.push(Box::new(ModifyElementCommand::new(
+                item.id,
+                item.element.clone(),
+                SvgElement::Path(PathAttrs {
+                    d: offset_path,
+                    inkscape_path_effect: Some(Self::offset_effect_marker(
+                        "dynamic-offset",
+                        dynamic.offset_amount(),
+                        None,
+                    )),
+                    inkscape_original_d: Some(item.path),
+                }),
+                item.presentation,
+                item.baked_presentation,
+            )));
+            selected_ids.push(item.id);
+        }
+
+        if commands.is_empty() {
+            return;
+        }
+
+        self.execute_command_batch("Dynamic offset", commands);
+        self.selection.clear();
+        for id in selected_ids {
+            self.selection.add(id);
+        }
+        self.events.emit(EditorEvent::SelectionChanged);
+    }
+
+    /// Create linked offset paths next to the selected source paths. The source
+    /// object is left intact and the new path stores a source marker string.
+    pub fn linked_offset_selected_paths(&mut self, distance: f64) {
+        if distance.abs() < f64::EPSILON {
+            return;
+        }
+
+        let items = self.selected_convertible_paths();
+        let mut commands: Vec<Box<dyn Command>> = Vec::new();
+        let mut source_contexts = Vec::new();
+
+        for item in items {
+            let Some(parent_id) = self.document.parent(item.id) else {
+                continue;
+            };
+            let insert_index = self.document.child_index(item.id).map(|index| index + 1);
+            let source_marker = self
+                .document
+                .get_node(item.id)
+                .and_then(|node| node.xml_id.clone())
+                .unwrap_or_else(|| format!("node:{}", item.id.0));
+            let linked = LinkedOffset::new(source_marker.clone(), distance);
+            let offset_path = linked.compute(&item.path);
+            if offset_path.is_empty() {
+                continue;
+            }
+
+            commands.push(Box::new(AddNodeCommand::new(
+                parent_id,
+                SvgElement::Path(PathAttrs {
+                    d: offset_path,
+                    inkscape_path_effect: Some(Self::offset_effect_marker(
+                        "linked-offset",
+                        linked.offset_amount(),
+                        Some(linked.source_id()),
+                    )),
+                    inkscape_original_d: Some(item.path),
+                }),
+                item.baked_presentation,
+                insert_index,
+            )));
+            source_contexts.push((parent_id, item.id));
+        }
+
+        if commands.is_empty() {
+            return;
+        }
+
+        self.execute_command_batch("Linked offset", commands);
+        self.selection.clear();
+        for (parent_id, source_id) in source_contexts {
+            if let Some(index) = self.document.child_index(source_id) {
+                if let Some(&linked_id) = self.document.children(parent_id).get(index + 1) {
+                    self.selection.add(linked_id);
+                }
+            }
+        }
+        self.events.emit(EditorEvent::SelectionChanged);
+    }
+
+    /// Convert selected basic shape elements to `<path>` elements in place.
+    pub fn object_to_path_selected(&mut self) {
+        let ids: Vec<NodeId> = self.selection.selected().to_vec();
+        let mut commands: Vec<Box<dyn Command>> = Vec::new();
+
+        for id in ids {
+            let Some(node) = self.document.get_node(id) else {
+                continue;
+            };
+            if matches!(node.element, SvgElement::Path(_)) {
+                continue;
+            }
+            let Some(path) = element_to_path(&node.element) else {
+                continue;
+            };
+            let mut new_presentation = node.presentation.clone();
+            let path = if let Some(transform) = new_presentation.transform {
+                new_presentation.transform = None;
+                if transform.is_identity() {
+                    path
+                } else {
+                    path.transformed(&transform)
+                }
+            } else {
+                path
+            };
+
+            commands.push(Box::new(ModifyElementCommand::new(
+                id,
+                node.element.clone(),
+                Self::path_element(path),
+                node.presentation.clone(),
+                new_presentation,
+            )));
+        }
+
+        self.execute_command_batch("Object to path", commands);
+    }
+
+    /// Convert selected stroked shapes to filled outline paths.
+    pub fn stroke_to_path_selected(&mut self) {
+        let items = self.selected_convertible_paths();
+        let mut commands: Vec<Box<dyn Command>> = Vec::new();
+
+        for item in items {
+            let stroke = match &item.presentation.stroke {
+                Some(Paint::None) | None => continue,
+                Some(stroke) => stroke.clone(),
+            };
+            let Some(params) = Self::stroke_params_for_item(&item) else {
+                continue;
+            };
+
+            let outline = stroke_to_path(&item.path, &params, 0.25);
+            if outline.is_empty() {
+                continue;
+            }
+
+            let effect_marker = Self::stroke_to_path_effect_marker(&item.presentation);
+            let original_d = effect_marker.as_ref().map(|_| item.path.clone());
+            let mut new_presentation = item.baked_presentation.clone();
+            new_presentation.fill = Some(stroke);
+            new_presentation.fill_opacity = item.presentation.stroke_opacity;
+            new_presentation.stroke = Some(Paint::None);
+            new_presentation.stroke_width = None;
+            new_presentation.stroke_opacity = None;
+            new_presentation.stroke_linecap = None;
+            new_presentation.stroke_linejoin = None;
+            new_presentation.stroke_miterlimit = None;
+            new_presentation.stroke_dasharray = None;
+            new_presentation.stroke_dashoffset = None;
+            new_presentation.marker_start = None;
+            new_presentation.marker_mid = None;
+            new_presentation.marker_end = None;
+            new_presentation.vector_effect = None;
+
+            commands.push(Box::new(ModifyElementCommand::new(
+                item.id,
+                item.element,
+                SvgElement::Path(PathAttrs {
+                    d: outline,
+                    inkscape_path_effect: effect_marker,
+                    inkscape_original_d: original_d,
+                }),
+                item.presentation,
+                new_presentation,
+            )));
+        }
+
+        self.execute_command_batch("Stroke to path", commands);
+    }
+
+    /// Convert selected SVG text objects to filled path outlines.
+    pub fn text_to_path_selected(&mut self) {
+        let ids: Vec<NodeId> = self.selection.selected().to_vec();
+        let mut text_engine = TextEngine::new();
+        let mut commands: Vec<Box<dyn Command>> = Vec::new();
+
+        for id in ids {
+            let Some(node) = self.document.get_node(id) else {
+                continue;
+            };
+            let SvgElement::Text(attrs) = &node.element else {
+                continue;
+            };
+            let Some(mut path) =
+                Self::text_to_path_geometry(attrs, &node.presentation, &mut text_engine)
+            else {
+                continue;
+            };
+            let new_presentation = Self::presentation_without_text_state(node.presentation.clone());
+            if let Some(transform) = node.presentation.transform {
+                if !transform.is_identity() {
+                    path = path.transformed(&transform);
+                }
+            }
+
+            commands.push(Box::new(ModifyElementCommand::new(
+                id,
+                node.element.clone(),
+                Self::path_element(path),
+                node.presentation.clone(),
+                new_presentation,
+            )));
+        }
+
+        self.execute_command_batch("Text to path", commands);
+    }
+
+    /// Combine selected path-convertible elements into the primary selected node.
+    pub fn combine_selected_paths(&mut self) {
+        let items = self.selected_convertible_paths();
+        if items.len() < 2 {
+            return;
+        }
+
+        let paths: Vec<BezPath> = items.iter().map(|item| item.path.clone()).collect();
+        let combined = combine_paths(&paths);
+        self.replace_primary_path_and_remove_rest("Combine paths", items, combined, None);
+    }
+
+    /// Split selected compound paths into one path element per subpath.
+    pub fn break_apart_selected_paths(&mut self) {
+        let items = self.selected_convertible_paths();
+        let mut commands: Vec<Box<dyn Command>> = Vec::new();
+
+        for item in items {
+            let parts = break_apart(&item.path);
+            if parts.len() <= 1 {
+                continue;
+            }
+
+            let Some(parent_id) = self.document.parent(item.id) else {
+                continue;
+            };
+            let insert_index = self
+                .document
+                .child_index(item.id)
+                .unwrap_or_else(|| self.document.children(parent_id).len().saturating_sub(1));
+            let presentation = item.baked_presentation.clone();
+
+            commands.push(Box::new(ModifyElementCommand::new(
+                item.id,
+                item.element.clone(),
+                Self::path_element(parts[0].clone()),
+                item.presentation.clone(),
+                presentation.clone(),
+            )));
+
+            for (offset, part) in parts.into_iter().skip(1).enumerate() {
+                commands.push(Box::new(AddNodeCommand::new(
+                    parent_id,
+                    Self::path_element(part),
+                    presentation.clone(),
+                    Some(insert_index + 1 + offset),
+                )));
+            }
+        }
+
+        self.execute_command_batch("Break apart paths", commands);
+    }
+
+    /// Union selected path-convertible elements into the primary selected node.
+    pub fn union_selected_paths(&mut self) {
+        self.boolean_selected_paths(BooleanOp::Union, "Union paths");
+    }
+
+    /// Subtract subsequent selected paths from the primary selected node.
+    pub fn difference_selected_paths(&mut self) {
+        self.boolean_selected_paths(BooleanOp::Difference, "Difference paths");
+    }
+
+    /// Intersect selected path-convertible elements into the primary selected node.
+    pub fn intersection_selected_paths(&mut self) {
+        self.boolean_selected_paths(BooleanOp::Intersection, "Intersect paths");
+    }
+
+    /// Exclude overlapping areas of selected path-convertible elements.
+    pub fn exclusion_selected_paths(&mut self) {
+        self.boolean_selected_paths(BooleanOp::Xor, "Exclude paths");
+    }
+
+    /// Divide the primary selected path with subsequent selected paths as knives.
+    pub fn division_selected_paths(&mut self) {
+        self.cut_primary_path_with_selected_knives("Divide paths");
+    }
+
+    /// Cut the primary selected path with subsequent selected paths as knives.
+    pub fn cut_selected_paths(&mut self) {
+        self.cut_primary_path_with_selected_knives("Cut paths");
     }
 
     // -----------------------------------------------------------------------
@@ -809,6 +4373,42 @@ impl EditorEngine {
     // Transform operations (9.6.7)
     // -----------------------------------------------------------------------
 
+    /// Decompose the primary selected object's affine transform.
+    pub fn primary_transform_decomposition(&self) -> Option<TransformDecomposition> {
+        let id = self.selection.primary()?;
+        let transform = self.document.get_node(id)?.presentation.transform;
+        Some(Self::decompose_transform(transform))
+    }
+
+    /// Decompose an affine transform into editor-friendly values.
+    pub fn decompose_transform(transform: Option<Transform2D>) -> TransformDecomposition {
+        let transform = transform.unwrap_or(Transform2D::IDENTITY);
+        let [a, b, c, d, e, f] = transform.as_coeffs();
+        let scale_x = (a * a + b * b).sqrt();
+        let det = a * d - b * c;
+        let scale_y = if scale_x > 1e-12 {
+            det / scale_x
+        } else {
+            (c * c + d * d).sqrt()
+        };
+        let rotation_degrees = b.atan2(a).to_degrees();
+        let shear = if scale_x > 1e-12 {
+            (a * c + b * d) / (scale_x * scale_x)
+        } else {
+            0.0
+        };
+        let skew_x_degrees = shear.atan().to_degrees();
+
+        TransformDecomposition {
+            translate_x: e,
+            translate_y: f,
+            scale_x,
+            scale_y,
+            rotation_degrees,
+            skew_x_degrees,
+        }
+    }
+
     /// Flip selected elements horizontally.
     pub fn flip_horizontal(&mut self) {
         self.apply_transform_to_selected("Flip Horizontal", |bb| {
@@ -841,6 +4441,15 @@ impl EditorEngine {
         });
     }
 
+    /// Set selected elements to an absolute rotation based on the primary object.
+    pub fn set_selected_rotation(&mut self, degrees: f64) {
+        let current = self
+            .primary_transform_decomposition()
+            .map(|value| value.rotation_degrees)
+            .unwrap_or(0.0);
+        self.rotate_selected(degrees - current);
+    }
+
     /// Scale selected elements by the given factor around their combined center.
     pub fn scale_selected(&mut self, sx: f64, sy: f64) {
         self.apply_transform_to_selected("Scale", |bb| {
@@ -850,6 +4459,42 @@ impl EditorEngine {
                 .then(&sivgo_math::Transform2D::scale_xy(sx, sy))
                 .then(&sivgo_math::Transform2D::translate(-cx, -cy))
         });
+    }
+
+    /// Translate selected elements by a fixed delta.
+    pub fn translate_selected(&mut self, dx: f64, dy: f64) {
+        if dx.abs() < f64::EPSILON && dy.abs() < f64::EPSILON {
+            return;
+        }
+        self.apply_transform_to_selected("Move", |_| sivgo_math::Transform2D::translate(dx, dy));
+    }
+
+    /// Skew selected elements around their combined center.
+    pub fn skew_selected(&mut self, skew_x_degrees: f64, skew_y_degrees: f64) {
+        if skew_x_degrees.abs() < f64::EPSILON && skew_y_degrees.abs() < f64::EPSILON {
+            return;
+        }
+        self.apply_transform_to_selected("Skew", |bb| {
+            let cx = (bb.x0 + bb.x1) / 2.0;
+            let cy = (bb.y0 + bb.y1) / 2.0;
+            sivgo_math::Transform2D::translate(cx, cy)
+                .then(&sivgo_math::Transform2D::skew_x(
+                    skew_x_degrees.to_radians(),
+                ))
+                .then(&sivgo_math::Transform2D::skew_y(
+                    skew_y_degrees.to_radians(),
+                ))
+                .then(&sivgo_math::Transform2D::translate(-cx, -cy))
+        });
+    }
+
+    /// Set selected elements to an absolute horizontal skew based on the primary object.
+    pub fn set_selected_skew_x(&mut self, degrees: f64) {
+        let current = self
+            .primary_transform_decomposition()
+            .map(|value| value.skew_x_degrees)
+            .unwrap_or(0.0);
+        self.skew_selected(degrees - current, 0.0);
     }
 
     /// Helper: apply a transform derived from the selection bounding box to all selected elements.
@@ -918,6 +4563,110 @@ impl EditorEngine {
         (800.0, 600.0)
     }
 
+    /// Current root SVG dimensions in user-space pixels.
+    pub fn document_size(&self) -> (f64, f64) {
+        self.get_page_size()
+    }
+
+    /// Set the root SVG dimensions.
+    pub fn set_document_size(&mut self, width: f64, height: f64) {
+        let Some(root) = self.document.root() else {
+            return;
+        };
+        let Some(node) = self.document.get_node_mut(root) else {
+            return;
+        };
+        if let SvgElement::Svg(attrs) = &mut node.element {
+            attrs.width = Some(SvgLength::new(width.max(1.0), LengthUnit::None));
+            attrs.height = Some(SvgLength::new(height.max(1.0), LengthUnit::None));
+            self.viewport.width = width.max(1.0);
+            self.viewport.height = height.max(1.0);
+            self.events.emit(EditorEvent::DocumentModified);
+            self.events.emit(EditorEvent::ViewportChanged);
+        }
+    }
+
+    /// Set Inkscape page background colour on `<sodipodi:namedview>`.
+    pub fn set_page_color(&mut self, color: impl Into<String>) {
+        let Some(namedview) = self.ensure_namedview() else {
+            return;
+        };
+        if let Some(node) = self.document.get_node_mut(namedview) {
+            if let SvgElement::SodipodiNamedView(attrs) = &mut node.element {
+                attrs.page_color = Some(color.into());
+                self.events.emit(EditorEvent::DocumentModified);
+            }
+        }
+    }
+
+    /// Set namedview grid visibility.
+    pub fn set_grid_visible(&mut self, enabled: bool) {
+        let Some(namedview) = self.ensure_namedview() else {
+            return;
+        };
+        if let Some(node) = self.document.get_node_mut(namedview) {
+            if let SvgElement::SodipodiNamedView(attrs) = &mut node.element {
+                attrs.show_grid = Some(enabled.to_string());
+                self.events.emit(EditorEvent::DocumentModified);
+            }
+        }
+    }
+
+    /// Set or create the document `<title>` element.
+    pub fn set_document_title(&mut self, title: impl Into<String>) {
+        self.set_root_text_element("title", title.into());
+    }
+
+    /// Set or create the document `<desc>` element.
+    pub fn set_document_description(&mut self, description: impl Into<String>) {
+        self.set_root_text_element("desc", description.into());
+    }
+
+    /// Set or create raw `<metadata>` content.
+    pub fn set_document_metadata(&mut self, metadata: impl Into<String>) {
+        self.set_root_text_element("metadata", metadata.into());
+    }
+
+    fn set_root_text_element(&mut self, tag_name: &str, value: String) {
+        let Some(root) = self.document.root() else {
+            return;
+        };
+
+        let existing = self.document.children(root).iter().copied().find(|id| {
+            self.document
+                .get_node(*id)
+                .map(|node| node.element.tag_name() == tag_name)
+                .unwrap_or(false)
+        });
+
+        if let Some(id) = existing {
+            if let Some(node) = self.document.get_node_mut(id) {
+                match &mut node.element {
+                    SvgElement::Title(attrs) => attrs.text_content = value,
+                    SvgElement::Desc(attrs) => attrs.text_content = value,
+                    SvgElement::Metadata(attrs) => attrs.raw_content = value,
+                    _ => {}
+                }
+                self.events.emit(EditorEvent::DocumentModified);
+            }
+            return;
+        }
+
+        let element = match tag_name {
+            "title" => SvgElement::Title(TitleAttrs {
+                text_content: value,
+            }),
+            "desc" => SvgElement::Desc(DescAttrs {
+                text_content: value,
+            }),
+            "metadata" => SvgElement::Metadata(MetadataAttrs { raw_content: value }),
+            _ => return,
+        };
+        let id = self.document.add_node(element);
+        self.document.append_child(root, id);
+        self.events.emit(EditorEvent::DocumentModified);
+    }
+
     // -----------------------------------------------------------------------
     // Lock/Unlock, Hide/Show (9.6.9)
     // -----------------------------------------------------------------------
@@ -936,6 +4685,81 @@ impl EditorEngine {
             let cmd = SetLockCommand::toggle(id, node.locked);
             self.execute(Box::new(cmd));
         }
+    }
+
+    /// Set or clear an object's display label.
+    pub fn set_object_label(&mut self, id: NodeId, label: impl Into<String>) {
+        let label = label.into();
+        let new_label = match label.trim() {
+            "" => None,
+            value => Some(value.to_string()),
+        };
+        let Some(node) = self.document.get_node(id) else {
+            return;
+        };
+        let old_label = node.attributes.get("inkscape:label").cloned();
+        if old_label == new_label {
+            return;
+        }
+
+        self.execute(Box::new(ModifyObjectLabelCommand::new(
+            id, old_label, new_label,
+        )));
+    }
+
+    /// Set or clear an object's serialized SVG `id`.
+    ///
+    /// Returns `false` when the object is missing or the requested id already
+    /// belongs to a different node.
+    pub fn set_object_xml_id(&mut self, id: NodeId, xml_id: impl Into<String>) -> bool {
+        let new_xml_id = Self::normalize_user_xml_id(&xml_id.into());
+        let Some(node) = self.document.get_node(id) else {
+            return false;
+        };
+        if let Some(value) = new_xml_id.as_deref() {
+            if let Some(existing) = self.document.find_by_xml_id(value) {
+                if existing != id {
+                    return false;
+                }
+            }
+        }
+
+        let old_xml_id = node.xml_id.clone();
+        if old_xml_id == new_xml_id {
+            return true;
+        }
+
+        self.execute(Box::new(ModifyXmlIdCommand::new(
+            id, old_xml_id, new_xml_id,
+        )));
+        true
+    }
+
+    fn normalize_user_xml_id(value: &str) -> Option<String> {
+        let value = value.trim();
+        if value.is_empty() {
+            return None;
+        }
+
+        let mut normalized = String::new();
+        for ch in value.chars() {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | ':' | '.') {
+                normalized.push(ch);
+            } else {
+                normalized.push('-');
+            }
+        }
+
+        let starts_valid = normalized
+            .chars()
+            .next()
+            .map(|ch| ch.is_ascii_alphabetic() || ch == '_')
+            .unwrap_or(false);
+        if !starts_valid {
+            normalized.insert_str(0, "object-");
+        }
+
+        Some(normalized)
     }
 
     /// Hide all currently selected elements.
@@ -1015,21 +4839,40 @@ impl EditorEngine {
     ///
     /// Returns the [`NodeId`] of the created layer, or `None` if there is no root.
     pub fn add_layer(&mut self, name: &str) -> Option<NodeId> {
+        self.add_layer_under(None, name)
+    }
+
+    /// Create a new layer under `parent`, or under the root when `parent` is `None`.
+    ///
+    /// Nested layers are represented the same way as top-level layers: an SVG
+    /// group with `inkscape:groupmode="layer"`.
+    pub fn add_layer_under(&mut self, parent: Option<NodeId>, name: &str) -> Option<NodeId> {
         let root = self.document.root()?;
+        let parent = match parent {
+            Some(id) if self.is_layer(id) || id == root => id,
+            Some(_) => return None,
+            None => root,
+        };
         let element = SvgElement::Group(GroupAttrs {
             inkscape_groupmode: Some("layer".to_string()),
             inkscape_label: Some(name.to_string()),
         });
-        let cmd = AddNodeCommand::new(root, element, PresentationAttrs::default(), None);
+        let cmd = AddNodeCommand::new(parent, element, PresentationAttrs::default(), None);
         let cmd = Box::new(cmd);
         self.execute(cmd);
 
-        // The last child of root should be the new layer.
-        let children = self.document.children(root);
+        // The last child of the target parent should be the new layer.
+        let children = self.document.children(parent);
         let layer_id = *children.last()?;
         self.active_layer = Some(layer_id);
         self.events.emit(EditorEvent::DocumentModified);
         Some(layer_id)
+    }
+
+    /// Create a child layer under the active layer, falling back to the root.
+    pub fn add_sublayer(&mut self, name: &str) -> Option<NodeId> {
+        let parent = self.active_layer.filter(|id| self.is_layer(*id));
+        self.add_layer_under(parent, name)
     }
 
     /// Delete a layer. Children of the layer are removed along with it.
@@ -1056,12 +4899,34 @@ impl EditorEngine {
 
     /// Rename a layer by setting its `inkscape:label`.
     pub fn rename_layer(&mut self, id: NodeId, name: &str) {
-        if let Some(node) = self.document.get_node_mut(id) {
-            if let SvgElement::Group(ref mut attrs) = node.element {
-                attrs.inkscape_label = Some(name.to_string());
-                self.events.emit(EditorEvent::DocumentModified);
-            }
+        if !self.is_layer(id) {
+            return;
         }
+
+        let Some(node) = self.document.get_node(id) else {
+            return;
+        };
+        let SvgElement::Group(attrs) = &node.element else {
+            return;
+        };
+        let name = name.trim();
+        if name.is_empty() || attrs.inkscape_label.as_deref() == Some(name) {
+            return;
+        }
+
+        let old_element = node.element.clone();
+        let old_presentation = node.presentation.clone();
+        let mut new_attrs = attrs.clone();
+        new_attrs.inkscape_label = Some(name.to_string());
+        let new_element = SvgElement::Group(new_attrs);
+
+        self.execute(Box::new(ModifyElementCommand::new(
+            id,
+            old_element,
+            new_element,
+            old_presentation.clone(),
+            old_presentation,
+        )));
     }
 
     /// Raise a layer one step among its siblings (move it toward the end /
@@ -1080,6 +4945,51 @@ impl EditorEngine {
             return;
         }
         self.execute(Box::new(ReorderCommand::new(id, ReorderDirection::Lower)));
+    }
+
+    /// Merge a layer into the layer directly below it in document order.
+    pub fn merge_layer_down(&mut self, id: NodeId) {
+        if !self.is_layer(id) {
+            return;
+        }
+
+        let layers = self.get_layers();
+        let Some(index) = layers.iter().position(|(layer_id, _)| *layer_id == id) else {
+            return;
+        };
+        if index == 0 {
+            return;
+        }
+        let target_id = layers[index - 1].0;
+
+        if self.active_layer == Some(id) {
+            self.active_layer = Some(target_id);
+        }
+        self.selection.remove(id);
+        self.execute(Box::new(MergeLayerCommand::new(id, target_id)));
+        self.events.emit(EditorEvent::SelectionChanged);
+    }
+
+    /// Flatten all top-level layers by ungrouping each layer into the root.
+    pub fn flatten_layers(&mut self) {
+        let layers = self.get_layers();
+        if layers.is_empty() {
+            return;
+        }
+
+        let layer_ids: Vec<NodeId> = layers.into_iter().map(|(id, _)| id).collect();
+        let commands: Vec<Box<dyn Command>> = layer_ids
+            .iter()
+            .copied()
+            .map(|id| Box::new(UngroupCommand::new(id)) as Box<dyn Command>)
+            .collect();
+
+        self.active_layer = None;
+        for id in layer_ids {
+            self.selection.remove(id);
+        }
+        self.execute_command_batch("Flatten layers", commands);
+        self.events.emit(EditorEvent::SelectionChanged);
     }
 
     /// Return a list of all layers (groups with `inkscape:groupmode="layer"`)
@@ -1164,17 +5074,10 @@ impl EditorEngine {
         height: f64,
         label: Option<&str>,
     ) -> Option<NodeId> {
-        let nv = self.ensure_namedview()?;
-        let page = SvgElement::InkscapePage(sivgo_dom::InkscapePageAttrs {
-            x: Some(x.to_string()),
-            y: Some(y.to_string()),
-            width: Some(width.to_string()),
-            height: Some(height.to_string()),
-            inkscape_label: label.map(String::from),
-        });
-        let page_id = self.document.add_node(page);
-        self.document.append_child(nv, page_id);
-        self.events.emit(EditorEvent::DocumentModified);
+        let cmd =
+            AddPageCommand::new(&self.document, x, y, width, height, label.map(String::from))?;
+        let page_id = cmd.page_id();
+        self.execute(Box::new(cmd));
         Some(page_id)
     }
 
@@ -1187,30 +5090,80 @@ impl EditorEngine {
         } else {
             return;
         }
-        self.document.remove_node(page_id);
-        self.events.emit(EditorEvent::DocumentModified);
+        self.execute(Box::new(RemoveNodeCommand::new(page_id)));
     }
 
     /// Resize a page.
     pub fn resize_page(&mut self, page_id: NodeId, width: f64, height: f64) {
-        if let Some(node) = self.document.get_node_mut(page_id) {
-            if let SvgElement::InkscapePage(attrs) = &mut node.element {
-                attrs.width = Some(width.to_string());
-                attrs.height = Some(height.to_string());
-            }
-        }
-        self.events.emit(EditorEvent::DocumentModified);
+        let Some(old_attrs) = self.page_attrs(page_id) else {
+            return;
+        };
+        let mut new_attrs = old_attrs.clone();
+        new_attrs.width = Some(width.max(1.0).to_string());
+        new_attrs.height = Some(height.max(1.0).to_string());
+        self.modify_page_attrs(page_id, old_attrs, new_attrs);
     }
 
     /// Move a page to a new position.
     pub fn move_page(&mut self, page_id: NodeId, x: f64, y: f64) {
-        if let Some(node) = self.document.get_node_mut(page_id) {
-            if let SvgElement::InkscapePage(attrs) = &mut node.element {
-                attrs.x = Some(x.to_string());
-                attrs.y = Some(y.to_string());
-            }
+        let Some(old_attrs) = self.page_attrs(page_id) else {
+            return;
+        };
+        let mut new_attrs = old_attrs.clone();
+        new_attrs.x = Some(x.to_string());
+        new_attrs.y = Some(y.to_string());
+        self.modify_page_attrs(page_id, old_attrs, new_attrs);
+    }
+
+    /// Set a page label.
+    pub fn set_page_label(&mut self, page_id: NodeId, label: impl Into<String>) {
+        let Some(old_attrs) = self.page_attrs(page_id) else {
+            return;
+        };
+        let mut new_attrs = old_attrs.clone();
+        let label = label.into();
+        new_attrs.inkscape_label = if label.trim().is_empty() {
+            None
+        } else {
+            Some(label)
+        };
+        self.modify_page_attrs(page_id, old_attrs, new_attrs);
+    }
+
+    fn page_attrs(&self, page_id: NodeId) -> Option<InkscapePageAttrs> {
+        let node = self.document.get_node(page_id)?;
+        match &node.element {
+            SvgElement::InkscapePage(attrs) => Some(attrs.clone()),
+            _ => None,
         }
-        self.events.emit(EditorEvent::DocumentModified);
+    }
+
+    fn modify_page_attrs(
+        &mut self,
+        page_id: NodeId,
+        old_attrs: InkscapePageAttrs,
+        new_attrs: InkscapePageAttrs,
+    ) {
+        let old_values = (
+            old_attrs.x.as_deref(),
+            old_attrs.y.as_deref(),
+            old_attrs.width.as_deref(),
+            old_attrs.height.as_deref(),
+            old_attrs.inkscape_label.as_deref(),
+        );
+        let new_values = (
+            new_attrs.x.as_deref(),
+            new_attrs.y.as_deref(),
+            new_attrs.width.as_deref(),
+            new_attrs.height.as_deref(),
+            new_attrs.inkscape_label.as_deref(),
+        );
+        if old_values == new_values {
+            return;
+        }
+        self.execute(Box::new(ModifyPageCommand::new(
+            page_id, old_attrs, new_attrs,
+        )));
     }
 
     /// List all pages in the document.
@@ -1433,6 +5386,27 @@ impl EditorEngine {
             }
         }
         results
+    }
+}
+
+#[cfg(test)]
+mod interaction_performance_tests {
+    use super::*;
+    use crate::snap::SnapTarget;
+
+    #[test]
+    fn mouse_move_clears_snap_feedback_without_running_snap_pass() {
+        let mut engine = EditorEngine::new(100.0, 100.0);
+        engine.tools.switch_to(ToolId::Rect);
+        engine.last_snap_indicator = Some(SnapIndicator {
+            crosshair_lines: Vec::new(),
+            distance_label: None,
+            target: SnapTarget::Grid,
+        });
+
+        engine.on_mouse_move(MouseEvent::left(9.0, 9.0));
+
+        assert!(engine.last_snap_indicator.is_none());
     }
 }
 

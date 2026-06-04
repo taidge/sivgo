@@ -1,4 +1,6 @@
 use std::collections::{HashMap, HashSet};
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use crate::actions::PluginAction;
 use crate::api::{Plugin, PluginContext};
@@ -170,41 +172,43 @@ impl PluginRegistry {
         }
     }
 
-    /// Install a plugin from `path`.
-    ///
-    /// In a full implementation this would read and validate a manifest
-    /// file from the given path.  Here we synthesise a manifest from the
-    /// path's leaf directory name so that the API is exercisable without
-    /// real filesystem access.
-    ///
-    /// Returns the plugin id on success.
+    /// Install a plugin from a directory containing `plugin.json` or
+    /// `manifest.json`. The manifest is parsed and validated before the
+    /// plugin is registered.
     pub fn install(&mut self, path: &str) -> Result<String, String> {
-        // Derive a deterministic id from the path.
-        let leaf = path.rsplit(['/', '\\']).next().unwrap_or(path);
+        let manifest_path = find_manifest_path(path)?;
+        let json = fs::read_to_string(&manifest_path).map_err(|err| {
+            format!(
+                "failed to read manifest '{}': {err}",
+                manifest_path.display()
+            )
+        })?;
+        let manifest: PluginManifest = serde_json::from_str(&json).map_err(|err| {
+            format!(
+                "failed to parse manifest '{}': {err}",
+                manifest_path.display()
+            )
+        })?;
+        self.install_manifest(path, manifest)
+    }
 
-        if leaf.is_empty() {
-            return Err("path must not be empty".to_string());
-        }
+    /// Install a plugin from an already parsed manifest.
+    pub fn install_manifest(
+        &mut self,
+        path: impl Into<String>,
+        manifest: PluginManifest,
+    ) -> Result<String, String> {
+        manifest.validate()?;
+        let path = path.into();
+        let id = manifest.id.clone();
 
-        let id = format!("installed.{leaf}");
-
-        // Reject duplicates.
         if self.installed.iter().any(|p| p.manifest.id == id) {
             return Err(format!("plugin '{id}' is already installed"));
         }
 
-        let manifest = PluginManifest {
-            id: id.clone(),
-            name: leaf.to_string(),
-            version: "0.0.0".to_string(),
-            author: String::new(),
-            description: format!("Plugin installed from {path}"),
-            permissions: Vec::new(),
-        };
-
         self.installed.push(InstalledPlugin {
             manifest,
-            path: path.to_string(),
+            path,
             loaded: false,
         });
 
@@ -249,6 +253,18 @@ impl PluginRegistry {
     }
 }
 
+fn find_manifest_path(path: &str) -> Result<PathBuf, String> {
+    if path.trim().is_empty() {
+        return Err("path must not be empty".to_string());
+    }
+    let base = Path::new(path);
+    let candidates = [base.join("plugin.json"), base.join("manifest.json")];
+    candidates
+        .into_iter()
+        .find(|candidate| candidate.is_file())
+        .ok_or_else(|| format!("no plugin manifest found under '{path}'"))
+}
+
 impl Default for PluginRegistry {
     fn default() -> Self {
         Self::new()
@@ -262,21 +278,50 @@ impl Default for PluginRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::manifest::Permission;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn manifest(id: &str) -> PluginManifest {
+        PluginManifest {
+            id: id.to_string(),
+            name: "Test Plugin".to_string(),
+            version: "1.0.0".to_string(),
+            author: "Tester".to_string(),
+            description: "A test plugin".to_string(),
+            permissions: vec![Permission::ReadDocument],
+        }
+    }
+
+    fn temp_plugin_dir(id: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("sivgo-plugin-{unique}"));
+        fs::create_dir_all(&dir).unwrap();
+        let json = serde_json::to_string(&manifest(id)).unwrap();
+        fs::write(dir.join("plugin.json"), json).unwrap();
+        dir
+    }
 
     #[test]
     fn registry_install_and_list() {
         let mut reg = PluginRegistry::new();
-        let id = reg.install("/plugins/my_filter").unwrap();
-        assert_eq!(id, "installed.my_filter");
+        let dir = temp_plugin_dir("ext.my_filter");
+        let id = reg.install(dir.to_str().unwrap()).unwrap();
+        assert_eq!(id, "ext.my_filter");
         assert_eq!(reg.list().len(), 1);
         assert!(reg.get(&id).is_some());
         assert!(reg.is_enabled(&id));
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
     fn registry_uninstall() {
         let mut reg = PluginRegistry::new();
-        let id = reg.install("/plugins/removable").unwrap();
+        let id = reg
+            .install_manifest("/plugins/removable", manifest("ext.removable"))
+            .unwrap();
         assert!(reg.uninstall(&id));
         assert!(reg.list().is_empty());
         assert!(!reg.is_enabled(&id));
@@ -287,7 +332,9 @@ mod tests {
     #[test]
     fn registry_enable_disable() {
         let mut reg = PluginRegistry::new();
-        let id = reg.install("/plugins/toggle").unwrap();
+        let id = reg
+            .install_manifest("/plugins/toggle", manifest("ext.toggle"))
+            .unwrap();
 
         assert!(reg.is_enabled(&id));
         reg.disable(&id);
@@ -299,8 +346,28 @@ mod tests {
     #[test]
     fn registry_duplicate_install_rejected() {
         let mut reg = PluginRegistry::new();
-        reg.install("/plugins/dup").unwrap();
-        let err = reg.install("/other/dup").unwrap_err();
+        reg.install_manifest("/plugins/dup", manifest("ext.dup"))
+            .unwrap();
+        let err = reg
+            .install_manifest("/other/dup", manifest("ext.dup"))
+            .unwrap_err();
         assert!(err.contains("already installed"));
+    }
+
+    #[test]
+    fn registry_install_rejects_missing_or_invalid_manifest() {
+        let mut reg = PluginRegistry::new();
+        assert!(reg.install("").unwrap_err().contains("path"));
+        assert!(reg
+            .install("/definitely/missing")
+            .unwrap_err()
+            .contains("manifest"));
+
+        let mut invalid = manifest("bad id");
+        invalid.version = "1".to_string();
+        let err = reg
+            .install_manifest("/plugins/invalid", invalid)
+            .unwrap_err();
+        assert!(err.contains("id") || err.contains("semantic"));
     }
 }

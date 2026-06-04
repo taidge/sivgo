@@ -6,6 +6,8 @@ edition.workspace = true
 [dependencies]
 sivgo-math = { workspace = true }
 sivgo-dom = { workspace = true }
+sivgo-path-ops = { workspace = true }
 sivgo-render = { workspace = true }
 sivgo-style = { workspace = true }
+sivgo-text = { workspace = true }
 log = { workspace = true }

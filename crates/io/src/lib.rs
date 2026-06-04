@@ -15,6 +15,7 @@
 
 pub mod dxf;
 pub mod eps;
+pub mod multi_page_pdf;
 pub mod pdf;
 pub mod pdf_import;
 pub mod recent_files;
@@ -22,6 +23,7 @@ pub mod recent_files;
 // Re-export the main types/functions from the new export modules.
 pub use dxf::export_dxf;
 pub use eps::export_eps;
+pub use multi_page_pdf::{MultiPagePdfExporter, PdfMetadata, PdfPage};
 pub use pdf::{export_pdf, export_pdf_multipage, PdfExportOptions};
 
 use std::fs;
@@ -258,6 +260,42 @@ pub fn export_plain_svg(doc: &sivgo_dom::SvgDocument) -> String {
     }
 
     sivgo_dom::serialize_svg(&doc_clone)
+}
+
+// ---------------------------------------------------------------------------
+// Optimized SVG Export
+// ---------------------------------------------------------------------------
+
+/// Serialize a document as optimized plain SVG.
+///
+/// This uses the plain-SVG export path to remove editor-only Inkscape and
+/// Sodipodi data, then applies a deterministic XML minification pass that
+/// removes inter-element whitespace without touching attribute values.
+pub fn export_optimized_svg(doc: &sivgo_dom::SvgDocument) -> String {
+    let plain = export_plain_svg(doc);
+    minify_svg_xml(&plain)
+}
+
+fn minify_svg_xml(xml: &str) -> String {
+    let mut out = String::with_capacity(xml.len());
+    let mut pending_space = false;
+    let mut previous = '\0';
+
+    for ch in xml.chars() {
+        if ch.is_whitespace() {
+            pending_space = true;
+            continue;
+        }
+
+        if pending_space && previous != '>' && ch != '<' {
+            out.push(' ');
+        }
+        out.push(ch);
+        previous = ch;
+        pending_space = false;
+    }
+
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -584,6 +622,12 @@ pub enum ExportFormat {
     Jpeg { quality: u8 },
     WebP { quality: u8 },
     Svg,
+    PlainSvg,
+    OptimizedSvg,
+    Svgz,
+    Pdf,
+    Eps,
+    Dxf,
 }
 
 /// A single item in a [`batch_export`] run.
@@ -967,6 +1011,38 @@ fn batch_export_one(doc: &sivgo_dom::SvgDocument, item: &BatchExportItem) -> Res
             let xml = sivgo_dom::serialize_svg(&doc_clone);
             fs::write(path, xml.as_bytes())?;
         }
+        ExportFormat::PlainSvg => {
+            let mut doc_clone = doc.clone();
+            apply_area_to_svg(&mut doc_clone, &item.area)?;
+            fs::write(path, export_plain_svg(&doc_clone).as_bytes())?;
+        }
+        ExportFormat::OptimizedSvg => {
+            let mut doc_clone = doc.clone();
+            apply_area_to_svg(&mut doc_clone, &item.area)?;
+            fs::write(path, export_optimized_svg(&doc_clone).as_bytes())?;
+        }
+        ExportFormat::Svgz => {
+            let mut doc_clone = doc.clone();
+            apply_area_to_svg(&mut doc_clone, &item.area)?;
+            fs::write(path, save_svgz(&doc_clone)?)?;
+        }
+        ExportFormat::Pdf => {
+            let mut doc_clone = doc.clone();
+            apply_area_to_svg(&mut doc_clone, &item.area)?;
+            let pdf = export_pdf(&doc_clone, &PdfExportOptions::default());
+            fs::write(path, pdf)?;
+        }
+        ExportFormat::Eps => {
+            let mut doc_clone = doc.clone();
+            apply_area_to_svg(&mut doc_clone, &item.area)?;
+            let (_, _, width, height) = page_area(&doc_clone)?;
+            fs::write(path, export_eps(&doc_clone, width, height).as_bytes())?;
+        }
+        ExportFormat::Dxf => {
+            let mut doc_clone = doc.clone();
+            apply_area_to_svg(&mut doc_clone, &item.area)?;
+            fs::write(path, export_dxf(&doc_clone).as_bytes())?;
+        }
         ExportFormat::Png => {
             let config = ExportConfig {
                 area: item.area.clone(),
@@ -1166,7 +1242,7 @@ mod tests {
         assert_eq!(&header, &[137, 80, 78, 71, 13, 10, 26, 10]);
 
         // Decode to verify dimensions and content.
-        let file = fs::File::open(&png_path).unwrap();
+        let file = std::io::BufReader::new(fs::File::open(&png_path).unwrap());
         let decoder = png::Decoder::new(file);
         let mut reader = decoder.read_info().unwrap();
         let info = reader.info();
@@ -1175,7 +1251,7 @@ mod tests {
         assert_eq!(info.color_type, png::ColorType::Rgba);
         assert_eq!(info.bit_depth, png::BitDepth::Eight);
 
-        let mut buf = vec![0u8; reader.output_buffer_size()];
+        let mut buf = vec![0u8; reader.output_buffer_size().unwrap()];
         let frame_info = reader.next_frame(&mut buf).unwrap();
         let pixels = &buf[..frame_info.buffer_size()];
 
@@ -1361,6 +1437,27 @@ mod tests {
         );
     }
 
+    #[test]
+    fn export_optimized_svg_strips_extensions_and_minifies() {
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg"
+             xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+             xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.0.dtd"
+             width="100" height="100">
+          <sodipodi:namedview id="nv1"/>
+          <g inkscape:groupmode="layer" inkscape:label="Layer">
+            <rect x="1" y="2" width="30" height="40" fill="red"/>
+          </g>
+        </svg>"##;
+
+        let doc = sivgo_dom::parse_svg(svg).unwrap();
+        let optimized = export_optimized_svg(&doc);
+        assert!(!optimized.contains("inkscape:"));
+        assert!(!optimized.contains("sodipodi:"));
+        assert!(!optimized.contains('\n'));
+        assert!(optimized.contains("<rect"));
+        assert!(optimized.len() <= export_plain_svg(&doc).len());
+    }
+
     // -----------------------------------------------------------------
     // JPEG export
     // -----------------------------------------------------------------
@@ -1529,7 +1626,7 @@ mod tests {
         assert_eq!(info.height, 100);
 
         // Verify we can decode pixel data.
-        let mut buf = vec![0u8; reader.output_buffer_size()];
+        let mut buf = vec![0u8; reader.output_buffer_size().unwrap()];
         let frame = reader.next_frame(&mut buf).unwrap();
         let pixels = &buf[..frame.buffer_size()];
         assert_eq!(pixels.len(), 100 * 100 * 4, "expected RGBA pixel data");
@@ -1613,6 +1710,108 @@ mod tests {
         let jpeg_bytes = fs::read(dir.path().join("out.jpg")).unwrap();
         assert_eq!(jpeg_bytes[0], 0xFF);
         assert_eq!(jpeg_bytes[1], 0xD8);
+    }
+
+    #[test]
+    fn batch_export_extended_vector_and_raster_formats() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let doc = test_doc();
+
+        let items = vec![
+            BatchExportItem {
+                area: ExportArea::Page,
+                filename: dir.path().join("plain.svg").to_string_lossy().into_owned(),
+                format: ExportFormat::PlainSvg,
+            },
+            BatchExportItem {
+                area: ExportArea::Drawing,
+                filename: dir
+                    .path()
+                    .join("optimized.svg")
+                    .to_string_lossy()
+                    .into_owned(),
+                format: ExportFormat::OptimizedSvg,
+            },
+            BatchExportItem {
+                area: ExportArea::Page,
+                filename: dir
+                    .path()
+                    .join("compressed.svgz")
+                    .to_string_lossy()
+                    .into_owned(),
+                format: ExportFormat::Svgz,
+            },
+            BatchExportItem {
+                area: ExportArea::Page,
+                filename: dir.path().join("doc.pdf").to_string_lossy().into_owned(),
+                format: ExportFormat::Pdf,
+            },
+            BatchExportItem {
+                area: ExportArea::Page,
+                filename: dir.path().join("doc.eps").to_string_lossy().into_owned(),
+                format: ExportFormat::Eps,
+            },
+            BatchExportItem {
+                area: ExportArea::Page,
+                filename: dir.path().join("doc.dxf").to_string_lossy().into_owned(),
+                format: ExportFormat::Dxf,
+            },
+            BatchExportItem {
+                area: ExportArea::Page,
+                filename: dir.path().join("doc.webp").to_string_lossy().into_owned(),
+                format: ExportFormat::WebP { quality: 90 },
+            },
+        ];
+
+        let results = batch_export(&doc, &items);
+        for (idx, result) in results.iter().enumerate() {
+            assert!(result.is_ok(), "batch item {idx} failed: {result:?}");
+        }
+
+        let plain = fs::read_to_string(dir.path().join("plain.svg")).unwrap();
+        assert!(plain.contains("<svg"));
+        assert!(!plain.contains("inkscape:"));
+
+        let optimized = fs::read_to_string(dir.path().join("optimized.svg")).unwrap();
+        assert!(optimized.contains("viewBox=\"10 10 80 80\""));
+        assert!(!optimized.contains('\n'));
+
+        let svgz = fs::read(dir.path().join("compressed.svgz")).unwrap();
+        let svgz_doc = load_svgz(&svgz).expect("batch SVGZ should round-trip");
+        assert_eq!(svgz_doc.len(), doc.len());
+
+        let pdf = fs::read(dir.path().join("doc.pdf")).unwrap();
+        assert!(pdf.starts_with(b"%PDF-1.4"));
+
+        let eps = fs::read_to_string(dir.path().join("doc.eps")).unwrap();
+        assert!(eps.starts_with("%!PS-Adobe-3.0 EPSF-3.0"));
+
+        let dxf = fs::read_to_string(dir.path().join("doc.dxf")).unwrap();
+        assert!(dxf.contains("ENTITIES"));
+        assert!(dxf.trim_end().ends_with("EOF"));
+
+        let webp = fs::read(dir.path().join("doc.webp")).unwrap();
+        assert!(webp.starts_with(b"RIFF"));
+        assert_eq!(&webp[8..12], b"WEBP");
+    }
+
+    #[test]
+    fn raster_mime_detection_covers_supported_imports() {
+        assert_eq!(
+            detect_image_mime(&[0x89, b'P', b'N', b'G']),
+            Some("image/png")
+        );
+        assert_eq!(
+            detect_image_mime(&[0xFF, 0xD8, 0xFF, 0x00]),
+            Some("image/jpeg")
+        );
+        assert_eq!(detect_image_mime(b"GIF89a"), Some("image/gif"));
+        assert_eq!(detect_image_mime(b"BMxxxx"), Some("image/bmp"));
+        assert_eq!(detect_image_mime(b"RIFFxxxxWEBP"), Some("image/webp"));
+        assert_eq!(
+            detect_image_mime(&[0x49, 0x49, 0x2A, 0x00]),
+            Some("image/tiff")
+        );
     }
 
     #[test]

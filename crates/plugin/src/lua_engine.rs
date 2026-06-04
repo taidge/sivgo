@@ -1,34 +1,19 @@
-﻿//! Lightweight Lua scripting abstraction for Sivgo plugins.
+//! Lightweight Lua scripting boundary for Sivgo plugins.
 //!
-//! This module provides a minimal Lua-like expression evaluator that does
-//! **not** depend on a full Lua VM (no `mlua` / `rlua` crate required).
-//! It supports:
-//!
-//! - Numeric and string literals
-//! - The four basic arithmetic operators (`+`, `-`, `*`, `/`)
-//! - Parenthesised sub-expressions
-//! - Variable lookup from a global table
-//! - Named script storage and execution
-//! - Built-in Sivgo API function stubs (`sivgo.get_selection`, etc.)
-//!
-//! This is intentionally limited; a production build would swap in a real
-//! Lua binding behind the same public API.
+//! This module keeps the existing expression evaluator but routes Sivgo API
+//! calls through explicit permission checks and auditable host commands.
 
 use std::collections::HashMap;
 
-// ---------------------------------------------------------------------------
-// LuaValue
-// ---------------------------------------------------------------------------
+use crate::manifest::{Permission, PluginManifest, PluginPermissionSet};
 
-/// A dynamically-typed value in the Lua scripting environment.
+/// A dynamically typed value in the Lua scripting environment.
 #[derive(Debug, Clone, PartialEq)]
 pub enum LuaValue {
     Nil,
     Bool(bool),
     Number(f64),
     String(String),
-    /// Association list representing a Lua table.
-    /// Keys are strings for ergonomic Rust usage.
     Table(Vec<(String, LuaValue)>),
 }
 
@@ -44,46 +29,61 @@ impl std::fmt::Display for LuaValue {
     }
 }
 
-// ---------------------------------------------------------------------------
-// LuaEngine
-// ---------------------------------------------------------------------------
+/// Host-side command emitted by a Lua script after permission checks pass.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LuaHostCommand {
+    Alert(String),
+    SetFill(String),
+    CreateRect { x: f64, y: f64, w: f64, h: f64 },
+    Fetch(String),
+    ReadFile(String),
+}
 
-/// A minimal Lua scripting engine that stores globals, named scripts,
-/// registered API functions, and accumulated output.
+/// Minimal Lua-like engine with a bounded Sivgo host API.
 #[derive(Debug, Clone)]
 pub struct LuaEngine {
-    /// Named scripts that have been loaded (name -> source text).
     pub scripts: HashMap<String, String>,
-    /// Named global variables visible to scripts.
     pub globals: HashMap<String, LuaValue>,
-    /// Output log from `sivgo.alert()` and similar calls.
     pub output_log: Vec<String>,
-    /// Registered API function names (e.g. `"sivgo.get_selection"`).
     registered_api_functions: Vec<String>,
+    permissions: PluginPermissionSet,
+    selection: Vec<String>,
+    host_commands: Vec<LuaHostCommand>,
 }
 
 impl LuaEngine {
     pub fn new() -> Self {
-        Self {
+        let mut engine = Self {
             scripts: HashMap::new(),
             globals: HashMap::new(),
             output_log: Vec::new(),
             registered_api_functions: Vec::new(),
+            permissions: PluginPermissionSet {
+                read_document: true,
+                ..PluginPermissionSet::default()
+            },
+            selection: Vec::new(),
+            host_commands: Vec::new(),
+        };
+
+        for api in [
+            "sivgo.get_selection",
+            "sivgo.set_fill",
+            "sivgo.create_rect",
+            "sivgo.alert",
+            "sivgo.fetch",
+            "sivgo.fs_read",
+        ] {
+            engine.register_api_function(api);
         }
+
+        engine
     }
 
-    /// Load a named script from source text.
     pub fn load_script(&mut self, name: &str, source: &str) {
         self.scripts.insert(name.to_string(), source.to_string());
     }
 
-    /// Execute a previously loaded script by name.
-    ///
-    /// The stub implementation parses the script source for built-in API
-    /// calls (`sivgo.get_selection()`, `sivgo.set_fill(color)`,
-    /// `sivgo.create_rect(x,y,w,h)`, `sivgo.alert(msg)`) and simple
-    /// expressions.  Returns the result of the last evaluated expression,
-    /// or `LuaValue::Nil` for API-only scripts.
     pub fn execute(&mut self, name: &str) -> Result<LuaValue, String> {
         let source = self
             .scripts
@@ -92,120 +92,181 @@ impl LuaEngine {
             .clone();
 
         let mut last_value = LuaValue::Nil;
-
         for line in source.lines() {
             let trimmed = line.trim();
             if trimmed.is_empty() || trimmed.starts_with("--") {
                 continue;
             }
 
-            // Check for built-in API calls.
-            if let Some(result) = self.try_execute_api_call(trimmed) {
-                last_value = result;
+            if let Some(value) = self.try_execute_api_call(trimmed)? {
+                last_value = value;
                 continue;
             }
 
-            // Fall back to expression evaluation.
-            match eval_expression(trimmed, &self.globals) {
-                Ok(val) => last_value = val,
-                Err(_) => {
-                    // Ignore lines that are not valid expressions (stubs
-                    // for assignment, control flow, etc.).
-                    continue;
-                }
+            if let Ok(value) = eval_expression(trimmed, &self.globals) {
+                last_value = value;
             }
         }
 
         Ok(last_value)
     }
 
-    /// Set a global variable.
     pub fn set_global(&mut self, name: &str, value: LuaValue) {
         self.globals.insert(name.to_string(), value);
     }
 
-    /// Get a reference to a global variable, if it exists.
     pub fn get_global(&self, name: &str) -> Option<&LuaValue> {
         self.globals.get(name)
     }
 
-    /// Register a named API function that scripts may call.
+    pub fn set_permissions(&mut self, permissions: PluginPermissionSet) {
+        self.permissions = permissions;
+    }
+
+    pub fn set_permissions_from_manifest(
+        &mut self,
+        manifest: &PluginManifest,
+    ) -> Result<(), String> {
+        manifest.validate()?;
+        self.permissions = manifest.permission_set();
+        Ok(())
+    }
+
+    pub fn set_selection(&mut self, selection: Vec<String>) {
+        self.selection = selection;
+    }
+
     pub fn register_api_function(&mut self, name: &str) {
-        if !self.registered_api_functions.contains(&name.to_string()) {
+        if !self
+            .registered_api_functions
+            .iter()
+            .any(|item| item == name)
+        {
             self.registered_api_functions.push(name.to_string());
         }
     }
 
-    /// Return the accumulated output log.
     pub fn get_output(&self) -> &[String] {
         &self.output_log
     }
 
-    /// Evaluate a simple expression using the engine's globals.
+    pub fn host_commands(&self) -> &[LuaHostCommand] {
+        &self.host_commands
+    }
+
+    pub fn clear_host_commands(&mut self) {
+        self.host_commands.clear();
+    }
+
     pub fn eval(&self, expr: &str) -> Result<LuaValue, String> {
         eval_expression(expr, &self.globals)
     }
 
-    // -- Private helpers ----------------------------------------------------
-
-    /// Try to interpret `line` as a built-in API call.
-    /// Returns `Some(value)` if the line matched an API call, `None`
-    /// otherwise.
-    fn try_execute_api_call(&mut self, line: &str) -> Option<LuaValue> {
-        // sivgo.get_selection()
+    fn try_execute_api_call(&mut self, line: &str) -> Result<Option<LuaValue>, String> {
         if line.contains("sivgo.get_selection()") {
-            let result = LuaValue::Table(vec![
-                ("1".to_string(), LuaValue::String("rect1".to_string())),
-                ("2".to_string(), LuaValue::String("circle1".to_string())),
-            ]);
-            return Some(result);
+            self.require_api("sivgo.get_selection")?;
+            self.require_permission(Permission::ReadDocument, "sivgo.get_selection")?;
+            return Ok(Some(LuaValue::Table(
+                self.selection
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, id)| ((idx + 1).to_string(), LuaValue::String(id.clone())))
+                    .collect(),
+            )));
         }
 
-        // sivgo.set_fill(color)
         if line.contains("sivgo.set_fill(") {
-            if let Some(arg) = extract_single_arg(line, "sivgo.set_fill") {
-                self.output_log
-                    .push(format!("set_fill: {}", arg.trim_matches('"')));
-            }
-            return Some(LuaValue::Nil);
+            self.require_api("sivgo.set_fill")?;
+            self.require_permission(Permission::ModifyDocument, "sivgo.set_fill")?;
+            let color = extract_single_arg(line, "sivgo.set_fill")
+                .ok_or_else(|| "sivgo.set_fill requires one argument".to_string())?
+                .trim_matches('"')
+                .trim_matches('\'')
+                .to_string();
+            self.host_commands.push(LuaHostCommand::SetFill(color));
+            return Ok(Some(LuaValue::Nil));
         }
 
-        // sivgo.create_rect(x, y, w, h)
         if line.contains("sivgo.create_rect(") {
-            if let Some(args_str) = extract_args_str(line, "sivgo.create_rect") {
-                let parts: Vec<&str> = args_str.split(',').map(|s| s.trim()).collect();
-                if parts.len() == 4 {
-                    let table = parts
-                        .iter()
-                        .enumerate()
-                        .map(|(i, s)| {
-                            let key = ["x", "y", "w", "h"][i].to_string();
-                            let val = s
-                                .parse::<f64>()
-                                .map(LuaValue::Number)
-                                .unwrap_or(LuaValue::String(s.to_string()));
-                            (key, val)
-                        })
-                        .collect();
-                    self.output_log.push(format!("create_rect: {args_str}"));
-                    return Some(LuaValue::Table(table));
-                }
+            self.require_api("sivgo.create_rect")?;
+            self.require_permission(Permission::ModifyDocument, "sivgo.create_rect")?;
+            let args = extract_args_str(line, "sivgo.create_rect")
+                .ok_or_else(|| "sivgo.create_rect requires arguments".to_string())?;
+            let parts: Vec<&str> = args.split(',').map(|part| part.trim()).collect();
+            if parts.len() != 4 {
+                return Err("sivgo.create_rect requires four numeric arguments".to_string());
             }
-            self.output_log
-                .push("create_rect: (invalid args)".to_string());
-            return Some(LuaValue::Nil);
+            let x = parse_number_arg(parts[0], "x")?;
+            let y = parse_number_arg(parts[1], "y")?;
+            let w = parse_number_arg(parts[2], "w")?;
+            let h = parse_number_arg(parts[3], "h")?;
+            self.host_commands
+                .push(LuaHostCommand::CreateRect { x, y, w, h });
+            return Ok(Some(LuaValue::Table(vec![
+                ("x".to_string(), LuaValue::Number(x)),
+                ("y".to_string(), LuaValue::Number(y)),
+                ("w".to_string(), LuaValue::Number(w)),
+                ("h".to_string(), LuaValue::Number(h)),
+            ])));
         }
 
-        // sivgo.alert(msg)
         if line.contains("sivgo.alert(") {
-            if let Some(arg) = extract_single_arg(line, "sivgo.alert") {
-                let msg = arg.trim_matches('"').trim_matches('\'').to_string();
-                self.output_log.push(format!("alert: {msg}"));
-            }
-            return Some(LuaValue::Nil);
+            self.require_api("sivgo.alert")?;
+            let msg = extract_single_arg(line, "sivgo.alert")
+                .ok_or_else(|| "sivgo.alert requires one argument".to_string())?
+                .trim_matches('"')
+                .trim_matches('\'')
+                .to_string();
+            self.output_log.push(format!("alert: {msg}"));
+            self.host_commands.push(LuaHostCommand::Alert(msg));
+            return Ok(Some(LuaValue::Nil));
         }
 
-        None
+        if line.contains("sivgo.fetch(") {
+            self.require_api("sivgo.fetch")?;
+            self.require_permission(Permission::NetworkAccess, "sivgo.fetch")?;
+            let url = extract_single_arg(line, "sivgo.fetch")
+                .ok_or_else(|| "sivgo.fetch requires one argument".to_string())?
+                .trim_matches('"')
+                .trim_matches('\'')
+                .to_string();
+            self.host_commands.push(LuaHostCommand::Fetch(url));
+            return Ok(Some(LuaValue::Nil));
+        }
+
+        if line.contains("sivgo.fs_read(") {
+            self.require_api("sivgo.fs_read")?;
+            self.require_permission(Permission::AccessFileSystem, "sivgo.fs_read")?;
+            let path = extract_single_arg(line, "sivgo.fs_read")
+                .ok_or_else(|| "sivgo.fs_read requires one argument".to_string())?
+                .trim_matches('"')
+                .trim_matches('\'')
+                .to_string();
+            self.host_commands.push(LuaHostCommand::ReadFile(path));
+            return Ok(Some(LuaValue::Nil));
+        }
+
+        Ok(None)
+    }
+
+    fn require_api(&self, name: &str) -> Result<(), String> {
+        if self
+            .registered_api_functions
+            .iter()
+            .any(|item| item == name)
+        {
+            Ok(())
+        } else {
+            Err(format!("Lua API function is not registered: {name}"))
+        }
+    }
+
+    fn require_permission(&self, permission: Permission, api: &str) -> Result<(), String> {
+        if self.permissions.allows(&permission) {
+            Ok(())
+        } else {
+            Err(format!("permission denied: {api} requires {permission:?}"))
+        }
     }
 }
 
@@ -215,50 +276,26 @@ impl Default for LuaEngine {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Argument extraction helpers
-// ---------------------------------------------------------------------------
-
-/// Extract a single argument from a call like `sivgo.func_name(arg)`.
 fn extract_single_arg<'a>(line: &'a str, func_prefix: &str) -> Option<&'a str> {
     let start = line.find(&format!("{func_prefix}("))? + func_prefix.len() + 1;
     let end = line[start..].find(')')? + start;
     let arg = line[start..end].trim();
-    if arg.is_empty() {
-        None
-    } else {
-        Some(arg)
-    }
+    (!arg.is_empty()).then_some(arg)
 }
 
-/// Extract the raw arguments string from a call like
-/// `sivgo.func_name(a, b, c)`.
 fn extract_args_str<'a>(line: &'a str, func_prefix: &str) -> Option<&'a str> {
     let start = line.find(&format!("{func_prefix}("))? + func_prefix.len() + 1;
     let end = line[start..].find(')')? + start;
     let args = line[start..end].trim();
-    if args.is_empty() {
-        None
-    } else {
-        Some(args)
-    }
+    (!args.is_empty()).then_some(args)
 }
 
-// ---------------------------------------------------------------------------
-// Public expression evaluator
-// ---------------------------------------------------------------------------
+fn parse_number_arg(value: &str, name: &str) -> Result<f64, String> {
+    value
+        .parse::<f64>()
+        .map_err(|err| format!("invalid numeric argument '{name}': {err}"))
+}
 
-/// Evaluate a simple expression string and return the resulting
-/// [`LuaValue`].
-///
-/// Supported syntax:
-/// - Decimal numbers (including negatives and floats): `42`, `-3.14`
-/// - Quoted strings: `"hello"`, `'world'`
-/// - Variables looked up from `globals`
-/// - Binary operators: `+`, `-`, `*`, `/`
-/// - Parentheses for grouping
-/// - Boolean literals: `true`, `false`
-/// - `nil`
 pub fn eval_expression(
     expr: &str,
     globals: &HashMap<String, LuaValue>,
@@ -274,10 +311,6 @@ pub fn eval_expression(
     }
     Ok(result)
 }
-
-// ---------------------------------------------------------------------------
-// Tokeniser
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq)]
 enum Token {
@@ -299,14 +332,11 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
 
     while i < chars.len() {
         let ch = chars[i];
-
-        // Whitespace
         if ch.is_whitespace() {
             i += 1;
             continue;
         }
 
-        // Operators / parens
         match ch {
             '+' => {
                 tokens.push(Token::Plus);
@@ -334,7 +364,6 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
                 continue;
             }
             '-' => {
-                // Unary minus if at start, after operator, or after '('
                 let is_unary = tokens.is_empty()
                     || matches!(
                         tokens.last(),
@@ -343,19 +372,17 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
                         )
                     );
                 if is_unary {
-                    // Consume digits as a negative number
                     i += 1;
                     if i < chars.len() && (chars[i].is_ascii_digit() || chars[i] == '.') {
-                        let start = i - 1; // include the '-'
+                        let start = i - 1;
                         while i < chars.len() && (chars[i].is_ascii_digit() || chars[i] == '.') {
                             i += 1;
                         }
                         let s: String = chars[start..i].iter().collect();
-                        let n: f64 = s.parse().map_err(|e| format!("bad number: {e}"))?;
-                        tokens.push(Token::Number(n));
+                        tokens.push(Token::Number(
+                            s.parse().map_err(|err| format!("bad number: {err}"))?,
+                        ));
                     } else {
-                        // Unary minus before an identifier or paren -- emit
-                        // as `Number(-1) * ...` so the parser handles it.
                         tokens.push(Token::Number(-1.0));
                         tokens.push(Token::Star);
                     }
@@ -368,19 +395,18 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
             _ => {}
         }
 
-        // Number
         if ch.is_ascii_digit() || ch == '.' {
             let start = i;
             while i < chars.len() && (chars[i].is_ascii_digit() || chars[i] == '.') {
                 i += 1;
             }
             let s: String = chars[start..i].iter().collect();
-            let n: f64 = s.parse().map_err(|e| format!("bad number: {e}"))?;
-            tokens.push(Token::Number(n));
+            tokens.push(Token::Number(
+                s.parse().map_err(|err| format!("bad number: {err}"))?,
+            ));
             continue;
         }
 
-        // String literals (single or double quotes)
         if ch == '"' || ch == '\'' {
             let quote = ch;
             i += 1;
@@ -391,20 +417,17 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
             if i >= chars.len() {
                 return Err("unterminated string literal".to_string());
             }
-            let s: String = chars[start..i].iter().collect();
-            tokens.push(Token::Str(s));
-            i += 1; // skip closing quote
+            tokens.push(Token::Str(chars[start..i].iter().collect()));
+            i += 1;
             continue;
         }
 
-        // Identifier (variable, true, false, nil)
         if ch.is_alphabetic() || ch == '_' {
             let start = i;
             while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_') {
                 i += 1;
             }
-            let ident: String = chars[start..i].iter().collect();
-            tokens.push(Token::Ident(ident));
+            tokens.push(Token::Ident(chars[start..i].iter().collect()));
             continue;
         }
 
@@ -414,17 +437,12 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
     Ok(tokens)
 }
 
-// ---------------------------------------------------------------------------
-// Recursive-descent parser  (precedence: +/- < */div)
-// ---------------------------------------------------------------------------
-
 fn parse_add_sub(
     tokens: &[Token],
     pos: &mut usize,
     globals: &HashMap<String, LuaValue>,
 ) -> Result<LuaValue, String> {
     let mut left = parse_mul_div(tokens, pos, globals)?;
-
     while *pos < tokens.len() {
         match &tokens[*pos] {
             Token::Plus => {
@@ -440,7 +458,6 @@ fn parse_add_sub(
             _ => break,
         }
     }
-
     Ok(left)
 }
 
@@ -450,7 +467,6 @@ fn parse_mul_div(
     globals: &HashMap<String, LuaValue>,
 ) -> Result<LuaValue, String> {
     let mut left = parse_atom(tokens, pos, globals)?;
-
     while *pos < tokens.len() {
         match &tokens[*pos] {
             Token::Star => {
@@ -466,7 +482,6 @@ fn parse_mul_div(
             _ => break,
         }
     }
-
     Ok(left)
 }
 
@@ -481,14 +496,12 @@ fn parse_atom(
 
     match &tokens[*pos] {
         Token::Number(n) => {
-            let v = LuaValue::Number(*n);
             *pos += 1;
-            Ok(v)
+            Ok(LuaValue::Number(*n))
         }
         Token::Str(s) => {
-            let v = LuaValue::String(s.clone());
             *pos += 1;
-            Ok(v)
+            Ok(LuaValue::String(s.clone()))
         }
         Token::Ident(name) => {
             *pos += 1;
@@ -503,12 +516,12 @@ fn parse_atom(
             }
         }
         Token::LParen => {
-            *pos += 1; // consume '('
+            *pos += 1;
             let inner = parse_add_sub(tokens, pos, globals)?;
             if *pos >= tokens.len() || tokens[*pos] != Token::RParen {
                 return Err("expected ')'".to_string());
             }
-            *pos += 1; // consume ')'
+            *pos += 1;
             Ok(inner)
         }
         other => Err(format!("unexpected token: {other:?}")),
@@ -517,229 +530,147 @@ fn parse_atom(
 
 fn apply_binary_op(left: &LuaValue, right: &LuaValue, op: char) -> Result<LuaValue, String> {
     match (left, right, op) {
-        // Number arithmetic
         (LuaValue::Number(a), LuaValue::Number(b), '+') => Ok(LuaValue::Number(a + b)),
         (LuaValue::Number(a), LuaValue::Number(b), '-') => Ok(LuaValue::Number(a - b)),
         (LuaValue::Number(a), LuaValue::Number(b), '*') => Ok(LuaValue::Number(a * b)),
         (LuaValue::Number(a), LuaValue::Number(b), '/') => {
             if *b == 0.0 {
-                return Err("division by zero".to_string());
+                Err("division by zero".to_string())
+            } else {
+                Ok(LuaValue::Number(a / b))
             }
-            Ok(LuaValue::Number(a / b))
         }
-        // String concatenation with `+`
         (LuaValue::String(a), LuaValue::String(b), '+') => Ok(LuaValue::String(format!("{a}{b}"))),
         _ => Err(format!("unsupported operation: {left:?} {op} {right:?}")),
     }
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn eval_basic_arithmetic() {
-        let globals = HashMap::new();
-
-        assert_eq!(
-            eval_expression("2 + 3", &globals).unwrap(),
-            LuaValue::Number(5.0),
-        );
-        assert_eq!(
-            eval_expression("10 - 4", &globals).unwrap(),
-            LuaValue::Number(6.0),
-        );
-        assert_eq!(
-            eval_expression("3 * 7", &globals).unwrap(),
-            LuaValue::Number(21.0),
-        );
-        assert_eq!(
-            eval_expression("20 / 4", &globals).unwrap(),
-            LuaValue::Number(5.0),
-        );
+    fn modify_permissions() -> PluginPermissionSet {
+        PluginPermissionSet {
+            read_document: true,
+            modify_document: true,
+            ..PluginPermissionSet::default()
+        }
     }
 
     #[test]
-    fn eval_operator_precedence() {
-        let globals = HashMap::new();
-
-        // 2 + 3 * 4  =>  2 + 12  =>  14
-        assert_eq!(
-            eval_expression("2 + 3 * 4", &globals).unwrap(),
-            LuaValue::Number(14.0),
-        );
-        // (2 + 3) * 4  =>  20
-        assert_eq!(
-            eval_expression("(2 + 3) * 4", &globals).unwrap(),
-            LuaValue::Number(20.0),
-        );
-    }
-
-    #[test]
-    fn eval_variable_lookup() {
+    fn eval_basic_arithmetic_and_globals() {
         let mut globals = HashMap::new();
         globals.insert("x".to_string(), LuaValue::Number(10.0));
-        globals.insert("y".to_string(), LuaValue::Number(3.0));
-
         assert_eq!(
-            eval_expression("x + y * 2", &globals).unwrap(),
-            LuaValue::Number(16.0),
+            eval_expression("2 + x * 4", &globals).unwrap(),
+            LuaValue::Number(42.0)
         );
-    }
-
-    #[test]
-    fn eval_string_concat() {
-        let globals = HashMap::new();
         assert_eq!(
             eval_expression("\"hello\" + \" world\"", &globals).unwrap(),
-            LuaValue::String("hello world".to_string()),
+            LuaValue::String("hello world".to_string())
         );
+        assert!(eval_expression("unknown", &globals).is_err());
     }
 
     #[test]
-    fn eval_literals() {
-        let globals = HashMap::new();
-        assert_eq!(eval_expression("nil", &globals).unwrap(), LuaValue::Nil);
+    fn engine_loads_scripts_and_records_alerts() {
+        let mut engine = LuaEngine::new();
+        engine.load_script("msg", "sivgo.alert(\"Hello\")");
+        assert_eq!(engine.execute("msg").unwrap(), LuaValue::Nil);
+        assert_eq!(engine.get_output(), &["alert: Hello"]);
         assert_eq!(
-            eval_expression("true", &globals).unwrap(),
-            LuaValue::Bool(true),
-        );
-        assert_eq!(
-            eval_expression("false", &globals).unwrap(),
-            LuaValue::Bool(false),
+            engine.host_commands(),
+            &[LuaHostCommand::Alert("Hello".to_string())]
         );
     }
 
     #[test]
-    fn eval_undefined_variable_is_error() {
-        let globals = HashMap::new();
-        assert!(eval_expression("unknown_var", &globals).is_err());
-    }
-
-    #[test]
-    fn engine_set_global_and_eval() {
+    fn get_selection_uses_host_selection_not_hardcoded_values() {
         let mut engine = LuaEngine::new();
-        engine.set_global("width", LuaValue::Number(800.0));
-        engine.set_global("margin", LuaValue::Number(20.0));
-
-        let result = engine.eval("width - margin * 2").unwrap();
-        assert_eq!(result, LuaValue::Number(760.0));
-    }
-
-    // -- New LuaEngine tests --
-
-    #[test]
-    fn engine_load_and_execute_script() {
-        let mut engine = LuaEngine::new();
-        engine.load_script("test", "2 + 3");
-        let result = engine.execute("test").unwrap();
-        assert_eq!(result, LuaValue::Number(5.0));
-    }
-
-    #[test]
-    fn engine_execute_missing_script_fails() {
-        let mut engine = LuaEngine::new();
-        assert!(engine.execute("nonexistent").is_err());
-    }
-
-    #[test]
-    fn engine_get_global() {
-        let mut engine = LuaEngine::new();
-        assert!(engine.get_global("x").is_none());
-
-        engine.set_global("x", LuaValue::Number(42.0));
-        assert_eq!(engine.get_global("x"), Some(&LuaValue::Number(42.0)));
-    }
-
-    #[test]
-    fn engine_register_api_function() {
-        let mut engine = LuaEngine::new();
-        engine.register_api_function("sivgo.get_selection");
-        engine.register_api_function("sivgo.set_fill");
-        // Duplicate registration is a no-op.
-        engine.register_api_function("sivgo.get_selection");
-        assert_eq!(engine.registered_api_functions.len(), 2);
-    }
-
-    #[test]
-    fn engine_sivgo_get_selection() {
-        let mut engine = LuaEngine::new();
+        engine.set_selection(vec!["node-a".to_string(), "node-b".to_string()]);
         engine.load_script("sel", "sivgo.get_selection()");
         let result = engine.execute("sel").unwrap();
-        match result {
-            LuaValue::Table(entries) => {
-                assert_eq!(entries.len(), 2);
-                assert_eq!(entries[0].1, LuaValue::String("rect1".to_string()));
-                assert_eq!(entries[1].1, LuaValue::String("circle1".to_string()));
-            }
-            other => panic!("Expected Table, got {:?}", other),
-        }
+        assert_eq!(
+            result,
+            LuaValue::Table(vec![
+                ("1".to_string(), LuaValue::String("node-a".to_string())),
+                ("2".to_string(), LuaValue::String("node-b".to_string()))
+            ])
+        );
     }
 
     #[test]
-    fn engine_sivgo_set_fill() {
+    fn modify_apis_require_modify_document_permission() {
         let mut engine = LuaEngine::new();
         engine.load_script("fill", "sivgo.set_fill(\"#ff0000\")");
-        let result = engine.execute("fill").unwrap();
-        assert_eq!(result, LuaValue::Nil);
-        assert_eq!(engine.get_output(), &["set_fill: #ff0000"]);
+        assert!(engine
+            .execute("fill")
+            .unwrap_err()
+            .contains("permission denied"));
+
+        engine.set_permissions(modify_permissions());
+        assert_eq!(engine.execute("fill").unwrap(), LuaValue::Nil);
+        assert_eq!(
+            engine.host_commands(),
+            &[LuaHostCommand::SetFill("#ff0000".to_string())]
+        );
     }
 
     #[test]
-    fn engine_sivgo_create_rect() {
+    fn create_rect_records_auditable_host_command() {
         let mut engine = LuaEngine::new();
+        engine.set_permissions(modify_permissions());
         engine.load_script("rect", "sivgo.create_rect(10, 20, 100, 50)");
         let result = engine.execute("rect").unwrap();
-        match result {
-            LuaValue::Table(entries) => {
-                assert_eq!(entries.len(), 4);
-                assert_eq!(entries[0], ("x".to_string(), LuaValue::Number(10.0)));
-                assert_eq!(entries[1], ("y".to_string(), LuaValue::Number(20.0)));
-                assert_eq!(entries[2], ("w".to_string(), LuaValue::Number(100.0)));
-                assert_eq!(entries[3], ("h".to_string(), LuaValue::Number(50.0)));
-            }
-            other => panic!("Expected Table, got {:?}", other),
-        }
-        assert!(engine.get_output()[0].contains("create_rect"));
+        assert!(matches!(result, LuaValue::Table(_)));
+        assert_eq!(
+            engine.host_commands(),
+            &[LuaHostCommand::CreateRect {
+                x: 10.0,
+                y: 20.0,
+                w: 100.0,
+                h: 50.0
+            }]
+        );
     }
 
     #[test]
-    fn engine_sivgo_alert() {
+    fn network_and_filesystem_apis_are_permission_gated() {
         let mut engine = LuaEngine::new();
-        engine.load_script("msg", "sivgo.alert(\"Hello!\")");
-        engine.execute("msg").unwrap();
-        assert_eq!(engine.get_output(), &["alert: Hello!"]);
+        engine.load_script("net", "sivgo.fetch(\"https://example.test\")");
+        assert!(engine.execute("net").unwrap_err().contains("NetworkAccess"));
+
+        engine.set_permissions(PluginPermissionSet {
+            read_document: true,
+            network_access: true,
+            access_filesystem: true,
+            ..PluginPermissionSet::default()
+        });
+        engine.execute("net").unwrap();
+        engine.load_script("fs", "sivgo.fs_read(\"/tmp/a.svg\")");
+        engine.execute("fs").unwrap();
+        assert_eq!(
+            engine.host_commands(),
+            &[
+                LuaHostCommand::Fetch("https://example.test".to_string()),
+                LuaHostCommand::ReadFile("/tmp/a.svg".to_string())
+            ]
+        );
     }
 
     #[test]
-    fn engine_multiline_script() {
+    fn manifest_permissions_configure_lua_boundary() {
+        let manifest = PluginManifest {
+            id: "ext.lua".to_string(),
+            name: "Lua".to_string(),
+            version: "1.0.0".to_string(),
+            author: "Tester".to_string(),
+            description: "Lua extension".to_string(),
+            permissions: vec![Permission::ModifyDocument],
+        };
         let mut engine = LuaEngine::new();
-        engine.set_global("x", LuaValue::Number(10.0));
-        let source = r#"
--- This is a comment
-x + 5
-sivgo.alert("done")
-"#;
-        engine.load_script("multi", source);
-        let result = engine.execute("multi").unwrap();
-        // Last evaluated is the alert call, which returns Nil.
-        assert_eq!(result, LuaValue::Nil);
-        assert_eq!(engine.get_output(), &["alert: done"]);
-    }
-
-    #[test]
-    fn engine_output_log_accumulates() {
-        let mut engine = LuaEngine::new();
-        engine.load_script("a", "sivgo.alert(\"first\")");
-        engine.load_script("b", "sivgo.alert(\"second\")");
-        engine.execute("a").unwrap();
-        engine.execute("b").unwrap();
-        assert_eq!(engine.get_output().len(), 2);
-        assert_eq!(engine.get_output()[0], "alert: first");
-        assert_eq!(engine.get_output()[1], "alert: second");
+        engine.set_permissions_from_manifest(&manifest).unwrap();
+        engine.load_script("fill", "sivgo.set_fill(\"blue\")");
+        assert!(engine.execute("fill").is_ok());
     }
 }

@@ -15,6 +15,7 @@
 
 pub mod backend;
 pub mod canvas2d_backend;
+pub mod command_backend;
 pub mod damage;
 pub mod markers;
 pub mod mesh_gradient;
@@ -24,9 +25,14 @@ pub mod tiling;
 pub mod tiny_skia_backend;
 pub mod types;
 pub mod vello_backend;
+pub mod webgpu_backend;
 
 pub use backend::RenderBackend;
 pub use canvas2d_backend::Canvas2dBackend;
+pub use command_backend::{
+    RecordedRenderCommand, RenderBackendCapabilities, RenderBackendStatus, RenderExecutionMode,
+    RenderSurface,
+};
 pub use damage::DamageTracker;
 pub use render_cache::RenderCache;
 pub use renderer::{render_document_to_pixmap, DocumentRenderer};
@@ -37,3 +43,4 @@ pub use types::{
     StrokeStyle,
 };
 pub use vello_backend::VelloBackend;
+pub use webgpu_backend::WebGpuBackend;

@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 /// The full set of user-configurable editor preferences.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -39,7 +40,7 @@ impl Default for UserPreferences {
 /// Thread-safe, in-memory preferences store keyed by user id.
 #[derive(Debug, Clone)]
 pub struct PreferencesStore {
-    prefs: Arc<RwLock<HashMap<String, UserPreferences>>>,
+    prefs: Arc<RwLock<HashMap<Uuid, UserPreferences>>>,
 }
 
 impl PreferencesStore {
@@ -51,16 +52,13 @@ impl PreferencesStore {
     }
 
     /// Get the preferences for a user, or `None` if not yet stored.
-    pub fn get(&self, user_id: &str) -> Option<UserPreferences> {
-        self.prefs.read().unwrap().get(user_id).cloned()
+    pub fn get(&self, user_id: Uuid) -> Option<UserPreferences> {
+        self.prefs.read().unwrap().get(&user_id).cloned()
     }
 
     /// Set (replace) the full preferences for a user.
-    pub fn set(&self, user_id: &str, prefs: UserPreferences) {
-        self.prefs
-            .write()
-            .unwrap()
-            .insert(user_id.to_string(), prefs);
+    pub fn set(&self, user_id: Uuid, prefs: UserPreferences) {
+        self.prefs.write().unwrap().insert(user_id, prefs);
     }
 
     /// Merge a partial JSON value into the existing preferences for a user.
@@ -68,9 +66,9 @@ impl PreferencesStore {
     /// Only the keys present in `partial` are updated; the rest remain
     /// unchanged.  If the user has no stored preferences yet, the defaults
     /// are used as the base.
-    pub fn merge(&self, user_id: &str, partial: serde_json::Value) {
+    pub fn merge(&self, user_id: Uuid, partial: serde_json::Value) {
         let mut store = self.prefs.write().unwrap();
-        let current = store.get(user_id).cloned().unwrap_or_default();
+        let current = store.get(&user_id).cloned().unwrap_or_default();
 
         // Serialize current to JSON, merge, then deserialize back.
         let mut base = serde_json::to_value(&current).unwrap_or(serde_json::Value::Null);
@@ -81,7 +79,7 @@ impl PreferencesStore {
         }
 
         if let Ok(merged) = serde_json::from_value::<UserPreferences>(base) {
-            store.insert(user_id.to_string(), merged);
+            store.insert(user_id, merged);
         }
     }
 }
@@ -99,12 +97,13 @@ mod tests {
     #[test]
     fn get_returns_none_for_unknown_user() {
         let store = PreferencesStore::new();
-        assert!(store.get("unknown").is_none());
+        assert!(store.get(Uuid::new_v4()).is_none());
     }
 
     #[test]
     fn set_and_get_roundtrip() {
         let store = PreferencesStore::new();
+        let user_id = Uuid::new_v4();
         let prefs = UserPreferences {
             theme: "dark".to_string(),
             default_unit: "mm".to_string(),
@@ -115,9 +114,9 @@ mod tests {
             recent_colors: vec!["#ff0000".to_string()],
             custom_shortcuts: vec![("Ctrl+S".to_string(), "save".to_string())],
         };
-        store.set("user-1", prefs.clone());
+        store.set(user_id, prefs.clone());
 
-        let got = store.get("user-1").expect("should exist");
+        let got = store.get(user_id).expect("should exist");
         assert_eq!(got.theme, "dark");
         assert_eq!(got.default_unit, "mm");
         assert!(!got.grid_visible);
@@ -128,16 +127,17 @@ mod tests {
     #[test]
     fn merge_updates_only_specified_fields() {
         let store = PreferencesStore::new();
+        let user_id = Uuid::new_v4();
         // Start with defaults.
-        store.set("user-1", UserPreferences::default());
+        store.set(user_id, UserPreferences::default());
 
         let partial = serde_json::json!({
             "theme": "dark",
             "autosave_interval": 120
         });
-        store.merge("user-1", partial);
+        store.merge(user_id, partial);
 
-        let got = store.get("user-1").unwrap();
+        let got = store.get(user_id).unwrap();
         assert_eq!(got.theme, "dark");
         assert_eq!(got.autosave_interval, 120);
         // Unchanged fields keep their defaults.

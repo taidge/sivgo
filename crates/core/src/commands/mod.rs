@@ -1,23 +1,43 @@
 //! Concrete command implementations.
 
 pub mod add_node;
+pub mod clip_mask;
 pub mod compound;
 pub mod group;
+pub mod guide;
+pub mod merge_layer;
 pub mod modify_attr;
+pub mod modify_element;
+pub mod modify_object_label;
 pub mod modify_path;
+pub mod modify_xml_id;
+pub mod page;
 pub mod remove_node;
 pub mod reorder;
+pub mod reparent_node;
+pub mod route_to_active_layer;
 pub mod set_lock;
 pub mod set_visibility;
 pub mod transform;
+pub mod unlink_clone;
 
 pub use add_node::AddNodeCommand;
+pub use clip_mask::{ClipMaskMode, ReleaseClipMaskCommand, SetClipMaskCommand};
 pub use compound::CompoundCommand;
 pub use group::{GroupCommand, UngroupCommand};
+pub use guide::AddGuideCommand;
+pub use merge_layer::MergeLayerCommand;
 pub use modify_attr::ModifyAttributeCommand;
+pub use modify_element::ModifyElementCommand;
+pub use modify_object_label::ModifyObjectLabelCommand;
 pub use modify_path::ModifyPathCommand;
+pub use modify_xml_id::ModifyXmlIdCommand;
+pub use page::{AddPageCommand, ModifyPageCommand};
 pub use remove_node::RemoveNodeCommand;
 pub use reorder::{ReorderCommand, ReorderDirection};
+pub use reparent_node::ReparentNodeCommand;
+pub use route_to_active_layer::RouteToActiveLayerCommand;
 pub use set_lock::SetLockCommand;
 pub use set_visibility::SetVisibilityCommand;
 pub use transform::TransformCommand;
+pub use unlink_clone::UnlinkCloneCommand;

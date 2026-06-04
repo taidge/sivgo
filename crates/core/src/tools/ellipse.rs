@@ -1,4 +1,4 @@
-﻿//! Ellipse tool: click-drag to create an ellipse or circle.
+//! Ellipse tool: click-drag to create an ellipse or circle.
 
 use sivgo_dom::{CircleAttrs, EllipseAttrs, PresentationAttrs, SvgDocument, SvgElement};
 use sivgo_math::Point;
@@ -7,6 +7,7 @@ use crate::commands::AddNodeCommand;
 use crate::input::{KeyEvent, MouseButton, MouseEvent};
 use crate::selection::SelectionSet;
 use crate::tool::{Tool, ToolResponse};
+use crate::tools::drag::drag_rect;
 use crate::viewport::Viewport;
 
 use sivgo_dom::types::{Color, LengthUnit, Paint, SvgLength};
@@ -86,31 +87,27 @@ impl Tool for EllipseTool {
         };
 
         let end = viewport.screen_to_document(Point::new(event.x, event.y));
-        let circle = event.modifiers.ctrl;
+        let rect = drag_rect(start, end, event.modifiers.ctrl, event.modifiers.shift);
 
-        let dx = (end.x - start.x).abs();
-        let dy = (end.y - start.y).abs();
-
-        if dx < 0.5 && dy < 0.5 {
+        if rect.width() < 0.5 && rect.height() < 0.5 {
             return ToolResponse::None;
         }
 
-        let cx = (start.x + end.x) / 2.0;
-        let cy = (start.y + end.y) / 2.0;
-        let rx = dx / 2.0;
-        let ry = dy / 2.0;
+        let center = rect.center();
+        let rx = rect.width() / 2.0;
+        let ry = rect.height() / 2.0;
 
-        let element = if circle {
+        let element = if event.modifiers.ctrl {
             let r = rx.max(ry);
             SvgElement::Circle(CircleAttrs {
-                cx: SvgLength::new(cx, LengthUnit::None),
-                cy: SvgLength::new(cy, LengthUnit::None),
+                cx: SvgLength::new(center.x, LengthUnit::None),
+                cy: SvgLength::new(center.y, LengthUnit::None),
                 r: SvgLength::new(r, LengthUnit::None),
             })
         } else {
             SvgElement::Ellipse(EllipseAttrs {
-                cx: SvgLength::new(cx, LengthUnit::None),
-                cy: SvgLength::new(cy, LengthUnit::None),
+                cx: SvgLength::new(center.x, LengthUnit::None),
+                cy: SvgLength::new(center.y, LengthUnit::None),
                 rx: SvgLength::new(rx, LengthUnit::None),
                 ry: SvgLength::new(ry, LengthUnit::None),
             })
@@ -152,5 +149,63 @@ impl Tool for EllipseTool {
 
     fn cursor(&self) -> &str {
         "crosshair"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::input::Modifiers;
+    use sivgo_dom::SvgSvgAttrs;
+
+    fn make_doc() -> SvgDocument {
+        let mut doc = SvgDocument::new();
+        let svg_id = doc.add_node(SvgElement::Svg(SvgSvgAttrs::default()));
+        doc.set_root(svg_id);
+        doc
+    }
+
+    fn left_with_mods(x: f64, y: f64, ctrl: bool, shift: bool) -> MouseEvent {
+        MouseEvent {
+            x,
+            y,
+            button: MouseButton::Left,
+            modifiers: Modifiers {
+                ctrl,
+                shift,
+                alt: false,
+            },
+        }
+    }
+
+    #[test]
+    fn ellipse_ctrl_shift_matches_constrained_drag_bounds() {
+        let doc = make_doc();
+        let sel = SelectionSet::new();
+        let vp = Viewport::new(800.0, 600.0);
+        let mut tool = EllipseTool::new();
+
+        tool.on_mouse_down(MouseEvent::left(100.0, 100.0), &doc, &sel, &vp);
+        let resp = tool.on_mouse_up(left_with_mods(120.0, 110.0, true, true), &doc, &sel, &vp);
+
+        match resp {
+            ToolResponse::ExecuteCommand(mut cmd) => {
+                let mut doc = doc;
+                cmd.execute(&mut doc);
+                let root = doc.root().unwrap();
+                let child = doc.children(root)[0];
+                let node = doc.get_node(child).unwrap();
+
+                match &node.element {
+                    SvgElement::Circle(attrs) => {
+                        assert!((attrs.cx.value - 100.0).abs() < 1e-9);
+                        assert!((attrs.cy.value - 100.0).abs() < 1e-9);
+                        assert!((attrs.r.value - 20.0).abs() < 1e-9);
+                    }
+                    _ => panic!("expected constrained ellipse drag to create a circle"),
+                }
+            }
+            _ => panic!("expected ExecuteCommand response from EllipseTool"),
+        }
     }
 }

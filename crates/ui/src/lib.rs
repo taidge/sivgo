@@ -1,4 +1,4 @@
-﻿//! `sivgo-ui` -- Shared Dioxus UI components for the Sivgo SVG editor.
+//! `sivgo-ui` -- Shared Dioxus UI components for the Sivgo SVG editor.
 //!
 //! Provides reusable components used by both the desktop and web targets:
 //!
@@ -15,6 +15,7 @@
 //! * [`statusbar::StatusBarInfo`] -- status bar data model
 //! * [`layers_panel::LayersPanel`] -- layer list with visibility, lock, opacity, blend mode
 //! * [`objects_panel::ObjectsPanel`] -- full object tree view
+//! * [`pages_panel::PagesPanel`] -- multi-page manager
 //! * [`properties_panel::PropertiesPanel`] -- fill/stroke property editor with paint types
 //! * [`align_panel::AlignPanel`] -- alignment and distribution controls
 //! * [`transform_panel::TransformPanel`] -- position, scale, rotate, skew
@@ -60,6 +61,7 @@ pub mod lpe_panel;
 pub mod main_layout;
 pub mod menu_bar;
 pub mod objects_panel;
+pub mod pages_panel;
 pub mod preferences_dialog;
 pub mod properties_panel;
 pub mod resources_panel;
@@ -100,11 +102,12 @@ pub use layers_panel::LayersPanel;
 pub use main_layout::MainLayout;
 pub use menu_bar::MenuBar;
 pub use objects_panel::ObjectsPanel;
+pub use pages_panel::PagesPanel;
 pub use properties_panel::PropertiesPanel;
 pub use rulers::{HorizontalRuler, VerticalRuler};
 pub use scrollbars::{HorizontalScrollbar, VerticalScrollbar};
 pub use status_bar::StatusBar;
-pub use text_panel::TextPanel;
+pub use text_panel::{TextAction, TextPanel};
 pub use tool_controls::{
     GradientKind, NodeType, PenShape, SegmentType, ToolControlAction, ToolControls,
 };
@@ -150,13 +153,13 @@ pub use toolbar_model::{
 // New panel data models
 pub use doc_properties::{DocumentMetadata, GridSettings, PageOrientation, PageSizePreset};
 pub use export_panel::{ExportArea, ExportFormat, ExportSettings};
-pub use filter_editor::{FilterPrimitive, FilterPrimitiveKind};
+pub use filter_editor::{FilterEditorAction, FilterParam, FilterPrimitive, FilterPrimitiveKind};
 pub use find_replace::{FindQuery, FindResult, SearchType};
 pub use font_collections::FontEntry;
 pub use guides_dialog::GuideEntry;
-pub use lpe_panel::{LpeEntry, LpeKind};
+pub use lpe_panel::{LpeAction, LpeEntry, LpeKind, LpeParam};
 pub use preferences_dialog::{PreferencesSection, PreferencesState};
-pub use resources_panel::{ResourceEntry, ResourceKind};
+pub use resources_panel::{ResourceEntry, ResourceKind, ResourcesAction};
 pub use swatches_panel::SwatchEntry;
 pub use symbols_panel::SymbolEntry;
 pub use trace_dialog::{TracingMode, TracingParams};

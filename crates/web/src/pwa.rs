@@ -1,7 +1,7 @@
-﻿//! Progressive Web App (PWA) manifest and service worker generation.
+//! Progressive Web App (PWA) manifest and service worker generation.
 //!
-//! Provides data models for the PWA manifest and helper methods to
-//! generate the JSON manifest and a stub service worker script.
+//! Provides data models for the PWA manifest and helper methods to generate
+//! the JSON manifest and production service worker script.
 
 use serde::{Deserialize, Serialize};
 
@@ -32,6 +32,9 @@ pub struct PwaConfig {
     pub display: String,
     /// Start URL when launched from the home screen.
     pub start_url: String,
+    pub scope: String,
+    pub cache_version: String,
+    pub offline_url: String,
     /// Icons at various resolutions.
     pub icons: Vec<PwaIcon>,
 }
@@ -46,6 +49,9 @@ impl Default for PwaConfig {
             background_color: "#ffffff".to_string(),
             display: "standalone".to_string(),
             start_url: "/".to_string(),
+            scope: "/".to_string(),
+            cache_version: "v1".to_string(),
+            offline_url: "/offline.html".to_string(),
             icons: vec![
                 PwaIcon {
                     src: "/icons/icon-192.png".to_string(),
@@ -87,6 +93,7 @@ impl PwaConfig {
             "background_color": self.background_color,
             "display": self.display,
             "start_url": self.start_url,
+            "scope": self.scope,
             "icons": self.icons.iter().map(|icon| {
                 serde_json::json!({
                     "src": icon.src,
@@ -98,52 +105,91 @@ impl PwaConfig {
         serde_json::to_string_pretty(&manifest).unwrap_or_default()
     }
 
-    /// Generate a stub service worker script.
-    ///
-    /// The generated JavaScript implements a basic cache-first strategy
-    /// for static assets and a network-first strategy for API calls.
     pub fn generate_service_worker(&self) -> String {
+        let static_assets = self
+            .icons
+            .iter()
+            .map(|icon| format!("  '{}'", icon.src))
+            .chain([
+                "  '/'".to_string(),
+                "  '/index.html'".to_string(),
+                format!("  '{}'", self.offline_url),
+                "  '/pkg/sivgo_web_bg.wasm'".to_string(),
+                "  '/pkg/sivgo_web.js'".to_string(),
+            ])
+            .collect::<Vec<_>>()
+            .join(",\n");
         format!(
-            r#"// Sivgo Service Worker (auto-generated stub)
-const CACHE_NAME = 'sivgo-cache-v1';
+            r#"// Sivgo Service Worker (auto-generated)
+const CACHE_VERSION = '{}';
+const STATIC_CACHE = `sivgo-static-${{CACHE_VERSION}}`;
+const RUNTIME_CACHE = `sivgo-runtime-${{CACHE_VERSION}}`;
+const OFFLINE_URL = '{}';
 const STATIC_ASSETS = [
-  '/',
-  '/index.html',
-  '/pkg/sivgo_web_bg.wasm',
-  '/pkg/sivgo_web.js',
-  '/icons/icon-192.png',
-  '/icons/icon-512.png',
+{}
 ];
 
 self.addEventListener('install', (event) => {{
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(STATIC_ASSETS))
+    caches.open(STATIC_CACHE)
+      .then((cache) => cache.addAll(STATIC_ASSETS))
+      .then(() => self.skipWaiting())
   );
 }});
 
 self.addEventListener('activate', (event) => {{
   event.waitUntil(
     caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)))
-    )
+      Promise.all(
+        keys
+          .filter((key) => ![STATIC_CACHE, RUNTIME_CACHE].includes(key))
+          .map((key) => caches.delete(key))
+      )
+    ).then(() => self.clients.claim())
   );
 }});
 
 self.addEventListener('fetch', (event) => {{
   const url = new URL(event.request.url);
   if (url.pathname.startsWith('/api/')) {{
-    // Network-first for API calls.
     event.respondWith(
-      fetch(event.request).catch(() => caches.match(event.request))
+      fetch(event.request)
+        .then((response) => {{
+          const copy = response.clone();
+          caches.open(RUNTIME_CACHE).then((cache) => cache.put(event.request, copy));
+          return response;
+        }})
+        .catch(() => caches.match(event.request))
     );
-  }} else {{
-    // Cache-first for static assets.
+    return;
+  }}
+
+  if (event.request.mode === 'navigate') {{
     event.respondWith(
-      caches.match(event.request).then((cached) => cached || fetch(event.request))
+      fetch(event.request).catch(() => caches.match(OFFLINE_URL))
     );
+    return;
+  }}
+
+  event.respondWith(
+    caches.match(event.request).then((cached) => {{
+      if (cached) return cached;
+      return fetch(event.request).then((response) => {{
+        const copy = response.clone();
+        caches.open(RUNTIME_CACHE).then((cache) => cache.put(event.request, copy));
+        return response;
+      }});
+    }})
+  );
+}});
+
+self.addEventListener('message', (event) => {{
+  if (event.data === 'SKIP_WAITING') {{
+    self.skipWaiting();
   }}
 }});
-"#
+"#,
+            self.cache_version, self.offline_url, static_assets
         )
     }
 }
@@ -165,6 +211,8 @@ mod tests {
         assert_eq!(config.background_color, "#ffffff");
         assert_eq!(config.display, "standalone");
         assert_eq!(config.start_url, "/");
+        assert_eq!(config.scope, "/");
+        assert_eq!(config.offline_url, "/offline.html");
         assert_eq!(config.icons.len(), 2);
     }
 
@@ -185,6 +233,7 @@ mod tests {
         assert_eq!(parsed["short_name"], "Sivgo");
         assert_eq!(parsed["theme_color"], "#1a1a2e");
         assert_eq!(parsed["display"], "standalone");
+        assert_eq!(parsed["scope"], "/");
         assert!(parsed["icons"].is_array());
         assert_eq!(parsed["icons"].as_array().unwrap().len(), 2);
     }
@@ -204,8 +253,8 @@ mod tests {
     fn generate_service_worker_contains_cache() {
         let config = PwaConfig::new();
         let sw = config.generate_service_worker();
-        assert!(sw.contains("CACHE_NAME"));
-        assert!(sw.contains("sivgo-cache-v1"));
+        assert!(sw.contains("STATIC_CACHE"));
+        assert!(sw.contains("RUNTIME_CACHE"));
         assert!(sw.contains("addEventListener"));
         assert!(sw.contains("install"));
         assert!(sw.contains("fetch"));
@@ -216,7 +265,7 @@ mod tests {
         let config = PwaConfig::new();
         let sw = config.generate_service_worker();
         assert!(sw.contains("/api/"));
-        assert!(sw.contains("Network-first"));
-        assert!(sw.contains("Cache-first"));
+        assert!(sw.contains("OFFLINE_URL"));
+        assert!(sw.contains("SKIP_WAITING"));
     }
 }

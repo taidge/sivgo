@@ -27,6 +27,15 @@ pub struct Asset {
     pub created_at: DateTime<Utc>,
 }
 
+/// Binary asset payload for authenticated downloads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssetDownload {
+    pub owner_id: Uuid,
+    pub filename: String,
+    pub content_type: String,
+    pub data: Vec<u8>,
+}
+
 /// Lightweight metadata for an asset, suitable for API responses.
 ///
 /// Does *not* contain the binary data itself.
@@ -100,13 +109,15 @@ impl AssetStore {
     }
 
     /// Download (retrieve) an asset by id.
-    ///
-    /// Returns the binary data and the content type, or `None` if the asset
-    /// does not exist.
-    pub fn download_asset(&self, id: Uuid) -> Option<(Vec<u8>, String)> {
+    pub fn download_asset(&self, id: Uuid) -> Option<AssetDownload> {
         let assets = self.assets.read().unwrap();
         let asset = assets.get(&id)?;
-        Some((asset.data.clone(), asset.content_type.clone()))
+        Some(AssetDownload {
+            owner_id: asset.owner_id,
+            filename: asset.filename.clone(),
+            content_type: asset.content_type.clone(),
+            data: asset.data.clone(),
+        })
     }
 
     /// List all assets owned by a specific user.
@@ -128,44 +139,6 @@ impl AssetStore {
         } else {
             Err(format!("asset {} not found", id))
         }
-    }
-
-    // ------------------------------------------------------------------
-    // Legacy compat helpers (string-based IDs)
-    // ------------------------------------------------------------------
-
-    /// Upload using string-based owner id (legacy compatibility).
-    pub fn upload(
-        &self,
-        owner_id: &str,
-        filename: &str,
-        content_type: &str,
-        data: Vec<u8>,
-    ) -> String {
-        let uid = Uuid::parse_str(owner_id).unwrap_or_else(|_| Uuid::new_v4());
-        let info = self.upload_asset(uid, filename, content_type, data);
-        info.id.to_string()
-    }
-
-    /// Download using string-based id (legacy compatibility).
-    pub fn download(&self, id: &str) -> Option<Asset> {
-        let uid = Uuid::parse_str(id).ok()?;
-        self.assets.read().unwrap().get(&uid).cloned()
-    }
-
-    /// Delete using string-based id (legacy compatibility).
-    pub fn delete(&self, id: &str) -> bool {
-        let uid = match Uuid::parse_str(id) {
-            Ok(u) => u,
-            Err(_) => return false,
-        };
-        self.assets.write().unwrap().remove(&uid).is_some()
-    }
-
-    /// List using string-based owner id (legacy compatibility).
-    pub fn list(&self, owner_id: &str) -> Vec<AssetInfo> {
-        let uid = Uuid::parse_str(owner_id).unwrap_or_else(|_| Uuid::nil());
-        self.list_assets(uid)
     }
 }
 
@@ -195,9 +168,11 @@ mod tests {
         assert_eq!(info.size_bytes, 11);
         assert!(info.url.contains(&info.id.to_string()));
 
-        let (downloaded_data, ct) = store.download_asset(info.id).expect("should exist");
-        assert_eq!(downloaded_data, data);
-        assert_eq!(ct, "text/plain");
+        let download = store.download_asset(info.id).expect("should exist");
+        assert_eq!(download.data, data);
+        assert_eq!(download.content_type, "text/plain");
+        assert_eq!(download.filename, "test.txt");
+        assert_eq!(download.owner_id, owner);
     }
 
     #[test]
@@ -256,45 +231,5 @@ mod tests {
             info.url,
             "/api/v1/assets/550e8400-e29b-41d4-a716-446655440000"
         );
-    }
-
-    // Legacy compat tests
-
-    #[test]
-    fn legacy_upload_and_download() {
-        let store = AssetStore::new();
-        let uid = Uuid::new_v4();
-        let data = b"legacy data".to_vec();
-        let id_str = store.upload(&uid.to_string(), "test.txt", "text/plain", data.clone());
-
-        let asset = store.download(&id_str).expect("should exist");
-        assert_eq!(asset.filename, "test.txt");
-        assert_eq!(asset.data, data);
-    }
-
-    #[test]
-    fn legacy_delete_removes_asset() {
-        let store = AssetStore::new();
-        let uid = Uuid::new_v4();
-        let id = store.upload(&uid.to_string(), "a.png", "image/png", vec![1, 2, 3]);
-        assert!(store.delete(&id));
-        assert!(store.download(&id).is_none());
-        assert!(!store.delete(&id));
-    }
-
-    #[test]
-    fn legacy_list_filters_by_owner() {
-        let store = AssetStore::new();
-        let user1 = Uuid::new_v4();
-        let user2 = Uuid::new_v4();
-        store.upload(&user1.to_string(), "a.png", "image/png", vec![1]);
-        store.upload(&user2.to_string(), "b.png", "image/png", vec![2]);
-        store.upload(&user1.to_string(), "c.png", "image/png", vec![3]);
-
-        let user1_assets = store.list(&user1.to_string());
-        assert_eq!(user1_assets.len(), 2);
-
-        let user2_assets = store.list(&user2.to_string());
-        assert_eq!(user2_assets.len(), 1);
     }
 }

@@ -110,6 +110,7 @@ pub fn FontCollectionsPanel(
                         let font_style = format!("font-family: '{}';", family);
                         rsx! {
                             div {
+                                key: "{family}",
                                 class: "font-item",
                                 onclick: move |_| on_action.call(FontCollectionsAction::SelectFont(family_click.clone())),
 

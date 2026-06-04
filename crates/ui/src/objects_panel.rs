@@ -16,6 +16,15 @@ pub struct ObjectEntry {
     pub selected: bool,
 }
 
+/// Editable details for the primary selected object.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ObjectDetails {
+    pub id: NodeId,
+    pub label: String,
+    pub type_name: String,
+    pub xml_id: String,
+}
+
 /// Events emitted by the objects panel.
 #[derive(Debug, Clone)]
 pub enum ObjectAction {
@@ -25,6 +34,16 @@ pub enum ObjectAction {
     BeginRename(NodeId),
     /// Commit a rename.
     Rename(NodeId, String),
+    /// Commit a serialized SVG id change.
+    SetXmlId(NodeId, String),
+    /// Start dragging an object row.
+    BeginDrag(NodeId),
+    /// End object-row dragging.
+    EndDrag,
+    /// Drop the dragged object onto a target object row.
+    DropOn(NodeId),
+    /// Drop the dragged object at the document root level.
+    DropToRoot,
     /// Toggle visibility of the object.
     ToggleVisibility(NodeId),
     /// Toggle lock state of the object.
@@ -59,12 +78,66 @@ pub fn ObjectsPanel(
     objects: Vec<ObjectEntry>,
     editing_id: Option<NodeId>,
     edit_value: String,
+    selected_details: Option<ObjectDetails>,
+    xml_id_edit_value: String,
     on_action: EventHandler<ObjectAction>,
     on_edit_change: EventHandler<String>,
+    on_xml_id_change: EventHandler<String>,
 ) -> Element {
     rsx! {
         div { class: "objects-panel",
             div { class: "panel-header", "Objects" }
+            div {
+                class: "object-root-drop",
+                ondragover: move |evt| evt.prevent_default(),
+                ondrop: move |evt| {
+                    evt.prevent_default();
+                    on_action.call(ObjectAction::DropToRoot);
+                },
+                "Root level"
+            }
+            if let Some(details) = selected_details.as_ref() {
+                {
+                    let details_id = details.id;
+                    let key_xml_id = xml_id_edit_value.clone();
+                    let blur_xml_id = xml_id_edit_value.clone();
+                    rsx! {
+                        div { class: "prop-section object-properties",
+                            div { class: "prop-section-header", "Properties" }
+                            div { class: "prop-row",
+                                span { class: "prop-label", "Type" }
+                                span { class: "prop-value", "{details.type_name}" }
+                                span { class: "prop-unit", "" }
+                            }
+                            div { class: "prop-row",
+                                span { class: "prop-label", "Label" }
+                                span { class: "prop-value", "{details.label}" }
+                                span { class: "prop-unit", "" }
+                            }
+                            div { class: "prop-row",
+                                span { class: "prop-label", "ID" }
+                                input {
+                                    r#type: "text",
+                                    class: "prop-input",
+                                    value: "{xml_id_edit_value}",
+                                    oninput: move |evt: Event<FormData>| {
+                                        on_xml_id_change.call(evt.value().to_string());
+                                    },
+                                    onkeydown: move |evt: Event<KeyboardData>| {
+                                        if evt.key() == Key::Enter {
+                                            on_action.call(ObjectAction::SetXmlId(details_id, key_xml_id.clone()));
+                                        }
+                                    },
+                                    onblur: move |_| {
+                                        on_action.call(ObjectAction::SetXmlId(details_id, blur_xml_id.clone()));
+                                    },
+                                }
+                                span { class: "prop-unit", "" }
+                            }
+                        }
+                    }
+                }
+            }
             div { class: "objects-tree",
                 for entry in objects.iter() {
                     {
@@ -76,8 +149,17 @@ pub fn ObjectsPanel(
                         let style_str = format!("padding-left: {}px;", indent);
                         rsx! {
                             div {
+                                key: "{entry_id}",
                                 class: if entry.selected { "object-row selected" } else { "object-row" },
                                 style: "{style_str}",
+                                draggable: "true",
+                                ondragstart: move |_| on_action.call(ObjectAction::BeginDrag(entry_id)),
+                                ondragend: move |_| on_action.call(ObjectAction::EndDrag),
+                                ondragover: move |evt| evt.prevent_default(),
+                                ondrop: move |evt| {
+                                    evt.prevent_default();
+                                    on_action.call(ObjectAction::DropOn(entry_id));
+                                },
 
                                 // Type icon
                                 span { class: "object-type-icon", "{icon}" }

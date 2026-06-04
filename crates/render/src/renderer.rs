@@ -1,13 +1,13 @@
-﻿//! Document renderer: walks an `SvgDocument` tree and dispatches drawing
+//! Document renderer: walks an `SvgDocument` tree and dispatches drawing
 //! commands to a `RenderBackend`.
 
 use sivgo_dom::{
-    Align, BlendMode as DomBlendMode, Color, ColorMatrixType as DomColorMatrixType,
-    CompositeOperator as DomCompositeOp, FilterInput, FontStyle as DomFontStyle,
-    FontWeight as DomFontWeight, GradientUnits as DomGradientUnits, MarkerUnits, MeetOrSlice,
-    MorphologyOperator as DomMorphologyOp, NodeId, Orient, Paint, PreserveAspectRatio,
-    SpreadMethod as DomSpreadMethod, SvgDocument, SvgElement, TextAnchor as DomTextAnchor,
-    TextDecoration, TurbulenceType as DomTurbulenceType, ViewBox,
+    Align, BlendMode as DomBlendMode, ChannelSelector as DomChannelSelector, Color,
+    ColorMatrixType as DomColorMatrixType, CompositeOperator as DomCompositeOp, FilterInput,
+    FontStyle as DomFontStyle, FontWeight as DomFontWeight, GradientUnits as DomGradientUnits,
+    MarkerUnits, MeetOrSlice, MorphologyOperator as DomMorphologyOp, NodeId, Orient, Paint,
+    PreserveAspectRatio, SpreadMethod as DomSpreadMethod, SvgDocument, SvgElement,
+    TextAnchor as DomTextAnchor, TextDecoration, TurbulenceType as DomTurbulenceType, ViewBox,
 };
 use sivgo_filters::{FilterBuffer, FilterPipeline, FilterPrimitive};
 use sivgo_math::{BezPath, Point, Rect, Transform2D};
@@ -3350,6 +3350,14 @@ fn build_filter_pipeline(doc: &SvgDocument, filter_node_id: NodeId) -> FilterPip
         let Some(child) = doc.get_node(child_id) else {
             continue;
         };
+        if child
+            .attributes
+            .get("data-sivgo-enabled")
+            .or_else(|| child.attributes.get("sivgo:enabled"))
+            .is_some_and(|value| value == "false" || value == "0")
+        {
+            continue;
+        }
 
         match &child.element {
             SvgElement::FeGaussianBlur(attrs) => {
@@ -3476,6 +3484,45 @@ fn build_filter_pipeline(doc: &SvgDocument, filter_node_id: NodeId) -> FilterPip
                     dy: attrs.dy,
                     std_dev,
                     color,
+                    result: result_name,
+                    sub_region: convert_primitive_region(&attrs.common),
+                });
+            }
+            SvgElement::FeDisplacementMap(attrs) => {
+                let result_name = result_name(&attrs.common.result, &mut auto_idx);
+                pipeline.add(FilterPrimitive::DisplacementMap {
+                    input1: filter_input_to_string(&attrs.input),
+                    input2: filter_input_to_string(&attrs.in2),
+                    scale: attrs.scale.unwrap_or(0.0),
+                    x_channel: convert_channel_selector(attrs.x_channel_selector),
+                    y_channel: convert_channel_selector(attrs.y_channel_selector),
+                    result: result_name,
+                    sub_region: convert_primitive_region(&attrs.common),
+                });
+            }
+            SvgElement::FeConvolveMatrix(attrs) => {
+                let result_name = result_name(&attrs.common.result, &mut auto_idx);
+                let order_x = attrs.order_x.max(1) as u32;
+                let order_y = attrs.order_y.max(1) as u32;
+                let target_x = attrs.target_x.unwrap_or((order_x / 2) as i32).max(0) as u32;
+                let target_y = attrs.target_y.unwrap_or((order_y / 2) as i32).max(0) as u32;
+                let divisor = attrs.divisor.unwrap_or(1.0) as f32;
+                let kernel = attrs
+                    .kernel_matrix
+                    .iter()
+                    .map(|value| *value as f32)
+                    .collect();
+                pipeline.add(FilterPrimitive::ConvolveMatrix {
+                    input: filter_input_to_string(&attrs.input),
+                    kernel,
+                    order_x,
+                    order_y,
+                    divisor,
+                    bias: attrs.bias as f32,
+                    target_x,
+                    target_y,
+                    edge_mode: sivgo_filters::EdgeMode::Duplicate,
+                    preserve_alpha: attrs.preserve_alpha,
                     result: result_name,
                     sub_region: convert_primitive_region(&attrs.common),
                 });
@@ -3747,6 +3794,17 @@ fn convert_composite_op(attrs: &sivgo_dom::FeCompositeAttrs) -> sivgo_filters::C
             k4: attrs.k4 as f32,
         },
         Some(DomCompositeOp::Over) | None => sivgo_filters::CompositeOp::Over,
+    }
+}
+
+fn convert_channel_selector(
+    selector: Option<DomChannelSelector>,
+) -> sivgo_filters::ChannelSelector {
+    match selector {
+        Some(DomChannelSelector::G) => sivgo_filters::ChannelSelector::G,
+        Some(DomChannelSelector::B) => sivgo_filters::ChannelSelector::B,
+        Some(DomChannelSelector::A) => sivgo_filters::ChannelSelector::A,
+        Some(DomChannelSelector::R) | None => sivgo_filters::ChannelSelector::R,
     }
 }
 
@@ -5554,6 +5612,24 @@ mod tests {
         assert_eq!(pixels[center], 0, "R should be 0 (blue flood)");
         assert_eq!(pixels[center + 1], 0, "G should be 0 (blue flood)");
         assert!(pixels[center + 2] > 200, "B should be bright (blue flood)");
+    }
+
+    #[test]
+    fn disabled_filter_primitive_is_skipped() {
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="50" height="50">
+            <defs>
+                <filter id="f1">
+                    <feFlood data-sivgo-enabled="false" flood-color="blue" flood-opacity="1"/>
+                </filter>
+            </defs>
+            <rect x="0" y="0" width="50" height="50" fill="red" filter="url(#f1)"/>
+        </svg>"##;
+        let doc = sivgo_dom::parse_svg(svg).unwrap();
+        let pixels = render_document_to_pixmap(&doc, 50, 50);
+        let center = (25 * 50 + 25) * 4;
+
+        assert!(pixels[center] > 200, "R should remain red");
+        assert!(pixels[center + 2] < 20, "B should not be flood blue");
     }
 
     #[test]

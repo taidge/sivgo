@@ -117,6 +117,7 @@ pub fn SymbolsPanel(
                         let sym_preview = sym.svg_preview.clone();
                         rsx! {
                             div {
+                                key: "{sym_id}",
                                 class: "symbol-item",
                                 title: "{sym_name}",
                                 onclick: move |_| on_action.call(SymbolsAction::InsertSymbol(sym_id.clone())),

@@ -3,9 +3,8 @@
 //! Records every meaningful change as a [`VersionEntry`] and allows querying,
 //! filtering, and (logically) reverting to a previous version.
 
-use std::collections::HashMap;
-
 use super::crdt::CrdtOp;
+use std::collections::HashMap;
 
 // ---------------------------------------------------------------------------
 // ChangeSummary
@@ -68,6 +67,10 @@ pub struct VersionTimeline {
     pub entries: Vec<VersionEntry>,
     /// Index into `entries` pointing at the current "head" version.
     pub current_index: usize,
+    /// Exact CRDT operations applied by each version id.
+    pub operation_log: HashMap<String, Vec<CrdtOp>>,
+    /// Exact inverse operations for rollback by version id.
+    pub inverse_log: HashMap<String, Vec<CrdtOp>>,
 }
 
 impl VersionTimeline {
@@ -76,11 +79,30 @@ impl VersionTimeline {
         Self {
             entries: Vec::new(),
             current_index: 0,
+            operation_log: HashMap::new(),
+            inverse_log: HashMap::new(),
         }
     }
 
     /// Append a new entry to the timeline.
     pub fn add_entry(&mut self, entry: VersionEntry) {
+        self.operation_log.entry(entry.version_id.clone()).or_default();
+        self.inverse_log.entry(entry.version_id.clone()).or_default();
+        self.entries.push(entry);
+        self.current_index = self.entries.len().saturating_sub(1);
+    }
+
+    /// Append a new entry with exact forward and inverse operations.
+    pub fn add_entry_with_ops(
+        &mut self,
+        entry: VersionEntry,
+        operations: Vec<CrdtOp>,
+        inverse_operations: Vec<CrdtOp>,
+    ) {
+        self.operation_log
+            .insert(entry.version_id.clone(), operations);
+        self.inverse_log
+            .insert(entry.version_id.clone(), inverse_operations);
         self.entries.push(entry);
         self.current_index = self.entries.len().saturating_sub(1);
     }
@@ -108,10 +130,6 @@ impl VersionTimeline {
     /// Compute the CRDT operations needed to revert to the version with the
     /// given `version_id`.
     ///
-    /// This is a stub that returns inverse operations for each version entry
-    /// that would be "undone". In a real implementation, each
-    /// [`VersionEntry`] would store the operations it applied so we could
-    /// compute precise inverses.
     pub fn revert_to(&mut self, version_id: &str) -> Vec<CrdtOp> {
         let target_index = self
             .entries
@@ -129,28 +147,13 @@ impl VersionTimeline {
             return Vec::new();
         }
 
-        // Generate stub inverse operations for each entry between current and
-        // target (exclusive).
         let mut inverse_ops = Vec::new();
-        for entry in &self.entries[target_index + 1..=self.current_index] {
-            // For each node added, emit a delete stub; for each removed, an
-            // insert stub, etc.  Since we don't store full op data in the
-            // entry, we produce placeholder operations.
-            for _ in 0..entry.change_summary.nodes_added {
-                inverse_ops.push(CrdtOp::Delete {
-                    site: 0,
-                    clock: 0,
-                    target: super::crdt::OpId::new(0, 0),
-                });
-            }
-            for _ in 0..entry.change_summary.nodes_removed {
-                inverse_ops.push(CrdtOp::Insert {
-                    site: 0,
-                    clock: 0,
-                    parent: None,
-                    node_type: "unknown".into(),
-                    attrs: HashMap::new(),
-                });
+        for entry in self.entries[target_index + 1..=self.current_index]
+            .iter()
+            .rev()
+        {
+            if let Some(ops) = self.inverse_log.get(&entry.version_id) {
+                inverse_ops.extend(ops.iter().cloned());
             }
         }
 
@@ -256,14 +259,44 @@ mod tests {
     fn test_revert_to() {
         let mut tl = VersionTimeline::new();
         tl.add_entry(make_entry("v1", "alice", 1, 0));
-        tl.add_entry(make_entry("v2", "bob", 2, 0));
-        tl.add_entry(make_entry("v3", "alice", 0, 3));
+        tl.add_entry_with_ops(
+            make_entry("v2", "bob", 2, 0),
+            vec![CrdtOp::Insert {
+                site: 2,
+                clock: 1,
+                parent: None,
+                node_type: "rect".into(),
+                attrs: HashMap::new(),
+            }],
+            vec![CrdtOp::Delete {
+                site: 2,
+                clock: 2,
+                target: super::crdt::OpId::new(2, 1),
+            }],
+        );
+        tl.add_entry_with_ops(
+            make_entry("v3", "alice", 0, 3),
+            vec![CrdtOp::Update {
+                site: 1,
+                clock: 2,
+                target: super::crdt::OpId::new(2, 1),
+                key: "fill".into(),
+                value: "blue".into(),
+            }],
+            vec![CrdtOp::Update {
+                site: 1,
+                clock: 3,
+                target: super::crdt::OpId::new(2, 1),
+                key: "fill".into(),
+                value: "red".into(),
+            }],
+        );
         assert_eq!(tl.current_index, 2);
 
         let ops = tl.revert_to("v1");
-        // v2 added 2 nodes => 2 delete stubs
-        // v3 removed 3 nodes => 3 insert stubs
-        assert_eq!(ops.len(), 5);
+        assert_eq!(ops.len(), 2);
+        assert!(matches!(ops[0], CrdtOp::Update { ref value, .. } if value == "red"));
+        assert!(matches!(ops[1], CrdtOp::Delete { .. }));
         assert_eq!(tl.current_index, 0);
     }
 

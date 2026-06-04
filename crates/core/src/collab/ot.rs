@@ -34,6 +34,8 @@ pub enum ConflictResolution {
 /// vice-versa.
 pub fn transform_ops(op1: &CrdtOp, op2: &CrdtOp) -> (CrdtOp, CrdtOp) {
     match (op1, op2) {
+        (CrdtOp::NoOp { .. }, _) | (_, CrdtOp::NoOp { .. }) => (op1.clone(), op2.clone()),
+
         // Two inserts – both survive, order by site id.
         (CrdtOp::Insert { .. }, CrdtOp::Insert { .. }) => {
             (op1.clone(), op2.clone())
@@ -47,10 +49,12 @@ pub fn transform_ops(op1: &CrdtOp, op2: &CrdtOp) -> (CrdtOp, CrdtOp) {
             (op1.clone(), op2.clone())
         }
 
-        // Two deletes on the same target – the second becomes a no-op (we
-        // keep both but semantics mean the second is idempotent).
-        (CrdtOp::Delete { .. }, CrdtOp::Delete { .. }) => {
-            (op1.clone(), op2.clone())
+        (CrdtOp::Delete { target: t1, .. }, CrdtOp::Delete { target: t2, .. }) if t1 == t2 => {
+            if op_wins(op1, op2) {
+                (op1.clone(), noop_like(op2, "duplicate delete"))
+            } else {
+                (noop_like(op1, "duplicate delete"), op2.clone())
+            }
         }
 
         // Two updates to the same target & key – higher site wins, the other
@@ -64,11 +68,10 @@ pub fn transform_ops(op1: &CrdtOp, op2: &CrdtOp) -> (CrdtOp, CrdtOp) {
                 target: t2, key: k2, ..
             },
         ) if t1 == t2 && k1 == k2 => {
-            // Last-writer-wins based on site id (higher site wins).
-            if op1.site() >= op2.site() {
-                (op1.clone(), op1.clone())
+            if op_wins(op1, op2) {
+                (op1.clone(), noop_like(op2, "same attribute superseded"))
             } else {
-                (op2.clone(), op2.clone())
+                (noop_like(op1, "same attribute superseded"), op2.clone())
             }
         }
 
@@ -76,16 +79,44 @@ pub fn transform_ops(op1: &CrdtOp, op2: &CrdtOp) -> (CrdtOp, CrdtOp) {
         (CrdtOp::Update { target, .. }, CrdtOp::Delete { target: dt, .. })
             if target == dt =>
         {
-            (op2.clone(), op2.clone())
+            (noop_like(op1, "target deleted"), op2.clone())
         }
         (CrdtOp::Delete { target: dt, .. }, CrdtOp::Update { target, .. })
             if dt == target =>
         {
-            (op1.clone(), op1.clone())
+            (op1.clone(), noop_like(op2, "target deleted"))
         }
 
         // All other combinations – operations are independent, pass through.
         _ => (op1.clone(), op2.clone()),
+    }
+}
+
+/// Transform a batch of local operations against a batch of remote operations.
+pub fn transform_batch(local: &[CrdtOp], remote: &[CrdtOp]) -> (Vec<CrdtOp>, Vec<CrdtOp>) {
+    let mut transformed_local = local.to_vec();
+    let mut transformed_remote = remote.to_vec();
+
+    for local_op in &mut transformed_local {
+        for remote_op in &mut transformed_remote {
+            let (left, right) = transform_ops(local_op, remote_op);
+            *local_op = left;
+            *remote_op = right;
+        }
+    }
+
+    (transformed_local, transformed_remote)
+}
+
+fn op_wins(left: &CrdtOp, right: &CrdtOp) -> bool {
+    left.clock() > right.clock() || (left.clock() == right.clock() && left.site() >= right.site())
+}
+
+fn noop_like(op: &CrdtOp, reason: &str) -> CrdtOp {
+    CrdtOp::NoOp {
+        site: op.site(),
+        clock: op.clock(),
+        reason: reason.to_string(),
     }
 }
 
@@ -238,7 +269,7 @@ mod tests {
         let op1 = make_delete(1, 2, target);
         let op2 = make_delete(2, 2, target);
         let (t1, t2) = transform_ops(&op1, &op2);
-        assert_eq!(t1, op1);
+        assert!(matches!(t1, CrdtOp::NoOp { .. }));
         assert_eq!(t2, op2);
     }
 
@@ -249,7 +280,7 @@ mod tests {
         let op2 = make_update(2, 3, target, "fill", "#00ff00");
         let (t1, t2) = transform_ops(&op1, &op2);
         // Site 2 is higher, so op2 wins.
-        assert_eq!(t1, op2);
+        assert!(matches!(t1, CrdtOp::NoOp { .. }));
         assert_eq!(t2, op2);
     }
 
@@ -260,7 +291,7 @@ mod tests {
         let op2 = make_delete(2, 3, target);
         let (t1, t2) = transform_ops(&op1, &op2);
         // Delete wins.
-        assert_eq!(t1, op2);
+        assert!(matches!(t1, CrdtOp::NoOp { .. }));
         assert_eq!(t2, op2);
     }
 
@@ -341,5 +372,15 @@ mod tests {
             resolve_conflict(&op1, &op2),
             ConflictResolution::KeepLocal
         );
+    }
+
+    #[test]
+    fn test_transform_batch_suppresses_conflicting_local_ops() {
+        let target = OpId::new(5, 1);
+        let local = vec![make_update(1, 2, target, "fill", "red")];
+        let remote = vec![make_delete(2, 2, target)];
+        let (local, remote) = transform_batch(&local, &remote);
+        assert!(matches!(local[0], CrdtOp::NoOp { .. }));
+        assert!(matches!(remote[0], CrdtOp::Delete { .. }));
     }
 }

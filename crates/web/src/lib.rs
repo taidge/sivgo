@@ -32,5 +32,8 @@ pub mod oauth;
 pub mod openapi;
 pub mod plugin_registry;
 pub mod preferences;
+pub mod pwa;
 pub mod router;
+pub mod share_dialog;
 pub mod store;
+pub mod web_file;

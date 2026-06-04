@@ -1,7 +1,7 @@
-﻿//! Selection set for tracking which nodes are selected in the editor.
+//! Selection set for tracking which nodes are selected in the editor.
 
-use sivgo_dom::{NodeId, SvgDocument, SvgElement};
-use sivgo_math::Rect;
+use sivgo_dom::{Box3dAttrs, NodeId, SvgDocument, SvgElement};
+use sivgo_math::{Rect, Transform2D};
 
 /// An ordered set of selected node ids.
 #[derive(Debug, Clone, Default)]
@@ -167,28 +167,50 @@ impl SelectionSet {
 
     /// Compute the union bounding box of all selected elements.
     ///
-    /// This is a simplified version that uses element geometry directly.
+    /// This uses element geometry transformed into document space.
     pub fn bounding_box(&self, doc: &SvgDocument) -> Option<Rect> {
         let mut result: Option<Rect> = None;
         for &id in &self.selected {
-            if let Some(node) = doc.get_node(id) {
-                let bb = element_bounding_box(&node.element);
-                if let Some(bb) = bb {
-                    result = Some(match result {
-                        Some(r) => r.union(bb),
-                        None => bb,
-                    });
-                }
+            if let Some(bb) = node_bounding_box(doc, id) {
+                result = Some(match result {
+                    Some(r) => r.union(bb),
+                    None => bb,
+                });
             }
         }
         result
     }
 }
 
+/// Compute a node's local element bounds transformed into document space.
+pub fn node_bounding_box(doc: &SvgDocument, id: NodeId) -> Option<Rect> {
+    let node = doc.get_node(id)?;
+    let bb = element_bounding_box(&node.element)?;
+    Some(node_transform(doc, id).transform_rect(bb))
+}
+
+/// Compute the cumulative transform from the document root to a node.
+pub fn node_transform(doc: &SvgDocument, id: NodeId) -> Transform2D {
+    let mut chain = Vec::new();
+    let mut current = Some(id);
+    while let Some(node_id) = current {
+        chain.push(node_id);
+        current = doc.parent(node_id);
+    }
+
+    chain
+        .into_iter()
+        .rev()
+        .filter_map(|node_id| {
+            doc.get_node(node_id)
+                .and_then(|node| node.presentation.transform)
+        })
+        .fold(Transform2D::IDENTITY, |acc, local| acc.then(&local))
+}
+
 /// Simple bounding box computation for individual elements.
 ///
-/// This is a simplified version for Phase 3 -- a full implementation would
-/// incorporate transforms and descend into groups.
+/// The returned bounds are in the element's local coordinate space.
 pub fn element_bounding_box(element: &SvgElement) -> Option<Rect> {
     match element {
         SvgElement::Rect(a) => Some(Rect::new(
@@ -217,6 +239,8 @@ pub fn element_bounding_box(element: &SvgElement) -> Option<Rect> {
             let y1 = a.y1.value.max(a.y2.value);
             Some(Rect::new(x0, y0, x1, y1))
         }
+        SvgElement::Polyline(a) => point_list_bounding_box(&a.points),
+        SvgElement::Polygon(a) => point_list_bounding_box(&a.points),
         SvgElement::Path(a) => {
             let bb = a.d.bounding_box();
             if bb.is_empty() {
@@ -225,15 +249,104 @@ pub fn element_bounding_box(element: &SvgElement) -> Option<Rect> {
                 Some(bb)
             }
         }
+        SvgElement::Image(a) => rect_from_xywh(
+            a.x.as_ref().map_or(0.0, |l| l.to_px()),
+            a.y.as_ref().map_or(0.0, |l| l.to_px()),
+            a.width.as_ref().map_or(0.0, |l| l.to_px()),
+            a.height.as_ref().map_or(0.0, |l| l.to_px()),
+        ),
+        SvgElement::Use(a) => rect_from_xywh(
+            a.x.as_ref().map_or(0.0, |l| l.to_px()),
+            a.y.as_ref().map_or(0.0, |l| l.to_px()),
+            a.width.as_ref().map_or(0.0, |l| l.to_px()),
+            a.height.as_ref().map_or(0.0, |l| l.to_px()),
+        ),
+        SvgElement::Text(a) => {
+            let font_size = a.font_size.as_ref().map_or(16.0, |l| l.to_px()).max(1.0);
+            let x =
+                a.x.first().map_or(0.0, |l| l.to_px()) + a.dx.first().map_or(0.0, |l| l.to_px());
+            let y =
+                a.y.first().map_or(0.0, |l| l.to_px()) + a.dy.first().map_or(0.0, |l| l.to_px());
+            let width =
+                (a.text_content.chars().count() as f64 * font_size * 0.6).max(font_size * 0.5);
+            Some(Rect::new(x, y - font_size, x + width, y))
+        }
+        SvgElement::TSpan(a) => {
+            let font_size = a.font_size.as_ref().map_or(16.0, |l| l.to_px()).max(1.0);
+            let x =
+                a.x.first().map_or(0.0, |l| l.to_px()) + a.dx.first().map_or(0.0, |l| l.to_px());
+            let y =
+                a.y.first().map_or(0.0, |l| l.to_px()) + a.dy.first().map_or(0.0, |l| l.to_px());
+            let width =
+                (a.text_content.chars().count() as f64 * font_size * 0.6).max(font_size * 0.5);
+            Some(Rect::new(x, y - font_size, x + width, y))
+        }
+        SvgElement::Box3d(a) => box3d_bounding_box(a),
         _ => None,
     }
+}
+
+fn box3d_bounding_box(attrs: &Box3dAttrs) -> Option<Rect> {
+    let corners = [
+        attrs.corner0.as_deref(),
+        attrs.corner1.as_deref(),
+        attrs.corner2.as_deref(),
+        attrs.corner3.as_deref(),
+        attrs.corner4.as_deref(),
+        attrs.corner5.as_deref(),
+        attrs.corner6.as_deref(),
+        attrs.corner7.as_deref(),
+    ];
+
+    let mut bounds: Option<(f64, f64, f64, f64)> = None;
+    for corner in corners.into_iter().flatten() {
+        let Some((x, y)) = parse_box3d_corner(corner) else {
+            continue;
+        };
+        bounds = Some(match bounds {
+            Some((min_x, min_y, max_x, max_y)) => {
+                (min_x.min(x), min_y.min(y), max_x.max(x), max_y.max(y))
+            }
+            None => (x, y, x, y),
+        });
+    }
+
+    bounds.map(|(min_x, min_y, max_x, max_y)| Rect::new(min_x, min_y, max_x, max_y))
+}
+
+fn parse_box3d_corner(value: &str) -> Option<(f64, f64)> {
+    let (x, y) = value.trim().split_once(',')?;
+    Some((x.trim().parse().ok()?, y.trim().parse().ok()?))
+}
+
+fn rect_from_xywh(x: f64, y: f64, width: f64, height: f64) -> Option<Rect> {
+    if width <= 0.0 || height <= 0.0 {
+        return None;
+    }
+    Some(Rect::new(x, y, x + width, y + height))
+}
+
+fn point_list_bounding_box(points: &[(f64, f64)]) -> Option<Rect> {
+    let mut iter = points.iter();
+    let (mut min_x, mut min_y) = *iter.next()?;
+    let mut max_x = min_x;
+    let mut max_y = min_y;
+
+    for &(x, y) in iter {
+        min_x = min_x.min(x);
+        min_y = min_y.min(y);
+        max_x = max_x.max(x);
+        max_y = max_y.max(y);
+    }
+
+    Some(Rect::new(min_x, min_y, max_x, max_y))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use sivgo_dom::types::{LengthUnit, SvgLength};
-    use sivgo_dom::{RectAttrs, SvgNode};
+    use sivgo_dom::{ImageAttrs, PolylineAttrs, RectAttrs, TextAttrs};
 
     fn len(v: f64) -> SvgLength {
         SvgLength {
@@ -298,5 +411,57 @@ mod tests {
         let mut sel = SelectionSet::new();
         sel.select_next(&doc);
         assert!(sel.is_empty());
+    }
+
+    #[test]
+    fn element_bounding_box_covers_image_polyline_and_text() {
+        let image = SvgElement::Image(ImageAttrs {
+            x: Some(len(15.0)),
+            y: Some(len(20.0)),
+            width: Some(len(30.0)),
+            height: Some(len(40.0)),
+            ..Default::default()
+        });
+        assert_eq!(
+            element_bounding_box(&image),
+            Some(Rect::new(15.0, 20.0, 45.0, 60.0))
+        );
+
+        let polyline = SvgElement::Polyline(PolylineAttrs {
+            points: vec![(20.0, 5.0), (-2.0, 12.0), (8.0, -4.0)],
+        });
+        assert_eq!(
+            element_bounding_box(&polyline),
+            Some(Rect::new(-2.0, -4.0, 20.0, 12.0))
+        );
+
+        let text = SvgElement::Text(TextAttrs {
+            x: vec![len(5.0)],
+            y: vec![len(30.0)],
+            font_size: Some(len(14.0)),
+            text_content: "Hi".to_string(),
+            ..Default::default()
+        });
+        let bb = element_bounding_box(&text).unwrap();
+        assert_eq!(bb.x0, 5.0);
+        assert_eq!(bb.y0, 16.0);
+        assert_eq!(bb.y1, 30.0);
+        assert!(bb.x1 > bb.x0);
+    }
+
+    #[test]
+    fn selection_bounding_box_accounts_for_node_transform() {
+        let (mut doc, ids) = make_doc_with_rects(1);
+        let id = ids[0];
+        doc.get_node_mut(id).unwrap().presentation.transform =
+            Some(Transform2D::translate(25.0, 35.0));
+
+        let mut sel = SelectionSet::new();
+        sel.select(id);
+
+        assert_eq!(
+            sel.bounding_box(&doc),
+            Some(Rect::new(25.0, 35.0, 35.0, 45.0))
+        );
     }
 }

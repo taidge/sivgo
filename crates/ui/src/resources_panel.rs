@@ -12,8 +12,12 @@ pub enum ResourceKind {
     Image,
     Filter,
     Marker,
+    Symbol,
     ClipPath,
     Mask,
+    Template,
+    Tutorial,
+    ExtensionAsset,
 }
 
 impl ResourceKind {
@@ -26,8 +30,12 @@ impl ResourceKind {
             Self::Image => "Image",
             Self::Filter => "Filter",
             Self::Marker => "Marker",
+            Self::Symbol => "Symbol",
             Self::ClipPath => "Clip Path",
             Self::Mask => "Mask",
+            Self::Template => "Template",
+            Self::Tutorial => "Tutorial",
+            Self::ExtensionAsset => "Extension Asset",
         }
     }
 
@@ -40,8 +48,12 @@ impl ResourceKind {
             Self::Image,
             Self::Filter,
             Self::Marker,
+            Self::Symbol,
             Self::ClipPath,
             Self::Mask,
+            Self::Template,
+            Self::Tutorial,
+            Self::ExtensionAsset,
         ]
     }
 }
@@ -105,7 +117,19 @@ pub fn ResourcesPanel(
 ) -> Element {
     let filter_val = kind_filter.clone().unwrap_or_default();
     let kind_options = vec![
-        "All", "Gradient", "Pattern", "Font", "Image", "Filter", "Marker", "ClipPath", "Mask",
+        "All",
+        "Gradient",
+        "Pattern",
+        "Font",
+        "Image",
+        "Filter",
+        "Marker",
+        "Symbol",
+        "Clip Path",
+        "Mask",
+        "Template",
+        "Tutorial",
+        "Extension Asset",
     ];
 
     // Client-side filtering
@@ -135,8 +159,12 @@ pub fn ResourcesPanel(
                             "Image" => Some(ResourceKind::Image),
                             "Filter" => Some(ResourceKind::Filter),
                             "Marker" => Some(ResourceKind::Marker),
-                            "ClipPath" => Some(ResourceKind::ClipPath),
+                            "Symbol" => Some(ResourceKind::Symbol),
+                            "Clip Path" => Some(ResourceKind::ClipPath),
                             "Mask" => Some(ResourceKind::Mask),
+                            "Template" => Some(ResourceKind::Template),
+                            "Tutorial" => Some(ResourceKind::Tutorial),
+                            "Extension Asset" => Some(ResourceKind::ExtensionAsset),
                             _ => None,
                         };
                         on_action.call(ResourcesAction::SetKindFilter(kind));
@@ -161,6 +189,7 @@ pub fn ResourcesPanel(
                         let is_unused = res.is_unused();
                         rsx! {
                             div {
+                                key: "{res.id}",
                                 class: if is_selected { "resource-item selected" } else { "resource-item" },
                                 onclick: move |_| on_action.call(ResourcesAction::Select(rid.clone())),
 
@@ -223,7 +252,8 @@ mod tests {
     fn resource_kind_labels() {
         assert_eq!(ResourceKind::Gradient.label(), "Gradient");
         assert_eq!(ResourceKind::ClipPath.label(), "Clip Path");
+        assert_eq!(ResourceKind::Symbol.label(), "Symbol");
         assert_eq!(ResourceKind::Mask.label(), "Mask");
-        assert_eq!(ResourceKind::all().len(), 8);
+        assert_eq!(ResourceKind::all().len(), 12);
     }
 }

@@ -6,6 +6,35 @@ use dioxus::prelude::*;
 /// Ruler size in pixels (the thickness of the ruler strip).
 const RULER_SIZE: f64 = 20.0;
 
+/// Compute the visible tick marks for a ruler along a single axis.
+///
+/// Returns a list of `(screen_pos, doc_value, is_major)` tuples. The logic is
+/// identical for the horizontal and vertical rulers (only the axis differs),
+/// so both components share this pure computation.
+fn compute_ticks(length: f64, scroll: f64, zoom: f64) -> Vec<(f64, f64, bool)> {
+    let tick_interval = compute_tick_interval(zoom);
+    let tick_interval_screen = tick_interval * zoom;
+
+    // Compute the first tick position in document coords aligned to tick_interval.
+    let doc_start = -scroll / zoom;
+    let first_tick_doc = (doc_start / tick_interval).floor() * tick_interval;
+
+    let mut ticks: Vec<(f64, f64, bool)> = Vec::new();
+    let mut doc_val = first_tick_doc;
+    loop {
+        let screen_pos = doc_val * zoom + scroll;
+        if screen_pos > length + tick_interval_screen {
+            break;
+        }
+        if screen_pos >= -tick_interval_screen {
+            let is_major = (doc_val / (tick_interval * 5.0)).fract().abs() < 0.01;
+            ticks.push((screen_pos, doc_val, is_major));
+        }
+        doc_val += tick_interval;
+    }
+    ticks
+}
+
 /// A horizontal ruler displayed above the canvas.
 ///
 /// Shows tick marks at regular intervals based on zoom level, with a
@@ -19,8 +48,8 @@ pub fn HorizontalRuler(
     scroll_x: f64,
     /// Current zoom factor.
     zoom: f64,
-    /// Current cursor X position in screen coordinates (relative to the ruler).
-    cursor_x: f64,
+    /// Current cursor position in document coordinates.
+    cursor_position: Signal<(f64, f64)>,
     /// Called when the user drags from the ruler to create a guide.
     /// The value is the Y position in document coordinates where the guide
     /// should be placed.
@@ -28,29 +57,11 @@ pub fn HorizontalRuler(
 ) -> Element {
     let w = width as i64;
     let ruler_h = RULER_SIZE;
+    let (cursor_x, _) = *cursor_position.read();
+    let cursor_screen_x = cursor_x * zoom + scroll_x;
 
-    // Compute tick interval based on zoom level.
-    let tick_interval = compute_tick_interval(zoom);
-    let tick_interval_screen = tick_interval * zoom;
-
-    // Compute the first tick position in document coords aligned to tick_interval.
-    let doc_start = -scroll_x / zoom;
-    let first_tick_doc = (doc_start / tick_interval).floor() * tick_interval;
-
-    // Collect tick marks.
-    let mut ticks: Vec<(f64, f64, bool)> = Vec::new(); // (screen_x, doc_value, is_major)
-    let mut doc_val = first_tick_doc;
-    loop {
-        let screen_x = doc_val * zoom + scroll_x;
-        if screen_x > width + tick_interval_screen {
-            break;
-        }
-        if screen_x >= -tick_interval_screen {
-            let is_major = (doc_val / (tick_interval * 5.0)).fract().abs() < 0.01;
-            ticks.push((screen_x, doc_val, is_major));
-        }
-        doc_val += tick_interval;
-    }
+    // Collect tick marks (screen_x, doc_value, is_major).
+    let ticks = compute_ticks(width, scroll_x, zoom);
 
     rsx! {
         div {
@@ -70,6 +81,7 @@ pub fn HorizontalRuler(
                     let sx = *screen_x;
                     rsx! {
                         div {
+                            key: "{doc_val}",
                             style: "position: absolute; left: {sx}px; top: {top}px; width: 1px; height: {tick_height}px; background: #666;",
                         }
                         if *is_major {
@@ -89,7 +101,7 @@ pub fn HorizontalRuler(
 
             // Cursor position indicator
             div {
-                style: "position: absolute; left: {cursor_x}px; top: 0; width: 1px; height: {ruler_h}px; background: #ff4444;",
+                style: "position: absolute; left: {cursor_screen_x}px; top: 0; width: 1px; height: {ruler_h}px; background: #ff4444;",
             }
         }
     }
@@ -108,8 +120,8 @@ pub fn VerticalRuler(
     scroll_y: f64,
     /// Current zoom factor.
     zoom: f64,
-    /// Current cursor Y position in screen coordinates (relative to the ruler).
-    cursor_y: f64,
+    /// Current cursor position in document coordinates.
+    cursor_position: Signal<(f64, f64)>,
     /// Called when the user drags from the ruler to create a guide.
     /// The value is the X position in document coordinates where the guide
     /// should be placed.
@@ -117,29 +129,11 @@ pub fn VerticalRuler(
 ) -> Element {
     let h = height as i64;
     let ruler_w = RULER_SIZE;
+    let (_, cursor_y) = *cursor_position.read();
+    let cursor_screen_y = cursor_y * zoom + scroll_y;
 
-    // Compute tick interval based on zoom level.
-    let tick_interval = compute_tick_interval(zoom);
-    let tick_interval_screen = tick_interval * zoom;
-
-    // Compute the first tick position in document coords aligned to tick_interval.
-    let doc_start = -scroll_y / zoom;
-    let first_tick_doc = (doc_start / tick_interval).floor() * tick_interval;
-
-    // Collect tick marks.
-    let mut ticks: Vec<(f64, f64, bool)> = Vec::new(); // (screen_y, doc_value, is_major)
-    let mut doc_val = first_tick_doc;
-    loop {
-        let screen_y = doc_val * zoom + scroll_y;
-        if screen_y > height + tick_interval_screen {
-            break;
-        }
-        if screen_y >= -tick_interval_screen {
-            let is_major = (doc_val / (tick_interval * 5.0)).fract().abs() < 0.01;
-            ticks.push((screen_y, doc_val, is_major));
-        }
-        doc_val += tick_interval;
-    }
+    // Collect tick marks (screen_y, doc_value, is_major).
+    let ticks = compute_ticks(height, scroll_y, zoom);
 
     rsx! {
         div {
@@ -159,6 +153,7 @@ pub fn VerticalRuler(
                     let sy = *screen_y;
                     rsx! {
                         div {
+                            key: "{doc_val}",
                             style: "position: absolute; left: {left}px; top: {sy}px; width: {tick_width}px; height: 1px; background: #666;",
                         }
                         if *is_major {
@@ -178,7 +173,7 @@ pub fn VerticalRuler(
 
             // Cursor position indicator
             div {
-                style: "position: absolute; left: 0; top: {cursor_y}px; width: {ruler_w}px; height: 1px; background: #ff4444;",
+                style: "position: absolute; left: 0; top: {cursor_screen_y}px; width: {ruler_w}px; height: 1px; background: #ff4444;",
             }
         }
     }

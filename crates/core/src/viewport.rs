@@ -14,6 +14,10 @@ pub enum DisplayMode {
     NoFilters,
     /// Normal rendering but hairline strokes are rendered at a visible width.
     VisibleHairlines,
+    /// Print-oriented preview with filters disabled and hairlines promoted.
+    PrintPreview,
+    /// Soft proof preview with solid colors mapped to grayscale luminance.
+    ProofColors,
 }
 
 /// The viewport maps between screen (widget) coordinates and document
@@ -107,13 +111,15 @@ impl Viewport {
     }
 
     /// Cycle through display modes: Normal -> Outline -> NoFilters ->
-    /// VisibleHairlines -> Normal.
+    /// VisibleHairlines -> PrintPreview -> ProofColors -> Normal.
     pub fn cycle_display_mode(&mut self) {
         self.display_mode = match self.display_mode {
             DisplayMode::Normal => DisplayMode::Outline,
             DisplayMode::Outline => DisplayMode::NoFilters,
             DisplayMode::NoFilters => DisplayMode::VisibleHairlines,
-            DisplayMode::VisibleHairlines => DisplayMode::Normal,
+            DisplayMode::VisibleHairlines => DisplayMode::PrintPreview,
+            DisplayMode::PrintPreview => DisplayMode::ProofColors,
+            DisplayMode::ProofColors => DisplayMode::Normal,
         };
     }
 }
@@ -174,5 +180,27 @@ mod tests {
         let center_screen = vp.document_to_screen(rect.center());
         assert!((center_screen.x - 400.0).abs() < 1e-10);
         assert!((center_screen.y - 300.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn cycle_display_mode_visits_print_and_proof_modes() {
+        let mut vp = Viewport::new(800.0, 600.0);
+        let mut modes = Vec::new();
+        for _ in 0..6 {
+            vp.cycle_display_mode();
+            modes.push(vp.display_mode);
+        }
+
+        assert_eq!(
+            modes,
+            vec![
+                DisplayMode::Outline,
+                DisplayMode::NoFilters,
+                DisplayMode::VisibleHairlines,
+                DisplayMode::PrintPreview,
+                DisplayMode::ProofColors,
+                DisplayMode::Normal,
+            ]
+        );
     }
 }
