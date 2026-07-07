@@ -97,11 +97,8 @@ impl LivePathEffect for InterpolateLpe {
     }
 
     fn set_param(&mut self, name: &str, value: f64) {
-        match name {
-            "steps" => {
-                self.steps.value = value.clamp(self.steps.min, self.steps.max);
-            }
-            _ => {}
+        if name == "steps" {
+            self.steps.value = value.clamp(self.steps.min, self.steps.max);
         }
     }
 }

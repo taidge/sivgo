@@ -926,294 +926,298 @@ impl DocumentRenderer {
         cursor_x += attrs.dx.first().map(|l| l.to_px()).unwrap_or(0.0);
         cursor_y += attrs.dy.first().map(|l| l.to_px()).unwrap_or(0.0);
 
-        // Helper: render a single text run and advance cursor.
-        // Accepts per-character positioning arrays for SVG text x/y and tspan dx/dy
-        // positioning (tasks 6.6 and 6.7).
-        let mut render_run = |text: &str,
-                              x: f64,
-                              y: f64,
-                              font_family: &str,
-                              font_size: f64,
-                              font_weight: u16,
-                              font_style: FontStyleKind,
-                              anchor: TextEngineAnchor,
-                              fill_paint: &Option<RenderPaint>,
-                              stroke: &Option<(RenderPaint, StrokeStyle)>,
-                              fill_rule: FillRule,
-                              letter_spacing: f64,
-                              word_spacing: f64,
-                              decoration: TextDecoration,
-                              x_list: &[f64],
-                              y_list: &[f64],
-                              dx_list: &[f64],
-                              dy_list: &[f64],
-                              cursor_x: &mut f64| {
-            if text.is_empty() {
-                return;
-            }
-
-            // Use positioned variant when any array has multiple values or
-            // dx/dy arrays are present.
-            let has_positioned =
-                x_list.len() > 1 || y_list.len() > 1 || !dx_list.is_empty() || !dy_list.is_empty();
-
-            let path = if has_positioned {
-                sivgo_text::text_to_path_positioned(
-                    text_engine,
-                    text,
-                    x,
-                    y,
-                    font_family,
-                    font_size,
-                    font_weight,
-                    font_style,
-                    anchor,
-                    letter_spacing,
-                    word_spacing,
-                    x_list,
-                    y_list,
-                    dx_list,
-                    dy_list,
-                )
-            } else {
-                sivgo_text::text_to_path(
-                    text_engine,
-                    text,
-                    x,
-                    y,
-                    font_family,
-                    font_size,
-                    font_weight,
-                    font_style,
-                    anchor,
-                    letter_spacing,
-                    word_spacing,
-                )
-            };
-
-            let path = match path {
-                Some(p) => p,
-                None => return,
-            };
-
-            // Advance cursor by approximate text width (use bounding box).
-            let bbox = path.bounding_box();
-            if bbox.width() > 0.0 {
-                *cursor_x = bbox.x1;
-            }
-
-            if let Some(paint) = fill_paint {
-                backend.fill_path(&path, paint, fill_rule, transform);
-            }
-            if let Some((paint, style)) = stroke {
-                backend.stroke_path(&path, paint, style, transform);
-            }
-
-            // Render text decorations as horizontal lines.
-            if !decoration.is_none() {
-                let line_thickness = font_size * 0.07; // ~7% of font size
-                let deco_style = StrokeStyle {
-                    width: line_thickness,
-                    line_cap: LineCap::Butt,
-                    line_join: LineJoin::Miter,
-                    miter_limit: 4.0,
-                    dash_array: None,
-                    dash_offset: 0.0,
-                };
-                let deco_paint = fill_paint.as_ref().or(stroke.as_ref().map(|(p, _)| p));
-                if let Some(paint) = deco_paint {
-                    let text_left = bbox.x0;
-                    let text_right = bbox.x1;
-
-                    let mut draw_deco_line = |y_pos: f64| {
-                        let mut line_path = BezPath::new();
-                        line_path.move_to(Point::new(text_left, y_pos));
-                        line_path.line_to(Point::new(text_right, y_pos));
-                        backend.stroke_path(&line_path, paint, &deco_style, transform);
-                    };
-
-                    if decoration.underline {
-                        // Below baseline by ~12.5% of font size
-                        draw_deco_line(y + font_size * 0.125);
-                    }
-                    if decoration.overline {
-                        // At the ascent line (above baseline)
-                        let metrics = sivgo_text::get_font_metrics(
-                            text_engine,
-                            font_family,
-                            font_size,
-                            font_weight,
-                            font_style,
-                        );
-                        draw_deco_line(y - metrics.ascent);
-                    }
-                    if decoration.line_through {
-                        // At approximately x-height / 2 above baseline
-                        let metrics = sivgo_text::get_font_metrics(
-                            text_engine,
-                            font_family,
-                            font_size,
-                            font_weight,
-                            font_style,
-                        );
-                        draw_deco_line(y - metrics.x_height * 0.5);
-                    }
-                }
-            }
-        };
-
         let fill_rule = resolve_fill_rule(pres);
         let fill_paint = resolve_fill_paint(doc, pres);
         let stroke = resolve_stroke(doc, pres);
 
-        // Convert text element x/y/dx/dy arrays to f64 slices for positioned layout.
-        let text_x_list: Vec<f64> = attrs.x.iter().map(|l| l.to_px()).collect();
-        let text_y_list: Vec<f64> = attrs.y.iter().map(|l| l.to_px()).collect();
-        let text_dx_list: Vec<f64> = attrs.dx.iter().map(|l| l.to_px()).collect();
-        let text_dy_list: Vec<f64> = attrs.dy.iter().map(|l| l.to_px()).collect();
+        {
+            // Helper: render a single text run and advance cursor.
+            // Accepts per-character positioning arrays for SVG text x/y and tspan dx/dy
+            // positioning (tasks 6.6 and 6.7).
+            let mut render_run = |text: &str,
+                                  x: f64,
+                                  y: f64,
+                                  font_family: &str,
+                                  font_size: f64,
+                                  font_weight: u16,
+                                  font_style: FontStyleKind,
+                                  anchor: TextEngineAnchor,
+                                  fill_paint: &Option<RenderPaint>,
+                                  stroke: &Option<(RenderPaint, StrokeStyle)>,
+                                  fill_rule: FillRule,
+                                  letter_spacing: f64,
+                                  word_spacing: f64,
+                                  decoration: TextDecoration,
+                                  x_list: &[f64],
+                                  y_list: &[f64],
+                                  dx_list: &[f64],
+                                  dy_list: &[f64],
+                                  cursor_x: &mut f64| {
+                if text.is_empty() {
+                    return;
+                }
 
-        // Render the text element's own content (before any tspan children).
-        if !attrs.text_content.is_empty() {
-            render_run(
-                &attrs.text_content,
-                cursor_x,
-                cursor_y,
-                base_font_family,
-                base_font_size,
-                base_font_weight,
-                base_font_style,
-                base_anchor,
-                &fill_paint,
-                &stroke,
-                fill_rule,
-                base_letter_spacing,
-                base_word_spacing,
-                base_decoration,
-                &text_x_list,
-                &text_y_list,
-                &text_dx_list,
-                &text_dy_list,
-                &mut cursor_x,
-            );
-        }
+                // Use positioned variant when any array has multiple values or
+                // dx/dy arrays are present.
+                let has_positioned = x_list.len() > 1
+                    || y_list.len() > 1
+                    || !dx_list.is_empty()
+                    || !dy_list.is_empty();
 
-        // Process tspan children.
-        let children: Vec<NodeId> = doc.children(text_node_id).to_vec();
-        for child_id in children {
-            let Some(child) = doc.get_node(child_id) else {
-                continue;
+                let path = if has_positioned {
+                    sivgo_text::text_to_path_positioned(
+                        text_engine,
+                        text,
+                        x,
+                        y,
+                        font_family,
+                        font_size,
+                        font_weight,
+                        font_style,
+                        anchor,
+                        letter_spacing,
+                        word_spacing,
+                        x_list,
+                        y_list,
+                        dx_list,
+                        dy_list,
+                    )
+                } else {
+                    sivgo_text::text_to_path(
+                        text_engine,
+                        text,
+                        x,
+                        y,
+                        font_family,
+                        font_size,
+                        font_weight,
+                        font_style,
+                        anchor,
+                        letter_spacing,
+                        word_spacing,
+                    )
+                };
+
+                let path = match path {
+                    Some(p) => p,
+                    None => return,
+                };
+
+                // Advance cursor by approximate text width (use bounding box).
+                let bbox = path.bounding_box();
+                if bbox.width() > 0.0 {
+                    *cursor_x = bbox.x1;
+                }
+
+                if let Some(paint) = fill_paint {
+                    backend.fill_path(&path, paint, fill_rule, transform);
+                }
+                if let Some((paint, style)) = stroke {
+                    backend.stroke_path(&path, paint, style, transform);
+                }
+
+                // Render text decorations as horizontal lines.
+                if !decoration.is_none() {
+                    let line_thickness = font_size * 0.07; // ~7% of font size
+                    let deco_style = StrokeStyle {
+                        width: line_thickness,
+                        line_cap: LineCap::Butt,
+                        line_join: LineJoin::Miter,
+                        miter_limit: 4.0,
+                        dash_array: None,
+                        dash_offset: 0.0,
+                    };
+                    let deco_paint = fill_paint.as_ref().or(stroke.as_ref().map(|(p, _)| p));
+                    if let Some(paint) = deco_paint {
+                        let text_left = bbox.x0;
+                        let text_right = bbox.x1;
+
+                        let mut draw_deco_line = |y_pos: f64| {
+                            let mut line_path = BezPath::new();
+                            line_path.move_to(Point::new(text_left, y_pos));
+                            line_path.line_to(Point::new(text_right, y_pos));
+                            backend.stroke_path(&line_path, paint, &deco_style, transform);
+                        };
+
+                        if decoration.underline {
+                            // Below baseline by ~12.5% of font size
+                            draw_deco_line(y + font_size * 0.125);
+                        }
+                        if decoration.overline {
+                            // At the ascent line (above baseline)
+                            let metrics = sivgo_text::get_font_metrics(
+                                text_engine,
+                                font_family,
+                                font_size,
+                                font_weight,
+                                font_style,
+                            );
+                            draw_deco_line(y - metrics.ascent);
+                        }
+                        if decoration.line_through {
+                            // At approximately x-height / 2 above baseline
+                            let metrics = sivgo_text::get_font_metrics(
+                                text_engine,
+                                font_family,
+                                font_size,
+                                font_weight,
+                                font_style,
+                            );
+                            draw_deco_line(y - metrics.x_height * 0.5);
+                        }
+                    }
+                }
             };
 
-            if let SvgElement::TSpan(tspan_attrs) = &child.element {
-                // Convert tspan positioning arrays to f64 for positioned layout.
-                let tspan_x_list: Vec<f64> = tspan_attrs.x.iter().map(|l| l.to_px()).collect();
-                let tspan_y_list: Vec<f64> = tspan_attrs.y.iter().map(|l| l.to_px()).collect();
-                let tspan_dx_list: Vec<f64> = tspan_attrs.dx.iter().map(|l| l.to_px()).collect();
-                let tspan_dy_list: Vec<f64> = tspan_attrs.dy.iter().map(|l| l.to_px()).collect();
+            // Convert text element x/y/dx/dy arrays to f64 slices for positioned layout.
+            let text_x_list: Vec<f64> = attrs.x.iter().map(|l| l.to_px()).collect();
+            let text_y_list: Vec<f64> = attrs.y.iter().map(|l| l.to_px()).collect();
+            let text_dx_list: Vec<f64> = attrs.dx.iter().map(|l| l.to_px()).collect();
+            let text_dy_list: Vec<f64> = attrs.dy.iter().map(|l| l.to_px()).collect();
 
-                // Apply tspan positioning: absolute x/y override cursor.
-                if let Some(x_val) = tspan_attrs.x.first() {
-                    cursor_x = x_val.to_px();
-                }
-                if let Some(y_val) = tspan_attrs.y.first() {
-                    cursor_y = y_val.to_px();
-                }
-                // For single-value dx/dy, apply to cursor (legacy behavior).
-                // Multi-value arrays are handled by the positioned layout engine.
-                if tspan_dx_list.len() <= 1 {
-                    cursor_x += tspan_attrs.dx.first().map(|l| l.to_px()).unwrap_or(0.0);
-                }
-                if tspan_dy_list.len() <= 1 {
-                    cursor_y += tspan_attrs.dy.first().map(|l| l.to_px()).unwrap_or(0.0);
-                }
-
-                // Resolve tspan font properties (inherit from parent text element).
-                let font_family = tspan_attrs
-                    .font_family
-                    .as_deref()
-                    .or(child.presentation.font_family.as_deref())
-                    .unwrap_or(base_font_family);
-                let font_size = tspan_attrs
-                    .font_size
-                    .or(child.presentation.font_size)
-                    .map(|l| l.resolve_px(base_font_size, base_font_size))
-                    .unwrap_or(base_font_size);
-                let font_weight = match tspan_attrs
-                    .font_weight
-                    .or(child.presentation.font_weight)
-                    .unwrap_or(DomFontWeight::Normal)
-                {
-                    DomFontWeight::Normal => base_font_weight,
-                    DomFontWeight::Bold => 700,
-                    DomFontWeight::Number(n) => n as u16,
-                };
-                let font_style = match tspan_attrs.font_style.or(child.presentation.font_style) {
-                    Some(DomFontStyle::Italic) | Some(DomFontStyle::Oblique) => {
-                        FontStyleKind::Italic
-                    }
-                    Some(DomFontStyle::Normal) => FontStyleKind::Normal,
-                    None => base_font_style,
-                };
-                let anchor = match tspan_attrs.text_anchor.or(child.presentation.text_anchor) {
-                    Some(DomTextAnchor::Start) => TextEngineAnchor::Start,
-                    Some(DomTextAnchor::Middle) => TextEngineAnchor::Middle,
-                    Some(DomTextAnchor::End) => TextEngineAnchor::End,
-                    None => base_anchor,
-                };
-
-                // Use tspan's own fill/stroke if set, else inherit from parent.
-                let tspan_fill =
-                    resolve_fill_paint(doc, &child.presentation).or_else(|| fill_paint.clone());
-                let tspan_stroke =
-                    resolve_stroke(doc, &child.presentation).or_else(|| stroke.clone());
-                let tspan_fill_rule = if child.presentation.fill_rule.is_some() {
-                    resolve_fill_rule(&child.presentation)
-                } else {
-                    fill_rule
-                };
-
-                // Inherit or override letter/word spacing from tspan.
-                let tspan_letter_spacing = child
-                    .presentation
-                    .letter_spacing
-                    .map(|l| l.to_px())
-                    .unwrap_or(base_letter_spacing);
-                let tspan_word_spacing = child
-                    .presentation
-                    .word_spacing
-                    .map(|l| l.to_px())
-                    .unwrap_or(base_word_spacing);
-                let tspan_decoration = child
-                    .presentation
-                    .text_decoration
-                    .unwrap_or(base_decoration);
-
+            // Render the text element's own content (before any tspan children).
+            if !attrs.text_content.is_empty() {
                 render_run(
-                    &tspan_attrs.text_content,
+                    &attrs.text_content,
                     cursor_x,
                     cursor_y,
-                    font_family,
-                    font_size,
-                    font_weight,
-                    font_style,
-                    anchor,
-                    &tspan_fill,
-                    &tspan_stroke,
-                    tspan_fill_rule,
-                    tspan_letter_spacing,
-                    tspan_word_spacing,
-                    tspan_decoration,
-                    &tspan_x_list,
-                    &tspan_y_list,
-                    &tspan_dx_list,
-                    &tspan_dy_list,
+                    base_font_family,
+                    base_font_size,
+                    base_font_weight,
+                    base_font_style,
+                    base_anchor,
+                    &fill_paint,
+                    &stroke,
+                    fill_rule,
+                    base_letter_spacing,
+                    base_word_spacing,
+                    base_decoration,
+                    &text_x_list,
+                    &text_y_list,
+                    &text_dx_list,
+                    &text_dy_list,
                     &mut cursor_x,
                 );
             }
-        }
 
-        // Drop render_run closure to release borrows on backend/text_engine.
-        drop(render_run);
+            // Process tspan children.
+            let children: Vec<NodeId> = doc.children(text_node_id).to_vec();
+            for child_id in children {
+                let Some(child) = doc.get_node(child_id) else {
+                    continue;
+                };
+
+                if let SvgElement::TSpan(tspan_attrs) = &child.element {
+                    // Convert tspan positioning arrays to f64 for positioned layout.
+                    let tspan_x_list: Vec<f64> = tspan_attrs.x.iter().map(|l| l.to_px()).collect();
+                    let tspan_y_list: Vec<f64> = tspan_attrs.y.iter().map(|l| l.to_px()).collect();
+                    let tspan_dx_list: Vec<f64> =
+                        tspan_attrs.dx.iter().map(|l| l.to_px()).collect();
+                    let tspan_dy_list: Vec<f64> =
+                        tspan_attrs.dy.iter().map(|l| l.to_px()).collect();
+
+                    // Apply tspan positioning: absolute x/y override cursor.
+                    if let Some(x_val) = tspan_attrs.x.first() {
+                        cursor_x = x_val.to_px();
+                    }
+                    if let Some(y_val) = tspan_attrs.y.first() {
+                        cursor_y = y_val.to_px();
+                    }
+                    // For single-value dx/dy, apply to cursor (legacy behavior).
+                    // Multi-value arrays are handled by the positioned layout engine.
+                    if tspan_dx_list.len() <= 1 {
+                        cursor_x += tspan_attrs.dx.first().map(|l| l.to_px()).unwrap_or(0.0);
+                    }
+                    if tspan_dy_list.len() <= 1 {
+                        cursor_y += tspan_attrs.dy.first().map(|l| l.to_px()).unwrap_or(0.0);
+                    }
+
+                    // Resolve tspan font properties (inherit from parent text element).
+                    let font_family = tspan_attrs
+                        .font_family
+                        .as_deref()
+                        .or(child.presentation.font_family.as_deref())
+                        .unwrap_or(base_font_family);
+                    let font_size = tspan_attrs
+                        .font_size
+                        .or(child.presentation.font_size)
+                        .map(|l| l.resolve_px(base_font_size, base_font_size))
+                        .unwrap_or(base_font_size);
+                    let font_weight = match tspan_attrs
+                        .font_weight
+                        .or(child.presentation.font_weight)
+                        .unwrap_or(DomFontWeight::Normal)
+                    {
+                        DomFontWeight::Normal => base_font_weight,
+                        DomFontWeight::Bold => 700,
+                        DomFontWeight::Number(n) => n as u16,
+                    };
+                    let font_style = match tspan_attrs.font_style.or(child.presentation.font_style)
+                    {
+                        Some(DomFontStyle::Italic) | Some(DomFontStyle::Oblique) => {
+                            FontStyleKind::Italic
+                        }
+                        Some(DomFontStyle::Normal) => FontStyleKind::Normal,
+                        None => base_font_style,
+                    };
+                    let anchor = match tspan_attrs.text_anchor.or(child.presentation.text_anchor) {
+                        Some(DomTextAnchor::Start) => TextEngineAnchor::Start,
+                        Some(DomTextAnchor::Middle) => TextEngineAnchor::Middle,
+                        Some(DomTextAnchor::End) => TextEngineAnchor::End,
+                        None => base_anchor,
+                    };
+
+                    // Use tspan's own fill/stroke if set, else inherit from parent.
+                    let tspan_fill =
+                        resolve_fill_paint(doc, &child.presentation).or_else(|| fill_paint.clone());
+                    let tspan_stroke =
+                        resolve_stroke(doc, &child.presentation).or_else(|| stroke.clone());
+                    let tspan_fill_rule = if child.presentation.fill_rule.is_some() {
+                        resolve_fill_rule(&child.presentation)
+                    } else {
+                        fill_rule
+                    };
+
+                    // Inherit or override letter/word spacing from tspan.
+                    let tspan_letter_spacing = child
+                        .presentation
+                        .letter_spacing
+                        .map(|l| l.to_px())
+                        .unwrap_or(base_letter_spacing);
+                    let tspan_word_spacing = child
+                        .presentation
+                        .word_spacing
+                        .map(|l| l.to_px())
+                        .unwrap_or(base_word_spacing);
+                    let tspan_decoration = child
+                        .presentation
+                        .text_decoration
+                        .unwrap_or(base_decoration);
+
+                    render_run(
+                        &tspan_attrs.text_content,
+                        cursor_x,
+                        cursor_y,
+                        font_family,
+                        font_size,
+                        font_weight,
+                        font_style,
+                        anchor,
+                        &tspan_fill,
+                        &tspan_stroke,
+                        tspan_fill_rule,
+                        tspan_letter_spacing,
+                        tspan_word_spacing,
+                        tspan_decoration,
+                        &tspan_x_list,
+                        &tspan_y_list,
+                        &tspan_dx_list,
+                        &tspan_dy_list,
+                        &mut cursor_x,
+                    );
+                }
+            }
+        }
 
         // Process <textPath> children (needs mutable backend + text_engine).
         let children2: Vec<NodeId> = doc.children(text_node_id).to_vec();
@@ -1719,6 +1723,7 @@ impl DocumentRenderer {
     }
 
     /// Render text along a referenced path (`<textPath>`).
+    #[allow(clippy::too_many_arguments)]
     fn render_text_on_path(
         doc: &SvgDocument,
         tp_attrs: &sivgo_dom::TextPathAttrs,
@@ -1920,6 +1925,7 @@ impl DocumentRenderer {
     }
 
     /// Render a single marker instance at the given vertex position.
+    #[allow(clippy::too_many_arguments)]
     fn render_single_marker(
         doc: &SvgDocument,
         marker_node_id: NodeId,
@@ -2128,10 +2134,9 @@ fn get_path_vertices(path: &BezPath) -> Vec<MarkerVertex> {
                         }
                     }
                     // Set incoming on the subpath start vertex.
-                    if start_idx < raw_vertices.len() {
-                        if raw_vertices[start_idx].incoming.is_none() {
-                            raw_vertices[start_idx].incoming = Some(close_angle);
-                        }
+                    if start_idx < raw_vertices.len() && raw_vertices[start_idx].incoming.is_none()
+                    {
+                        raw_vertices[start_idx].incoming = Some(close_angle);
                     }
                 }
                 current_point = subpath_start;
@@ -2378,12 +2383,7 @@ fn resolve_linear_gradient(
         .unwrap_or(DomGradientUnits::ObjectBoundingBox);
 
     // SVG defaults for linear gradient coordinates.
-    let (default_x1, default_y1, default_x2, default_y2) =
-        if units == DomGradientUnits::ObjectBoundingBox {
-            (0.0, 0.0, 1.0, 0.0)
-        } else {
-            (0.0, 0.0, 1.0, 0.0)
-        };
+    let (default_x1, default_y1, default_x2, default_y2) = (0.0, 0.0, 1.0, 0.0);
 
     let x1 = attrs.x1.map(|l| l.to_px()).unwrap_or(default_x1);
     let y1 = attrs.y1.map(|l| l.to_px()).unwrap_or(default_y1);
@@ -2507,13 +2507,13 @@ fn resolve_pattern(
     let (render_w, render_h) = if units == DomGradientUnits::ObjectBoundingBox {
         // Render at a fixed resolution; the pattern transform will scale
         // from object-space fractions to this size.
-        let px_w = (tile_w * 256.0).ceil().max(1.0).min(2048.0) as u32;
-        let px_h = (tile_h * 256.0).ceil().max(1.0).min(2048.0) as u32;
+        let px_w = (tile_w * 256.0).ceil().clamp(1.0, 2048.0) as u32;
+        let px_h = (tile_h * 256.0).ceil().clamp(1.0, 2048.0) as u32;
         (px_w, px_h)
     } else {
         // userSpaceOnUse: the tile dimensions are in pixels.
-        let px_w = tile_w.ceil().max(1.0).min(4096.0) as u32;
-        let px_h = tile_h.ceil().max(1.0).min(4096.0) as u32;
+        let px_w = tile_w.ceil().clamp(1.0, 4096.0) as u32;
+        let px_h = tile_h.ceil().clamp(1.0, 4096.0) as u32;
         (px_w, px_h)
     };
 
@@ -2658,7 +2658,7 @@ fn resolve_pattern_attrs(
             resolved.pattern_transform = ref_attrs.pattern_transform;
         }
         if resolved.view_box.is_none() {
-            resolved.view_box = ref_attrs.view_box.clone();
+            resolved.view_box = ref_attrs.view_box;
         }
         if resolved.preserve_aspect_ratio.is_none() {
             resolved.preserve_aspect_ratio = ref_attrs.preserve_aspect_ratio;
@@ -3501,9 +3501,23 @@ fn build_filter_pipeline(doc: &SvgDocument, filter_node_id: NodeId) -> FilterPip
                 });
             }
             SvgElement::FeConvolveMatrix(attrs) => {
-                let result_name = result_name(&attrs.common.result, &mut auto_idx);
                 let order_x = attrs.order_x.max(1) as u32;
                 let order_y = attrs.order_y.max(1) as u32;
+                // Guard against malformed input: the convolution implementation
+                // asserts kernel.len() == order_x * order_y, which would abort
+                // the whole render on an attacker-supplied mismatched kernel.
+                let expected = (order_x as usize) * (order_y as usize);
+                if attrs.kernel_matrix.len() != expected {
+                    log::warn!(
+                        "Skipping feConvolveMatrix: kernelMatrix has {} values, expected {} (order {}x{})",
+                        attrs.kernel_matrix.len(),
+                        expected,
+                        order_x,
+                        order_y
+                    );
+                    continue;
+                }
+                let result_name = result_name(&attrs.common.result, &mut auto_idx);
                 let target_x = attrs.target_x.unwrap_or((order_x / 2) as i32).max(0) as u32;
                 let target_y = attrs.target_y.unwrap_or((order_y / 2) as i32).max(0) as u32;
                 let divisor = attrs.divisor.unwrap_or(1.0) as f32;
@@ -3512,6 +3526,13 @@ fn build_filter_pipeline(doc: &SvgDocument, filter_node_id: NodeId) -> FilterPip
                     .iter()
                     .map(|value| *value as f32)
                     .collect();
+                let edge_mode = match attrs.edge_mode {
+                    Some(sivgo_dom::EdgeMode::Duplicate) | None => {
+                        sivgo_filters::EdgeMode::Duplicate
+                    }
+                    Some(sivgo_dom::EdgeMode::Wrap) => sivgo_filters::EdgeMode::Wrap,
+                    Some(sivgo_dom::EdgeMode::None) => sivgo_filters::EdgeMode::None,
+                };
                 pipeline.add(FilterPrimitive::ConvolveMatrix {
                     input: filter_input_to_string(&attrs.input),
                     kernel,
@@ -3521,8 +3542,83 @@ fn build_filter_pipeline(doc: &SvgDocument, filter_node_id: NodeId) -> FilterPip
                     bias: attrs.bias as f32,
                     target_x,
                     target_y,
-                    edge_mode: sivgo_filters::EdgeMode::Duplicate,
+                    edge_mode,
                     preserve_alpha: attrs.preserve_alpha,
+                    result: result_name,
+                    sub_region: convert_primitive_region(&attrs.common),
+                });
+            }
+            SvgElement::FeTile(attrs) => {
+                let result_name = result_name(&attrs.common.result, &mut auto_idx);
+                pipeline.add(FilterPrimitive::Tile {
+                    input: filter_input_to_string(&attrs.input),
+                    result: result_name,
+                    sub_region: convert_primitive_region(&attrs.common),
+                });
+            }
+            SvgElement::FeComponentTransfer(attrs) => {
+                let result_name = result_name(&attrs.common.result, &mut auto_idx);
+                // NOTE: the DOM does not currently parse feFunc* child elements,
+                // so the transfer is identity (passthrough). Wiring the arm at
+                // least stops the primitive from being silently dropped.
+                pipeline.add(FilterPrimitive::ComponentTransfer {
+                    input: filter_input_to_string(&attrs.input),
+                    functions: sivgo_filters::ComponentTransferFunctions::default(),
+                    result: result_name,
+                    sub_region: convert_primitive_region(&attrs.common),
+                });
+            }
+            SvgElement::FeDiffuseLighting(attrs) => {
+                let result_name = result_name(&attrs.common.result, &mut auto_idx);
+                pipeline.add(FilterPrimitive::DiffuseLighting {
+                    input: filter_input_to_string(&attrs.input),
+                    surface_scale: attrs.surface_scale.unwrap_or(1.0),
+                    diffuse_constant: attrs.diffuse_constant.unwrap_or(1.0),
+                    light: find_light_source(doc, child_id),
+                    light_color: [1.0, 1.0, 1.0],
+                    result: result_name,
+                    sub_region: convert_primitive_region(&attrs.common),
+                });
+            }
+            SvgElement::FeSpecularLighting(attrs) => {
+                let result_name = result_name(&attrs.common.result, &mut auto_idx);
+                pipeline.add(FilterPrimitive::SpecularLighting {
+                    input: filter_input_to_string(&attrs.input),
+                    surface_scale: attrs.surface_scale.unwrap_or(1.0),
+                    specular_constant: attrs.specular_constant.unwrap_or(1.0),
+                    specular_exponent: attrs.specular_exponent.unwrap_or(1.0),
+                    light: find_light_source(doc, child_id),
+                    light_color: [1.0, 1.0, 1.0],
+                    result: result_name,
+                    sub_region: convert_primitive_region(&attrs.common),
+                });
+            }
+            SvgElement::FeImage(attrs) => {
+                let result_name = result_name(&attrs.common.result, &mut auto_idx);
+                // Resolve the href (data: URI or local path, mirroring <image>)
+                // into a pixel buffer; an unresolved href yields a transparent
+                // buffer rather than dropping the primitive.
+                let image_data = attrs.href.as_deref().and_then(|href| {
+                    let decoded = if href.trim_start().starts_with("data:") {
+                        decode_image_data_uri(href)
+                    } else {
+                        load_image_from_path(href)
+                    };
+                    decoded
+                        .map(|(rgba, w, h)| sivgo_filters::FilterBuffer::from_rgba_u8(&rgba, w, h))
+                });
+                let fit = match attrs.preserve_aspect_ratio {
+                    Some(par) if par.align == sivgo_dom::types::Align::None => {
+                        sivgo_filters::ImageFit::Fill
+                    }
+                    Some(par) if par.meet_or_slice == sivgo_dom::types::MeetOrSlice::Slice => {
+                        sivgo_filters::ImageFit::Slice
+                    }
+                    _ => sivgo_filters::ImageFit::Meet,
+                };
+                pipeline.add(FilterPrimitive::Image {
+                    image_data,
+                    fit,
                     result: result_name,
                     sub_region: convert_primitive_region(&attrs.common),
                 });
@@ -3557,22 +3653,13 @@ fn build_filter_region_params(
     };
 
     FilterRegionParams {
-        x: filter_attrs
-            .x
-            .as_ref()
-            .map(|l| svg_length_to_filter_length(l)),
-        y: filter_attrs
-            .y
-            .as_ref()
-            .map(|l| svg_length_to_filter_length(l)),
-        width: filter_attrs
-            .width
-            .as_ref()
-            .map(|l| svg_length_to_filter_length(l)),
+        x: filter_attrs.x.as_ref().map(svg_length_to_filter_length),
+        y: filter_attrs.y.as_ref().map(svg_length_to_filter_length),
+        width: filter_attrs.width.as_ref().map(svg_length_to_filter_length),
         height: filter_attrs
             .height
             .as_ref()
-            .map(|l| svg_length_to_filter_length(l)),
+            .map(svg_length_to_filter_length),
         filter_units,
         primitive_units,
     }
@@ -3600,16 +3687,10 @@ fn convert_primitive_region(
         return None;
     }
     Some(sivgo_filters::PrimitiveRegionParams {
-        x: common.x.as_ref().map(|l| svg_length_to_filter_length(l)),
-        y: common.y.as_ref().map(|l| svg_length_to_filter_length(l)),
-        width: common
-            .width
-            .as_ref()
-            .map(|l| svg_length_to_filter_length(l)),
-        height: common
-            .height
-            .as_ref()
-            .map(|l| svg_length_to_filter_length(l)),
+        x: common.x.as_ref().map(svg_length_to_filter_length),
+        y: common.y.as_ref().map(svg_length_to_filter_length),
+        width: common.width.as_ref().map(svg_length_to_filter_length),
+        height: common.height.as_ref().map(svg_length_to_filter_length),
     })
 }
 
@@ -3733,6 +3814,50 @@ fn filter_input_to_string(input: &Option<FilterInput>) -> String {
         Some(FilterInput::StrokePaint) => "StrokePaint".to_string(),
         Some(FilterInput::Reference(name)) => name.clone(),
         None => String::new(), // Empty = use implicit (last result)
+    }
+}
+
+/// Find the light-source child (feDistantLight/fePointLight/feSpotLight) of a
+/// lighting filter primitive and convert it to a `sivgo_filters::LightSource`.
+/// Defaults to a distant light from the upper-left if none is present.
+fn find_light_source(doc: &SvgDocument, node_id: NodeId) -> sivgo_filters::LightSource {
+    use sivgo_filters::LightSource;
+    for child_id in doc.children(node_id) {
+        let Some(node) = doc.get_node(*child_id) else {
+            continue;
+        };
+        match &node.element {
+            SvgElement::FeDistantLight(a) => {
+                return LightSource::Distant {
+                    azimuth: a.azimuth,
+                    elevation: a.elevation,
+                }
+            }
+            SvgElement::FePointLight(a) => {
+                return LightSource::Point {
+                    x: a.x,
+                    y: a.y,
+                    z: a.z,
+                }
+            }
+            SvgElement::FeSpotLight(a) => {
+                return LightSource::Spot {
+                    x: a.x,
+                    y: a.y,
+                    z: a.z,
+                    points_at_x: a.points_at_x,
+                    points_at_y: a.points_at_y,
+                    points_at_z: a.points_at_z,
+                    specular_exponent: a.specular_exponent.unwrap_or(1.0),
+                    limiting_cone_angle: a.limiting_cone_angle,
+                };
+            }
+            _ => {}
+        }
+    }
+    LightSource::Distant {
+        azimuth: 225.0,
+        elevation: 45.0,
     }
 }
 
@@ -4313,7 +4438,7 @@ mod tests {
 
         // Corner pixels should also be red since the viewBox scales down
         // to fill exactly.
-        let corner_idx = (1 * 100 + 1) * 4;
+        let corner_idx = 101 * 4;
         assert_eq!(pixels[corner_idx], 255, "near-corner should be red R");
     }
 

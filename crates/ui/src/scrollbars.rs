@@ -89,8 +89,7 @@ pub fn HorizontalScrollbar(
 ) -> Element {
     let bar_h = SCROLLBAR_SIZE;
     let metrics = scrollbar_metrics(track_length, document_width, pan_x, zoom);
-    let (visible_width, total, max_doc_offset) =
-        scroll_extents(track_length, document_width, zoom);
+    let (visible_width, total, max_doc_offset) = scroll_extents(track_length, document_width, zoom);
     let track_style = horizontal_track_style(bar_h);
     let thumb_pos_pct = metrics.thumb_pos_pct;
     let thumb_size_pct = metrics.thumb_size_pct;

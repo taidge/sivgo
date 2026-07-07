@@ -1,6 +1,6 @@
 ﻿# Sivgo
 
-A full-featured SVG vector graphics editor written in Rust, inspired by Inkscape. Ships as both a native desktop application (Dioxus) and a web application (Dioxus WASM + Salvo backend).
+Sivgo is a Rust SVG vector graphics editor prototype inspired by Inkscape. The current workspace provides a native Dioxus desktop application and a Salvo REST API backend; a Web/WASM client is not present in this worktree.
 
 ## Architecture
 
@@ -19,9 +19,9 @@ Sivgo is organized as a Cargo workspace with 14 crates:
 | `sivgo-io` | Import/export: SVG, PNG, JPEG, PDF, EPS, DXF |
 | `sivgo-core` | Editor engine: tools, commands, undo/redo, snapping, selection |
 | `sivgo-plugin` | Plugin system with WASM sandbox and Lua scripting |
-| `sivgo-ui` | Dioxus UI components shared by desktop and web |
+| `sivgo-ui` | Dioxus UI components used by the desktop app |
 | `sivgo-desktop` | Desktop application binary (Dioxus desktop) |
-| `sivgo-web` | Web client (WASM) + Salvo REST/WebSocket backend |
+| `sivgo-web` | Salvo REST API backend for documents, assets, export, preferences, and plugins |
 
 ```
 sivgo-math (foundation)
@@ -32,14 +32,16 @@ sivgo-math (foundation)
   -> sivgo-core (all above)
   -> sivgo-plugin (core + dom)
   -> sivgo-ui (core + dom + render)
-    -> sivgo-desktop, sivgo-web
+    -> sivgo-desktop
+  -> sivgo-web (core + dom + render + io)
 ```
 
 ## Prerequisites
 
-- **Rust** 1.75+ (install via [rustup](https://rustup.rs))
+- **Rust** 1.89+ (install via [rustup](https://rustup.rs))
 - **just** command runner (install via `cargo install just`)
-- **PostgreSQL** (for web backend only)
+
+No external database is required for the current development backend; `sivgo-web` uses in-memory stores.
 
 ## Quick Start
 
@@ -67,10 +69,10 @@ sivgo/
   Cargo.toml              # Workspace root
   justfile                 # Task runner recipes
   crates/                  # All 14 library and binary crates
-  docs/                    # Architecture docs and example SVGs
-  examples/                # (symlink to docs/ SVG examples)
-  tests/visual/            # Visual regression test corpus
-  benches/                 # Performance benchmarks
+  docs/                    # Architecture docs
+  examples/                # Sample SVG files
+  tests/visual/            # Visual test helpers and corpus
+  crates/dom/benches/      # Workspace performance benchmarks
   fuzz/                    # Fuzz testing targets
   .github/workflows/       # CI pipeline
 ```

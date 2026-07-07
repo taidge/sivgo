@@ -157,17 +157,23 @@ impl Store {
     pub fn create_share(
         &self,
         document_id: Uuid,
+        created_by: Uuid,
         shared_with: Option<Uuid>,
         permission: SharePermission,
+        expires_at: Option<chrono::DateTime<Utc>>,
     ) -> DocumentShare {
         let token = Uuid::new_v4().to_string();
         let share = DocumentShare {
             id: Uuid::new_v4(),
             document_id,
+            created_by,
             shared_with,
             permission,
             token,
             created_at: Utc::now(),
+            expires_at,
+            revoked_at: None,
+            last_accessed_at: None,
         };
         let mut shares = self.shares.write().unwrap();
         shares.entry(document_id).or_default().push(share.clone());
@@ -184,20 +190,93 @@ impl Store {
             .unwrap_or_default()
     }
 
-    /// Find a share by its unique token string.
-    pub fn find_share_by_token(&self, token: &str) -> Option<DocumentShare> {
-        self.shares
-            .read()
-            .unwrap()
-            .values()
-            .flatten()
-            .find(|s| s.token == token)
-            .cloned()
+    /// Find an active share by its unique token string and record access time.
+    pub fn find_active_share_by_token(&self, token: &str) -> Option<DocumentShare> {
+        let now = Utc::now();
+        let mut shares = self.shares.write().unwrap();
+        for share in shares.values_mut().flatten() {
+            if share.token != token || !share.is_active_at(now) {
+                continue;
+            }
+            share.last_accessed_at = Some(now);
+            return Some(share.clone());
+        }
+        None
+    }
+
+    /// Revoke a share without deleting its audit record.
+    pub fn revoke_share(&self, document_id: Uuid, share_id: Uuid) -> Option<DocumentShare> {
+        let mut shares = self.shares.write().unwrap();
+        let doc_shares = shares.get_mut(&document_id)?;
+        let share = doc_shares.iter_mut().find(|share| share.id == share_id)?;
+        if share.revoked_at.is_none() {
+            share.revoked_at = Some(Utc::now());
+        }
+        Some(share.clone())
+    }
+}
+
+impl DocumentShare {
+    fn is_active_at(&self, now: chrono::DateTime<Utc>) -> bool {
+        self.revoked_at.is_none() && self.expires_at.is_none_or(|expires_at| expires_at > now)
     }
 }
 
 impl Default for Store {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Duration;
+
+    #[test]
+    fn active_share_resolves_and_records_access() {
+        let store = Store::new();
+        let doc_id = Uuid::new_v4();
+        let owner_id = Uuid::new_v4();
+        let share = store.create_share(
+            doc_id,
+            owner_id,
+            None,
+            SharePermission::View,
+            Some(Utc::now() + Duration::minutes(5)),
+        );
+
+        let resolved = store.find_active_share_by_token(&share.token).unwrap();
+
+        assert_eq!(resolved.id, share.id);
+        assert_eq!(resolved.created_by, owner_id);
+        assert!(resolved.last_accessed_at.is_some());
+    }
+
+    #[test]
+    fn expired_share_does_not_resolve() {
+        let store = Store::new();
+        let share = store.create_share(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            None,
+            SharePermission::View,
+            Some(Utc::now() - Duration::seconds(1)),
+        );
+
+        assert!(store.find_active_share_by_token(&share.token).is_none());
+    }
+
+    #[test]
+    fn revoked_share_does_not_resolve_but_stays_listed() {
+        let store = Store::new();
+        let doc_id = Uuid::new_v4();
+        let share = store.create_share(doc_id, Uuid::new_v4(), None, SharePermission::View, None);
+
+        let revoked = store.revoke_share(doc_id, share.id).unwrap();
+
+        assert!(revoked.revoked_at.is_some());
+        assert!(store.find_active_share_by_token(&share.token).is_none());
+        assert_eq!(store.get_shares(doc_id).len(), 1);
     }
 }

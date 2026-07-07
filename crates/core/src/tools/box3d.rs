@@ -234,10 +234,12 @@ pub fn box3d_to_path_elements(attrs: &Box3dAttrs) -> Option<[(SvgElement, Presen
             d: faces[i].clone(),
             ..Default::default()
         });
-        let mut pres = PresentationAttrs::default();
-        pres.fill = Some(Paint::Color(FACE_COLORS[i]));
-        pres.stroke = Some(Paint::Color(Color::BLACK));
-        pres.stroke_width = Some(SvgLength::new(0.5, LengthUnit::None));
+        let pres = PresentationAttrs {
+            fill: Some(Paint::Color(FACE_COLORS[i])),
+            stroke: Some(Paint::Color(Color::BLACK)),
+            stroke_width: Some(SvgLength::new(0.5, LengthUnit::None)),
+            ..Default::default()
+        };
         (element, pres)
     });
 
@@ -426,10 +428,12 @@ impl Command for CreateBox3dCommand {
                 ..Default::default()
             });
 
-            let mut pres = PresentationAttrs::default();
-            pres.fill = Some(Paint::Color(FACE_COLORS[i]));
-            pres.stroke = Some(Paint::Color(Color::BLACK));
-            pres.stroke_width = Some(SvgLength::new(0.5, LengthUnit::None));
+            let pres = PresentationAttrs {
+                fill: Some(Paint::Color(FACE_COLORS[i])),
+                stroke: Some(Paint::Color(Color::BLACK)),
+                stroke_width: Some(SvgLength::new(0.5, LengthUnit::None)),
+                ..Default::default()
+            };
 
             let face_id = if let Some(prev_id) = self.face_ids[i] {
                 let mut node = sivgo_dom::SvgNode::new(prev_id, element);

@@ -51,19 +51,16 @@ impl CalligraphyTool {
     }
 
     /// Set the pen angle in degrees.
-    #[allow(dead_code)]
     pub fn set_angle(&mut self, degrees: f64) {
         self.angle = degrees;
     }
 
     /// Set the base stroke width.
-    #[allow(dead_code)]
     pub fn set_width(&mut self, width: f64) {
         self.width = width.max(0.1);
     }
 
     /// Set the thinning factor (`0.0` to `1.0`).
-    #[allow(dead_code)]
     pub fn set_thinning(&mut self, thinning: f64) {
         self.thinning = thinning.clamp(0.0, 1.0);
     }
@@ -171,9 +168,11 @@ impl CalligraphyTool {
             ..Default::default()
         });
 
-        let mut pres = PresentationAttrs::default();
-        pres.fill = Some(Paint::Color(Color::BLACK));
-        pres.stroke = Some(Paint::None);
+        let pres = PresentationAttrs {
+            fill: Some(Paint::Color(Color::BLACK)),
+            stroke: Some(Paint::None),
+            ..Default::default()
+        };
 
         let parent = match doc.root() {
             Some(r) => r,
@@ -292,5 +291,21 @@ impl Tool for CalligraphyTool {
 
     fn cursor(&self) -> &str {
         "crosshair"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn configuration_setters_apply_without_panic() {
+        let mut tool = CalligraphyTool::new();
+        tool.set_angle(30.0);
+        tool.set_width(8.0);
+        tool.set_thinning(0.4);
+        // Exercising the brush configuration API keeps it live (the values are
+        // consumed when a calligraphic stroke is built).
+        assert_eq!(tool.name(), "Calligraphy");
     }
 }

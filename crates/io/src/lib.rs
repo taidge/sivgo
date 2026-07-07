@@ -19,12 +19,15 @@ pub mod multi_page_pdf;
 pub mod pdf;
 pub mod pdf_import;
 pub mod recent_files;
+pub mod trace_import;
 
 // Re-export the main types/functions from the new export modules.
 pub use dxf::export_dxf;
 pub use eps::export_eps;
 pub use multi_page_pdf::{MultiPagePdfExporter, PdfMetadata, PdfPage};
 pub use pdf::{export_pdf, export_pdf_multipage, PdfExportOptions};
+pub use pdf_import::{import_pdf, PdfImportOptions};
+pub use trace_import::{trace_bitmap, TraceOptions};
 
 use std::fs;
 use std::io::BufWriter;
@@ -827,7 +830,7 @@ fn render_with_area(
                 cropped.extend_from_slice(&full_pixels[src_start..src_end]);
             } else {
                 // If out-of-bounds, fill with transparent.
-                cropped.extend(std::iter::repeat(0u8).take((crop_w as usize) * 4));
+                cropped.extend(std::iter::repeat_n(0u8, (crop_w as usize) * 4));
             }
         }
 

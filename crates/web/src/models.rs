@@ -50,11 +50,15 @@ pub struct DocumentVersion {
 pub struct DocumentShare {
     pub id: Uuid,
     pub document_id: Uuid,
+    pub created_by: Uuid,
     /// `None` means the share is a public link (anyone with the token).
     pub shared_with: Option<Uuid>,
     pub permission: SharePermission,
     pub token: String,
     pub created_at: DateTime<Utc>,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub revoked_at: Option<DateTime<Utc>>,
+    pub last_accessed_at: Option<DateTime<Utc>>,
 }
 
 /// Permission level for a document share.
@@ -95,6 +99,16 @@ pub struct CreateDocumentRequest {
 pub struct UpdateDocumentRequest {
     pub title: Option<String>,
     pub svg_content: Option<String>,
+}
+
+/// Body for `POST /api/v1/documents/{id}/shares`.
+#[derive(Debug, Deserialize)]
+pub struct CreateShareRequest {
+    /// Target user id for a direct share, or `None` for a public link.
+    pub shared_with: Option<Uuid>,
+    pub permission: SharePermission,
+    /// Optional expiry time. Expired shares are not resolvable.
+    pub expires_at: Option<DateTime<Utc>>,
 }
 
 /// Body for `POST /api/v1/export`.

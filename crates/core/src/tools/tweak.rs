@@ -1,4 +1,4 @@
-﻿//! Tweak tool: interactively modify objects near the cursor.
+//! Tweak tool: interactively modify objects near the cursor.
 //!
 //! ## Features
 //!
@@ -19,9 +19,10 @@ use crate::tool::{Tool, ToolResponse};
 use crate::viewport::Viewport;
 
 /// The modes the tweak tool can operate in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TweakMode {
     /// 17.4.1 -- Push objects away from the cursor.
+    #[default]
     Push,
     /// 17.4.2 -- Shrink objects (scale < 1).
     Shrink,
@@ -37,12 +38,6 @@ pub enum TweakMode {
     Blur,
     /// 17.4.5 -- Sharpen / darken colors (decreases opacity slightly).
     Sharpen,
-}
-
-impl Default for TweakMode {
-    fn default() -> Self {
-        Self::Push
-    }
 }
 
 /// A simple deterministic pseudo-random number generator (xorshift64).
@@ -106,37 +101,31 @@ impl TweakTool {
     }
 
     /// Set the effect radius.
-    #[allow(dead_code)]
     pub fn set_radius(&mut self, radius: f64) {
         self.radius = radius.max(1.0);
     }
 
     /// Get the current radius.
-    #[allow(dead_code)]
     pub fn radius(&self) -> f64 {
         self.radius
     }
 
     /// Set the push/effect strength.
-    #[allow(dead_code)]
     pub fn set_strength(&mut self, strength: f64) {
         self.strength = strength.max(0.0);
     }
 
     /// Get the current strength.
-    #[allow(dead_code)]
     pub fn strength(&self) -> f64 {
         self.strength
     }
 
     /// Set the tweak mode.
-    #[allow(dead_code)]
     pub fn set_mode(&mut self, mode: TweakMode) {
         self.mode = mode;
     }
 
     /// Get the current tweak mode.
-    #[allow(dead_code)]
     pub fn mode(&self) -> TweakMode {
         self.mode
     }
@@ -367,6 +356,17 @@ mod tests {
     use super::*;
     use sivgo_dom::types::{LengthUnit, SvgLength};
     use sivgo_dom::{RectAttrs, SvgDocument, SvgElement, SvgSvgAttrs};
+
+    #[test]
+    fn configuration_setters_round_trip() {
+        let mut tool = TweakTool::new();
+        tool.set_radius(33.0);
+        tool.set_strength(0.8);
+        tool.set_mode(TweakMode::Roughen);
+        assert_eq!(tool.radius(), 33.0);
+        assert_eq!(tool.strength(), 0.8);
+        assert_eq!(tool.mode(), TweakMode::Roughen);
+    }
 
     fn make_doc_with_rect(x: f64, y: f64, w: f64, h: f64) -> (SvgDocument, sivgo_dom::NodeId) {
         let mut doc = SvgDocument::new();

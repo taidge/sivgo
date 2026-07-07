@@ -8,6 +8,9 @@ use crate::errors::ApiError;
 use crate::models::*;
 use crate::store::Store;
 
+/// Maximum accepted size of a document's SVG body (bounds in-memory storage).
+const MAX_DOCUMENT_SVG_BYTES: usize = 16 * 1024 * 1024;
+
 /// `GET /api/v1/documents`
 ///
 /// Lists all documents owned by the authenticated user.
@@ -64,6 +67,13 @@ pub async fn create_document(req: &mut Request, depot: &mut Depot, res: &mut Res
     if body.title.is_empty() {
         ApiError::bad_request("title is required").write_to(res);
         return;
+    }
+
+    if let Some(svg) = body.svg_content.as_deref() {
+        if svg.len() > MAX_DOCUMENT_SVG_BYTES {
+            ApiError::bad_request("svg_content exceeds 16 MiB limit").write_to(res);
+            return;
+        }
     }
 
     let default_svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600"></svg>"#;
@@ -166,6 +176,10 @@ pub async fn update_document(req: &mut Request, depot: &mut Depot, res: &mut Res
 
     // Save a version before updating if svg_content changed.
     if let Some(ref content) = body.svg_content {
+        if content.len() > MAX_DOCUMENT_SVG_BYTES {
+            ApiError::bad_request("svg_content exceeds 16 MiB limit").write_to(res);
+            return;
+        }
         store.save_version(doc_id, content);
     }
 

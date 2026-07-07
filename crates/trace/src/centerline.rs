@@ -337,10 +337,10 @@ mod tests {
         let mut orig_count = 0;
         for y in 0..10 {
             for x in 0..30 {
-                if skeleton.get(x as i32, y as i32) {
+                if skeleton.get(x, y) {
                     skel_count += 1;
                 }
-                if binary.get(x as i32, y as i32) {
+                if binary.get(x, y) {
                     orig_count += 1;
                 }
             }

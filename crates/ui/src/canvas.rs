@@ -1,11 +1,9 @@
-//! Canvas view component: renders the SVG document and overlays selection handles.
-//!
-//! Converts the SVG document to a base64 PNG data URI for display in an `<img>`,
-//! overlays selection handles, and dispatches mouse/keyboard events.
+//! Canvas rendering: converts the SVG document to a base64 PNG data URI for
+//! display in an `<img>`, applying the active display mode (outline, print
+//! preview, proof colors, ...).
 
 use base64::Engine;
-use dioxus::prelude::*;
-use sivgo_core::{DisplayMode, EditorEngine, ToolId};
+use sivgo_core::{DisplayMode, EditorEngine};
 use sivgo_dom::{Color, LengthUnit, Paint, SvgDocument, SvgElement, SvgLength};
 use sivgo_render::{DocumentRenderer, RenderBackend, TinySkiaBackend};
 
@@ -51,10 +49,15 @@ pub fn render_to_data_uri(engine: &EditorEngine, width: u32, height: u32) -> Str
         let mut encoder = png::Encoder::new(&mut png_data, width, height);
         encoder.set_color(png::ColorType::Rgba);
         encoder.set_depth(png::BitDepth::Eight);
-        let mut writer = encoder.write_header().expect("PNG header write failed");
-        writer
-            .write_image_data(&straight)
-            .expect("PNG data write failed");
+        // Encode defensively: a PNG write failure must not crash the canvas.
+        // On error we fall back to an empty (transparent) image rather than panic.
+        let encoded = encoder
+            .write_header()
+            .and_then(|mut writer| writer.write_image_data(&straight));
+        if let Err(e) = encoded {
+            log::error!("canvas PNG encode failed: {e}");
+            return "data:image/png;base64,".to_string();
+        }
     }
 
     let b64 = base64::engine::general_purpose::STANDARD.encode(&png_data);
@@ -136,19 +139,6 @@ fn proof_color(color: Color) -> Color {
     Color::new(luminance, luminance, luminance, color.a)
 }
 
-/// A selection handle overlay rectangle.
-#[derive(Debug, Clone, PartialEq)]
-pub struct SelectionHandle {
-    /// Screen-space X coordinate.
-    pub x: f64,
-    /// Screen-space Y coordinate.
-    pub y: f64,
-    /// Width of the handle in pixels.
-    pub width: f64,
-    /// Height of the handle in pixels.
-    pub height: f64,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -218,98 +208,5 @@ mod tests {
         assert_eq!(stroke.g, stroke.b);
         assert_ne!(fill, Color::RED);
         assert_ne!(stroke, Color::BLUE);
-    }
-}
-
-/// Map a `ToolId` to a CSS cursor value.
-fn cursor_for_tool(tool: ToolId) -> &'static str {
-    match tool {
-        ToolId::Select => "default",
-        ToolId::Node => "crosshair",
-        ToolId::Rect | ToolId::Ellipse | ToolId::Star | ToolId::Spiral | ToolId::Box3d => {
-            "crosshair"
-        }
-        ToolId::Pen | ToolId::Pencil | ToolId::Calligraphy => "crosshair",
-        ToolId::Text => "text",
-        ToolId::Zoom => "zoom-in",
-        ToolId::Gradient | ToolId::Mesh => "crosshair",
-        ToolId::Dropper => "crosshair",
-        ToolId::BucketFill => "crosshair",
-        ToolId::Connector => "crosshair",
-        ToolId::Eraser => "crosshair",
-        ToolId::Spray => "crosshair",
-        ToolId::Tweak => "crosshair",
-        ToolId::Measure => "crosshair",
-        ToolId::Marker => "crosshair",
-        ToolId::Pages => "default",
-        ToolId::Lpe => "default",
-    }
-}
-
-/// The canvas view component displaying the rendered document, selection handles,
-/// and dispatching mouse/keyboard/wheel events.
-///
-/// The canvas renders the document as a PNG data URI in an `<img>` element.
-/// Selection handles are overlaid as absolutely-positioned `<div>` elements.
-/// The cursor style changes based on the currently active tool.
-#[component]
-pub fn CanvasView(
-    /// The rendered data URI for the document image.
-    data_uri: String,
-    /// Width of the canvas in pixels.
-    width: u32,
-    /// Height of the canvas in pixels.
-    height: u32,
-    /// The currently active tool, used to set the cursor.
-    active_tool: ToolId,
-    /// Selection handle overlay rectangles to display on the canvas.
-    #[props(default = Vec::new())]
-    selection_handles: Vec<SelectionHandle>,
-    /// Called when a mouse button is pressed on the canvas.
-    on_mouse_down: EventHandler<Event<dioxus::events::MouseData>>,
-    /// Called when the mouse moves over the canvas.
-    on_mouse_move: EventHandler<Event<dioxus::events::MouseData>>,
-    /// Called when a mouse button is released on the canvas.
-    on_mouse_up: EventHandler<Event<dioxus::events::MouseData>>,
-    /// Called when the mouse wheel is scrolled on the canvas.
-    on_wheel: EventHandler<Event<dioxus::events::WheelData>>,
-    /// Called when a key is pressed while the canvas is focused.
-    on_key_down: EventHandler<Event<dioxus::events::KeyboardData>>,
-    /// Called when a key is released while the canvas is focused.
-    on_key_up: EventHandler<Event<dioxus::events::KeyboardData>>,
-) -> Element {
-    let cursor = cursor_for_tool(active_tool);
-    let w = width;
-    let h = height;
-
-    rsx! {
-        div {
-            class: "canvas-view",
-            style: "position: relative; width: {w}px; height: {h}px; cursor: {cursor};",
-            tabindex: "0",
-            onkeydown: move |evt| on_key_down.call(evt),
-            onkeyup: move |evt| on_key_up.call(evt),
-
-            img {
-                src: "{data_uri}",
-                width: "{w}",
-                height: "{h}",
-                draggable: "false",
-                style: "display: block;",
-                onmousedown: move |evt| on_mouse_down.call(evt),
-                onmousemove: move |evt| on_mouse_move.call(evt),
-                onmouseup: move |evt| on_mouse_up.call(evt),
-                onwheel: move |evt| on_wheel.call(evt),
-            }
-
-            // Selection handle overlays
-            for (i, handle) in selection_handles.iter().enumerate() {
-                div {
-                    key: "{i}",
-                    class: "selection-handle",
-                    style: "position: absolute; left: {handle.x}px; top: {handle.y}px; width: {handle.width}px; height: {handle.height}px; border: 1px dashed #00aaff; pointer-events: none;",
-                }
-            }
-        }
     }
 }

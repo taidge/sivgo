@@ -155,13 +155,13 @@ fn build_clamped_knots(n: usize, degree: usize) -> Vec<f64> {
     let mut knots = vec![0.0f64; knot_count];
 
     let interior = knot_count - 2 * order;
-    for i in 0..knot_count {
+    for (i, knot) in knots.iter_mut().enumerate().take(knot_count) {
         if i < order {
-            knots[i] = 0.0;
+            *knot = 0.0;
         } else if i >= knot_count - order {
-            knots[i] = 1.0;
+            *knot = 1.0;
         } else {
-            knots[i] = (i - degree) as f64 / (interior + 1) as f64;
+            *knot = (i - degree) as f64 / (interior + 1) as f64;
         }
     }
     knots
@@ -290,7 +290,7 @@ fn approximate_with_cubics(points: &[Point], closed: bool, out: &mut BezPath) {
 
     // Step through in groups of 3 samples, fitting a cubic to each group.
     let mut i = 0;
-    while i + 3 <= n - 1 {
+    while i + 3 < n {
         let p0 = points[i];
         let p1 = points[i + 1];
         let p2 = points[i + 2];
@@ -311,8 +311,8 @@ fn approximate_with_cubics(points: &[Point], closed: bool, out: &mut BezPath) {
     }
 
     // Handle remaining points with line segments.
-    for j in (i + 1)..n {
-        out.line_to(points[j]);
+    for point in points.iter().take(n).skip(i + 1) {
+        out.line_to(*point);
     }
 
     if closed {

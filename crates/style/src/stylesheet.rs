@@ -280,7 +280,7 @@ pub fn parse_stylesheet(css: &str) -> Stylesheet {
         if selector_text.is_empty() || selector_text.starts_with('@') {
             // Skip @-rules: consume until matching '}'
             let mut depth = 1i32;
-            while let Some(ch) = chars.next() {
+            for ch in chars.by_ref() {
                 if ch == '{' {
                     depth += 1;
                 } else if ch == '}' {
@@ -562,24 +562,20 @@ fn strip_comments(css: &str) -> String {
     let mut chars = css.chars().peekable();
 
     while let Some(ch) = chars.next() {
-        if ch == '/' {
-            if chars.peek() == Some(&'*') {
-                // Start of comment — skip until */
-                chars.next(); // consume '*'
-                loop {
-                    match chars.next() {
-                        Some('*') => {
-                            if chars.peek() == Some(&'/') {
-                                chars.next(); // consume '/'
-                                break;
-                            }
-                        }
-                        None => break,
-                        _ => {}
+        if ch == '/' && chars.peek() == Some(&'*') {
+            // Start of comment — skip until */
+            chars.next(); // consume '*'
+            loop {
+                match chars.next() {
+                    Some('*') if chars.peek() == Some(&'/') => {
+                        chars.next(); // consume '/'
+                        break;
                     }
+                    None => break,
+                    _ => {}
                 }
-                continue;
             }
+            continue;
         }
         result.push(ch);
     }
@@ -779,7 +775,7 @@ mod tests {
 
     #[test]
     fn descendant_selector_matches() {
-        use sivgo_dom::{parse_svg, SvgDocument};
+        use sivgo_dom::parse_svg;
 
         let svg = r#"<svg xmlns="http://www.w3.org/2000/svg">
             <g>

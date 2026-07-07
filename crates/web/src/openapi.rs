@@ -305,6 +305,129 @@ pub fn generate_openapi_spec() -> String {
                     }
                 }
             },
+            "/api/v1/documents/{id}/shares": {
+                "get": {
+                    "summary": "List document shares",
+                    "operationId": "listDocumentShares",
+                    "tags": ["shares"],
+                    "security": [{ "bearerAuth": [] }],
+                    "parameters": [
+                        {
+                            "name": "id",
+                            "in": "path",
+                            "required": true,
+                            "schema": { "type": "string", "format": "uuid" }
+                        }
+                    ],
+                    "responses": {
+                        "200": {
+                            "description": "List of shares",
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "array",
+                                        "items": { "$ref": "#/components/schemas/DocumentShare" }
+                                    }
+                                }
+                            }
+                        },
+                        "404": { "description": "Document not found" }
+                    }
+                },
+                "post": {
+                    "summary": "Create a document share",
+                    "operationId": "createDocumentShare",
+                    "tags": ["shares"],
+                    "security": [{ "bearerAuth": [] }],
+                    "parameters": [
+                        {
+                            "name": "id",
+                            "in": "path",
+                            "required": true,
+                            "schema": { "type": "string", "format": "uuid" }
+                        }
+                    ],
+                    "requestBody": {
+                        "required": true,
+                        "content": {
+                            "application/json": {
+                                "schema": { "$ref": "#/components/schemas/CreateShareRequest" }
+                            }
+                        }
+                    },
+                    "responses": {
+                        "201": {
+                            "description": "Share created",
+                            "content": {
+                                "application/json": {
+                                    "schema": { "$ref": "#/components/schemas/DocumentShare" }
+                                }
+                            }
+                        },
+                        "400": { "description": "Invalid request" },
+                        "404": { "description": "Document not found" }
+                    }
+                }
+            },
+            "/api/v1/documents/{id}/shares/{share_id}": {
+                "delete": {
+                    "summary": "Revoke a document share",
+                    "operationId": "revokeDocumentShare",
+                    "tags": ["shares"],
+                    "security": [{ "bearerAuth": [] }],
+                    "parameters": [
+                        {
+                            "name": "id",
+                            "in": "path",
+                            "required": true,
+                            "schema": { "type": "string", "format": "uuid" }
+                        },
+                        {
+                            "name": "share_id",
+                            "in": "path",
+                            "required": true,
+                            "schema": { "type": "string", "format": "uuid" }
+                        }
+                    ],
+                    "responses": {
+                        "200": {
+                            "description": "Share revoked",
+                            "content": {
+                                "application/json": {
+                                    "schema": { "$ref": "#/components/schemas/DocumentShare" }
+                                }
+                            }
+                        },
+                        "404": { "description": "Document or share not found" }
+                    }
+                }
+            },
+            "/api/v1/shared/{token}": {
+                "get": {
+                    "summary": "Resolve a public or direct share token",
+                    "operationId": "getSharedDocument",
+                    "tags": ["shares"],
+                    "parameters": [
+                        {
+                            "name": "token",
+                            "in": "path",
+                            "required": true,
+                            "schema": { "type": "string" }
+                        }
+                    ],
+                    "responses": {
+                        "200": {
+                            "description": "Shared document",
+                            "content": {
+                                "application/json": {
+                                    "schema": { "$ref": "#/components/schemas/SharedDocumentResponse" }
+                                }
+                            }
+                        },
+                        "404": { "description": "Share not found, expired, or revoked" }
+                    }
+                }
+            },
             "/api/v1/export": {
                 "post": {
                     "summary": "Export SVG to PNG or normalized SVG",
@@ -688,6 +811,43 @@ pub fn generate_openapi_spec() -> String {
                         "svg_content": { "type": "string" }
                     }
                 },
+                "SharePermission": {
+                    "type": "string",
+                    "enum": ["View", "Edit"]
+                },
+                "DocumentShare": {
+                    "type": "object",
+                    "required": ["id", "document_id", "created_by", "permission", "token", "created_at"],
+                    "properties": {
+                        "id": { "type": "string", "format": "uuid" },
+                        "document_id": { "type": "string", "format": "uuid" },
+                        "created_by": { "type": "string", "format": "uuid" },
+                        "shared_with": { "type": "string", "format": "uuid", "nullable": true },
+                        "permission": { "$ref": "#/components/schemas/SharePermission" },
+                        "token": { "type": "string" },
+                        "created_at": { "type": "string", "format": "date-time" },
+                        "expires_at": { "type": "string", "format": "date-time", "nullable": true },
+                        "revoked_at": { "type": "string", "format": "date-time", "nullable": true },
+                        "last_accessed_at": { "type": "string", "format": "date-time", "nullable": true }
+                    }
+                },
+                "CreateShareRequest": {
+                    "type": "object",
+                    "required": ["permission"],
+                    "properties": {
+                        "shared_with": { "type": "string", "format": "uuid", "nullable": true },
+                        "permission": { "$ref": "#/components/schemas/SharePermission" },
+                        "expires_at": { "type": "string", "format": "date-time", "nullable": true }
+                    }
+                },
+                "SharedDocumentResponse": {
+                    "type": "object",
+                    "required": ["permission", "document"],
+                    "properties": {
+                        "permission": { "$ref": "#/components/schemas/SharePermission" },
+                        "document": { "$ref": "#/components/schemas/Document" }
+                    }
+                },
                 "ExportRequest": {
                     "type": "object",
                     "required": ["svg_content", "format"],
@@ -786,6 +946,9 @@ mod tests {
             "/api/v1/documents",
             "/api/v1/documents/{id}",
             "/api/v1/documents/{id}/versions",
+            "/api/v1/documents/{id}/shares",
+            "/api/v1/documents/{id}/shares/{share_id}",
+            "/api/v1/shared/{token}",
             "/api/v1/export",
             "/api/v1/assets",
             "/api/v1/assets/{id}",

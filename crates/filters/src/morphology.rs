@@ -11,7 +11,9 @@ pub enum MorphologyOp {
 
 /// Apply morphology (erode or dilate) with the given radii.
 ///
-/// For each pixel, examines the rectangular kernel defined by radius_x and radius_y.
+/// A rectangular structuring element is separable, so this runs a horizontal
+/// pass followed by a vertical pass — O(w·h·(rx+ry)) instead of the
+/// O(w·h·rx·ry) of a full 2D window scan.
 /// - Erode: take the minimum of each channel in the kernel.
 /// - Dilate: take the maximum of each channel in the kernel.
 pub fn morphology(
@@ -27,36 +29,57 @@ pub fn morphology(
         return input.clone();
     }
 
+    let horizontal = if rx > 0 {
+        morphology_pass(input, op, rx, true)
+    } else {
+        input.clone()
+    };
+    if ry > 0 {
+        morphology_pass(&horizontal, op, ry, false)
+    } else {
+        horizontal
+    }
+}
+
+/// One separable morphology pass. When `horizontal` is true the window spans
+/// `[x-radius, x+radius]` along the row; otherwise it spans the column.
+fn morphology_pass(
+    input: &FilterBuffer,
+    op: MorphologyOp,
+    radius: i32,
+    horizontal: bool,
+) -> FilterBuffer {
     let w = input.width as i32;
     let h = input.height as i32;
     let mut output = input.clone_empty();
 
+    let combine = |acc: f32, v: f32| match op {
+        MorphologyOp::Erode => acc.min(v),
+        MorphologyOp::Dilate => acc.max(v),
+    };
+    let init = match op {
+        MorphologyOp::Erode => f32::MAX,
+        MorphologyOp::Dilate => f32::MIN,
+    };
+
     for y in 0..h {
         for x in 0..w {
-            let mut result = match op {
-                MorphologyOp::Erode => [f32::MAX; 4],
-                MorphologyOp::Dilate => [f32::MIN; 4],
+            let mut result = [init; 4];
+            let (lo, hi) = if horizontal {
+                ((x - radius).max(0), (x + radius).min(w - 1))
+            } else {
+                ((y - radius).max(0), (y + radius).min(h - 1))
             };
-
-            for ky in -ry..=ry {
-                for kx in -rx..=rx {
-                    let sx = (x + kx).clamp(0, w - 1);
-                    let sy = (y + ky).clamp(0, h - 1);
-                    let px = input.get_pixel(sx as u32, sy as u32);
-
-                    for c in 0..4 {
-                        match op {
-                            MorphologyOp::Erode => {
-                                result[c] = result[c].min(px[c]);
-                            }
-                            MorphologyOp::Dilate => {
-                                result[c] = result[c].max(px[c]);
-                            }
-                        }
-                    }
+            for k in lo..=hi {
+                let px = if horizontal {
+                    input.get_pixel(k as u32, y as u32)
+                } else {
+                    input.get_pixel(x as u32, k as u32)
+                };
+                for c in 0..4 {
+                    result[c] = combine(result[c], px[c]);
                 }
             }
-
             output.set_pixel(x as u32, y as u32, result);
         }
     }

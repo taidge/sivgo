@@ -1,11 +1,15 @@
 //! feGaussianBlur -- separable Gaussian blur filter.
+//!
+//! Uses the SVG-spec three-box-blur approximation of a true Gaussian. Each box
+//! pass runs in O(w·h) via a sliding-window running sum, independent of the
+//! blur radius, so total cost is O(w·h) instead of the old O(w·h·σ) true-kernel
+//! convolution.
 
 use crate::buffer::FilterBuffer;
 
 /// Apply Gaussian blur with the given standard deviations.
 ///
-/// Uses a separable two-pass approach (horizontal then vertical).
-/// Edge pixels are handled by clamping coordinates.
+/// Edge pixels are handled by shrinking the averaging window at the borders.
 pub fn gaussian_blur(input: &FilterBuffer, std_dev_x: f64, std_dev_y: f64) -> FilterBuffer {
     if input.width == 0 || input.height == 0 {
         return input.clone();
@@ -16,103 +20,120 @@ pub fn gaussian_blur(input: &FilterBuffer, std_dev_x: f64, std_dev_y: f64) -> Fi
         return input.clone();
     }
 
-    // Horizontal pass
-    let intermediate = if std_dev_x >= 0.5 {
-        blur_pass_horizontal(input, std_dev_x)
-    } else {
-        input.clone()
-    };
+    let radii_x = box_radii_for_gauss(std_dev_x);
+    let radii_y = box_radii_for_gauss(std_dev_y);
 
-    // Vertical pass
-    if std_dev_y >= 0.5 {
-        blur_pass_vertical(&intermediate, std_dev_y)
-    } else {
-        intermediate
+    let mut current = input.clone();
+    // Three successive box blurs approximate a Gaussian (central-limit theorem).
+    for pass in 0..3 {
+        if std_dev_x >= 0.5 && radii_x[pass] > 0 {
+            current = box_blur_horizontal(&current, radii_x[pass]);
+        }
+        if std_dev_y >= 0.5 && radii_y[pass] > 0 {
+            current = box_blur_vertical(&current, radii_y[pass]);
+        }
     }
+    current
 }
 
-/// Compute Gaussian kernel weights for the given standard deviation.
-fn compute_kernel(std_dev: f64) -> Vec<f32> {
-    let radius = (std_dev * 3.0).ceil() as i32;
-    if radius == 0 {
-        return vec![1.0];
+/// Compute the three box-blur radii whose successive application best
+/// approximates a Gaussian of the given standard deviation (per Kovesi/the SVG
+/// filter spec's three-box recommendation).
+fn box_radii_for_gauss(std_dev: f64) -> [i32; 3] {
+    if std_dev < 0.5 {
+        return [0, 0, 0];
     }
-    let size = (radius * 2 + 1) as usize;
-    let mut kernel = vec![0.0f32; size];
-    let sigma2 = (std_dev * std_dev) as f32;
-    let mut sum = 0.0f32;
-
-    for i in 0..size {
-        let x = (i as i32 - radius) as f32;
-        let w = (-x * x / (2.0 * sigma2)).exp();
-        kernel[i] = w;
-        sum += w;
+    let n = 3.0;
+    let w_ideal = (12.0 * std_dev * std_dev / n + 1.0).sqrt();
+    let mut wl = w_ideal.floor();
+    if (wl as i64) % 2 == 0 {
+        wl -= 1.0;
     }
+    let wu = wl + 2.0;
+    let m_ideal =
+        (12.0 * std_dev * std_dev - n * wl * wl - 4.0 * n * wl - 3.0 * n) / (-4.0 * wl - 4.0);
+    let m = m_ideal.round() as i32;
 
-    // Normalize
-    for w in &mut kernel {
-        *w /= sum;
+    let mut radii = [0i32; 3];
+    for (i, radius) in radii.iter_mut().enumerate() {
+        let size = if (i as i32) < m { wl } else { wu };
+        *radius = ((size as i32) - 1) / 2;
     }
-
-    kernel
+    radii
 }
 
-fn blur_pass_horizontal(input: &FilterBuffer, std_dev: f64) -> FilterBuffer {
-    let kernel = compute_kernel(std_dev);
-    let radius = (kernel.len() / 2) as i32;
+/// One horizontal box-blur pass with a `2*radius+1` window, using a running sum
+/// so each row is processed in O(width). Window shrinks at the borders.
+fn box_blur_horizontal(input: &FilterBuffer, radius: i32) -> FilterBuffer {
     let w = input.width as i32;
     let h = input.height as i32;
     let mut output = input.clone_empty();
+    if radius <= 0 {
+        return input.clone();
+    }
 
     for y in 0..h {
+        // Prefix sums per channel across the row (length w+1).
+        let mut prefix = [
+            vec![0.0f32; (w + 1) as usize],
+            vec![0.0f32; (w + 1) as usize],
+            vec![0.0f32; (w + 1) as usize],
+            vec![0.0f32; (w + 1) as usize],
+        ];
         for x in 0..w {
-            let mut r = 0.0f32;
-            let mut g = 0.0f32;
-            let mut b = 0.0f32;
-            let mut a = 0.0f32;
-
-            for k in 0..kernel.len() as i32 {
-                let sx = (x + k - radius).clamp(0, w - 1);
-                let px = input.get_pixel(sx as u32, y as u32);
-                let weight = kernel[k as usize];
-                r += px[0] * weight;
-                g += px[1] * weight;
-                b += px[2] * weight;
-                a += px[3] * weight;
+            let px = input.get_pixel(x as u32, y as u32);
+            for c in 0..4 {
+                prefix[c][(x + 1) as usize] = prefix[c][x as usize] + px[c];
             }
-
-            output.set_pixel(x as u32, y as u32, [r, g, b, a]);
+        }
+        for x in 0..w {
+            let left = (x - radius).max(0);
+            let right = (x + radius).min(w - 1);
+            let count = (right - left + 1) as f32;
+            let mut out = [0.0f32; 4];
+            for c in 0..4 {
+                let sum = prefix[c][(right + 1) as usize] - prefix[c][left as usize];
+                out[c] = sum / count;
+            }
+            output.set_pixel(x as u32, y as u32, out);
         }
     }
 
     output
 }
 
-fn blur_pass_vertical(input: &FilterBuffer, std_dev: f64) -> FilterBuffer {
-    let kernel = compute_kernel(std_dev);
-    let radius = (kernel.len() / 2) as i32;
+/// One vertical box-blur pass; analogous to [`box_blur_horizontal`].
+fn box_blur_vertical(input: &FilterBuffer, radius: i32) -> FilterBuffer {
     let w = input.width as i32;
     let h = input.height as i32;
     let mut output = input.clone_empty();
+    if radius <= 0 {
+        return input.clone();
+    }
 
-    for y in 0..h {
-        for x in 0..w {
-            let mut r = 0.0f32;
-            let mut g = 0.0f32;
-            let mut b = 0.0f32;
-            let mut a = 0.0f32;
-
-            for k in 0..kernel.len() as i32 {
-                let sy = (y + k - radius).clamp(0, h - 1);
-                let px = input.get_pixel(x as u32, sy as u32);
-                let weight = kernel[k as usize];
-                r += px[0] * weight;
-                g += px[1] * weight;
-                b += px[2] * weight;
-                a += px[3] * weight;
+    for x in 0..w {
+        let mut prefix = [
+            vec![0.0f32; (h + 1) as usize],
+            vec![0.0f32; (h + 1) as usize],
+            vec![0.0f32; (h + 1) as usize],
+            vec![0.0f32; (h + 1) as usize],
+        ];
+        for y in 0..h {
+            let px = input.get_pixel(x as u32, y as u32);
+            for c in 0..4 {
+                prefix[c][(y + 1) as usize] = prefix[c][y as usize] + px[c];
             }
-
-            output.set_pixel(x as u32, y as u32, [r, g, b, a]);
+        }
+        for y in 0..h {
+            let top = (y - radius).max(0);
+            let bottom = (y + radius).min(h - 1);
+            let count = (bottom - top + 1) as f32;
+            let mut out = [0.0f32; 4];
+            for c in 0..4 {
+                let sum = prefix[c][(bottom + 1) as usize] - prefix[c][top as usize];
+                out[c] = sum / count;
+            }
+            output.set_pixel(x as u32, y as u32, out);
         }
     }
 

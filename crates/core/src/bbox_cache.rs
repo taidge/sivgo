@@ -147,11 +147,13 @@ mod tests {
         let svg = doc.add_node(SvgElement::Svg(SvgSvgAttrs::default()));
         doc.set_root(svg);
 
-        let mut rect_attrs = RectAttrs::default();
-        rect_attrs.x = SvgLength::px(10.0);
-        rect_attrs.y = SvgLength::px(20.0);
-        rect_attrs.width = SvgLength::px(100.0);
-        rect_attrs.height = SvgLength::px(50.0);
+        let rect_attrs = RectAttrs {
+            x: SvgLength::px(10.0),
+            y: SvgLength::px(20.0),
+            width: SvgLength::px(100.0),
+            height: SvgLength::px(50.0),
+            ..Default::default()
+        };
         let rect = doc.add_node(SvgElement::Rect(rect_attrs));
         doc.append_child(svg, rect);
 
@@ -201,19 +203,23 @@ mod tests {
         let g = doc.add_node(SvgElement::Group(GroupAttrs::default()));
         doc.append_child(svg, g);
 
-        let mut r1 = RectAttrs::default();
-        r1.x = SvgLength::px(0.0);
-        r1.y = SvgLength::px(0.0);
-        r1.width = SvgLength::px(50.0);
-        r1.height = SvgLength::px(50.0);
+        let r1 = RectAttrs {
+            x: SvgLength::px(0.0),
+            y: SvgLength::px(0.0),
+            width: SvgLength::px(50.0),
+            height: SvgLength::px(50.0),
+            ..Default::default()
+        };
         let rect1 = doc.add_node(SvgElement::Rect(r1));
         doc.append_child(g, rect1);
 
-        let mut r2 = RectAttrs::default();
-        r2.x = SvgLength::px(100.0);
-        r2.y = SvgLength::px(100.0);
-        r2.width = SvgLength::px(50.0);
-        r2.height = SvgLength::px(50.0);
+        let r2 = RectAttrs {
+            x: SvgLength::px(100.0),
+            y: SvgLength::px(100.0),
+            width: SvgLength::px(50.0),
+            height: SvgLength::px(50.0),
+            ..Default::default()
+        };
         let rect2 = doc.add_node(SvgElement::Rect(r2));
         doc.append_child(g, rect2);
 

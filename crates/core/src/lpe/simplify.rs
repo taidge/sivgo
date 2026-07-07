@@ -178,8 +178,8 @@ fn rdp_recursive(points: &[Point], start: usize, end: usize, epsilon: f64, keep:
     let a = points[start];
     let b = points[end];
 
-    for i in (start + 1)..end {
-        let d = perpendicular_distance(points[i], a, b);
+    for (i, point) in points.iter().enumerate().take(end).skip(start + 1) {
+        let d = perpendicular_distance(*point, a, b);
         if d > max_dist {
             max_dist = d;
             max_idx = i;
@@ -236,16 +236,16 @@ fn fit_smooth_cubics(points: &[Point], closed: bool, out: &mut BezPath) {
     let mut tangents = vec![Vector::ZERO; n];
 
     if closed {
-        for i in 0..n {
+        for (i, tangent) in tangents.iter_mut().enumerate() {
             let prev = (i + n - 1) % n;
             let next = (i + 1) % n;
-            tangents[i] = (points[next] - points[prev]).normalize();
+            *tangent = (points[next] - points[prev]).normalize();
         }
     } else {
         tangents[0] = (points[1] - points[0]).normalize();
         tangents[n - 1] = (points[n - 1] - points[n - 2]).normalize();
-        for i in 1..n - 1 {
-            tangents[i] = (points[i + 1] - points[i - 1]).normalize();
+        for (i, tangent) in tangents.iter_mut().enumerate().take(n - 1).skip(1) {
+            *tangent = (points[i + 1] - points[i - 1]).normalize();
         }
     }
 

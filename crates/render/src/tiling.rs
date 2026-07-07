@@ -107,7 +107,7 @@ impl TileGrid {
 
     /// Integer ceiling division.
     fn div_ceil(a: u32, b: u32) -> usize {
-        ((a as usize) + (b as usize) - 1) / (b as usize)
+        (a as usize).div_ceil(b as usize)
     }
 
     /// Number of tile columns.

@@ -44,6 +44,13 @@ impl ApiError {
         }
     }
 
+    pub fn rate_limited(msg: impl Into<String>) -> Self {
+        Self {
+            status: 429,
+            error: msg.into(),
+        }
+    }
+
     pub fn internal(msg: impl Into<String>) -> Self {
         Self {
             status: 500,

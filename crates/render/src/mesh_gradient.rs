@@ -366,8 +366,8 @@ pub struct MeshPatchData {
 pub fn build_patches(origin: (f64, f64), rows: &[Vec<MeshPatchData>]) -> Vec<CoonsPatch> {
     let mut patches = Vec::new();
 
-    for (_row_idx, row) in rows.iter().enumerate() {
-        for (_patch_idx, patch_data) in row.iter().enumerate() {
+    for row in rows {
+        for patch_data in row {
             let num_stops = patch_data.colors.len().min(4);
             if num_stops < 2 {
                 continue;
@@ -422,8 +422,8 @@ pub fn build_patches(origin: (f64, f64), rows: &[Vec<MeshPatchData>]) -> Vec<Coo
 
             // Colors: pad with last color if fewer than 4
             let mut colors = [Color::BLACK; 4];
-            for i in 0..4 {
-                colors[i] = if i < patch_data.colors.len() {
+            for (i, color) in colors.iter_mut().enumerate() {
+                *color = if i < patch_data.colors.len() {
                     patch_data.colors[i]
                 } else if !patch_data.colors.is_empty() {
                     patch_data.colors[patch_data.colors.len() - 1]
@@ -484,8 +484,8 @@ pub fn rasterize_mesh(
     max_x += padding;
     max_y += padding;
 
-    let w = (max_x - min_x).ceil().max(1.0).min(4096.0) as u32;
-    let h = (max_y - min_y).ceil().max(1.0).min(4096.0) as u32;
+    let w = (max_x - min_x).ceil().clamp(1.0, 4096.0) as u32;
+    let h = (max_y - min_y).ceil().clamp(1.0, 4096.0) as u32;
 
     if w == 0 || h == 0 {
         return None;

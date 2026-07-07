@@ -156,11 +156,11 @@ impl LivePathEffect for TaperStrokeLpe {
         // Build the closed outline: left forward, then right reversed.
         let mut result = BezPath::new();
         result.move_to(left[0]);
-        for i in 1..left.len() {
-            result.line_to(left[i]);
+        for point in left.iter().skip(1) {
+            result.line_to(*point);
         }
-        for i in (0..right.len()).rev() {
-            result.line_to(right[i]);
+        for point in right.iter().rev() {
+            result.line_to(*point);
         }
         result.close();
 

@@ -40,8 +40,11 @@ use crate::commands::{
 use crate::event::{EditorEvent, EventBus};
 use crate::input::{KeyEvent, MouseButton, MouseEvent};
 use crate::lpe::{
-    LivePathEffect, MeasureSegmentsLpe, MirrorSymmetryLpe, OffsetJoin, OffsetLpe, PowerStrokeLpe,
-    RoughenLpe, SimplifyLpe,
+    BSplineLpe, BendPathLpe, CopyRotateLpe, DashedStrokeLpe, EnvelopeLpe, ExtrudeLpe,
+    FilletChamferLpe, FilletMode, GearsLpe, HatchingLpe, InterpolateLpe, KnotLpe, LatticeLpe,
+    LivePathEffect, MeasureSegmentsLpe, MirrorSymmetryLpe, OffsetJoin, OffsetLpe,
+    PatternAlongPathLpe, PerspectiveEnvelopeLpe, PowerStrokeLpe, RoughenLpe, SimplifyLpe,
+    SketchLpe, SliceLpe, SpiroLpe, TaperStrokeLpe, TilingLpe, VonKochLpe,
 };
 use crate::selection::SelectionSet;
 use crate::snap::{SnapContext, SnapGuide, SnapIndicator, SnapSourceKind, SnappingEngine};
@@ -329,6 +332,19 @@ impl EditorEngine {
                 }
             } else if !event.modifiers.shift && !event.modifiers.ctrl {
                 self.selection.clear();
+            }
+            self.events.emit(EditorEvent::SelectionChanged);
+        }
+
+        // The LPE tool selects the clicked path so that LPE operations
+        // (panel buttons or the tool's own `apply_lpe`) target it.
+        if self.tools.active_id() == ToolId::Lpe && event.button == MouseButton::Left {
+            let doc_pt = self
+                .viewport
+                .screen_to_document(Point::new(event.x, event.y));
+            match crate::tools::lpe_tool::hit_test_path_at(&self.document, doc_pt) {
+                Some(hit_id) => self.selection.select(hit_id),
+                None => self.selection.clear(),
             }
             self.events.emit(EditorEvent::SelectionChanged);
         }
@@ -1031,8 +1047,10 @@ impl EditorEngine {
                 height: None,
             });
 
-            let mut pres = PresentationAttrs::default();
-            pres.transform = Some(Transform2D::translate(10.0, 10.0));
+            let pres = PresentationAttrs {
+                transform: Some(Transform2D::translate(10.0, 10.0)),
+                ..Default::default()
+            };
             let insert_index = self.document.child_index(id).map(|idx| idx + 1);
 
             commands.push(Box::new(AddNodeCommand::new(
@@ -1164,9 +1182,7 @@ impl EditorEngine {
     }
 
     fn snapshot_subtree_nodes(&self, root: NodeId) -> Option<Vec<SvgNode>> {
-        if self.document.get_node(root).is_none() {
-            return None;
-        }
+        self.document.get_node(root)?;
         let mut nodes = Vec::new();
         for id in self.document.traverse_pre_order(root) {
             nodes.push(self.document.get_node(id)?.clone());
@@ -1673,22 +1689,22 @@ impl EditorEngine {
 
                 // Copy style-related presentation attributes from the source,
                 // but preserve the target's transform (positional).
-                new_pres.color = source_pres.color.clone();
+                new_pres.color = source_pres.color;
                 new_pres.fill = source_pres.fill.clone();
                 new_pres.stroke = source_pres.stroke.clone();
-                new_pres.stroke_width = source_pres.stroke_width.clone();
+                new_pres.stroke_width = source_pres.stroke_width;
                 new_pres.opacity = source_pres.opacity;
                 new_pres.fill_opacity = source_pres.fill_opacity;
                 new_pres.stroke_opacity = source_pres.stroke_opacity;
-                new_pres.stroke_linecap = source_pres.stroke_linecap.clone();
-                new_pres.stroke_linejoin = source_pres.stroke_linejoin.clone();
+                new_pres.stroke_linecap = source_pres.stroke_linecap;
+                new_pres.stroke_linejoin = source_pres.stroke_linejoin;
                 new_pres.stroke_miterlimit = source_pres.stroke_miterlimit;
                 new_pres.stroke_dasharray = source_pres.stroke_dasharray.clone();
                 new_pres.stroke_dashoffset = source_pres.stroke_dashoffset;
-                new_pres.fill_rule = source_pres.fill_rule.clone();
-                new_pres.display = source_pres.display.clone();
-                new_pres.visibility = source_pres.visibility.clone();
-                new_pres.mix_blend_mode = source_pres.mix_blend_mode.clone();
+                new_pres.fill_rule = source_pres.fill_rule;
+                new_pres.display = source_pres.display;
+                new_pres.visibility = source_pres.visibility;
+                new_pres.mix_blend_mode = source_pres.mix_blend_mode;
                 new_pres.filter = source_pres.filter.clone();
                 new_pres.clip_path = source_pres.clip_path.clone();
                 new_pres.mask = source_pres.mask.clone();
@@ -3516,7 +3532,7 @@ impl EditorEngine {
         }
     }
 
-    fn normalize_lpe_kind(kind: &str) -> Option<&'static str> {
+    pub(crate) fn normalize_lpe_kind(kind: &str) -> Option<&'static str> {
         let normalized = kind.trim().to_ascii_lowercase().replace([' ', '-'], "_");
         match normalized.as_str() {
             "bend_path" | "bend" => Some("bend_path"),
@@ -3529,11 +3545,29 @@ impl EditorEngine {
             "mirror" | "mirror_symmetry" => Some("mirror"),
             "boolean_operation" | "boolean" => Some("boolean_operation"),
             "measure" | "measure_segments" => Some("measure"),
+            "bspline" | "b_spline" => Some("bspline"),
+            "copy_rotate" | "rotate_copies" => Some("copy_rotate"),
+            "dashed_stroke" | "dash" | "dashes" => Some("dashed_stroke"),
+            "envelope" | "envelope_deformation" => Some("envelope"),
+            "perspective_envelope" | "perspective" => Some("perspective_envelope"),
+            "extrude" => Some("extrude"),
+            "fillet" | "fillet_chamfer" | "chamfer" => Some("fillet"),
+            "gears" | "gear" => Some("gears"),
+            "hatching" | "hatch" => Some("hatching"),
+            "knot" => Some("knot"),
+            "sketch" => Some("sketch"),
+            "slice" | "slice_lpe" => Some("slice"),
+            "spiro" | "spiro_spline" => Some("spiro"),
+            "taper_stroke" | "taper" => Some("taper_stroke"),
+            "tiling" | "tile" => Some("tiling"),
+            "von_koch" | "koch" | "fractal" => Some("von_koch"),
+            "interpolate" => Some("interpolate"),
+            "lattice" | "lattice_deformation" => Some("lattice"),
             _ => None,
         }
     }
 
-    fn default_lpe_params(kind: &str) -> Vec<EngineLpeParam> {
+    pub(crate) fn default_lpe_params(kind: &str) -> Vec<EngineLpeParam> {
         fn param(name: &str, value: f64) -> EngineLpeParam {
             EngineLpeParam {
                 name: name.to_string(),
@@ -3564,6 +3598,64 @@ impl EditorEngine {
             ],
             "boolean_operation" => vec![param("operation", 0.0)],
             "measure" => vec![param("font_size", 12.0), param("measure_offset", 10.0)],
+            "bspline" => vec![param("degree", 3.0)],
+            "copy_rotate" => vec![
+                param("center_x", 0.0),
+                param("center_y", 0.0),
+                param("copies", 6.0),
+                param("include_original", 1.0),
+            ],
+            "dashed_stroke" => vec![param("dash_length", 10.0), param("gap_length", 5.0)],
+            // Envelope/perspective corners are expressed as per-corner offsets
+            // from the path's bounding box; all-zero offsets = identity map.
+            "envelope" | "perspective_envelope" => vec![
+                param("tl_dx", 0.0),
+                param("tl_dy", 0.0),
+                param("tr_dx", 0.0),
+                param("tr_dy", 0.0),
+                param("br_dx", 0.0),
+                param("br_dy", 0.0),
+                param("bl_dx", 0.0),
+                param("bl_dy", 0.0),
+            ],
+            "extrude" => vec![param("offset_x", 10.0), param("offset_y", 10.0)],
+            "fillet" => vec![param("radius", 10.0), param("mode", 0.0)],
+            "gears" => vec![
+                param("teeth", 12.0),
+                param("module", 5.0),
+                param("pressure_angle", 20.0),
+            ],
+            "hatching" => vec![
+                param("angle", 45.0),
+                param("spacing", 5.0),
+                param("line_width", 0.5),
+            ],
+            "knot" => vec![param("gap_width", 5.0)],
+            "sketch" => vec![
+                param("lines", 3.0),
+                param("max_displacement", 2.0),
+                param("seed", 42.0),
+            ],
+            "slice" => vec![
+                param("slice_x", 0.0),
+                param("slice_y", 0.0),
+                param("slice_angle", 0.0),
+            ],
+            "spiro" => Vec::new(),
+            "taper_stroke" => vec![
+                param("start_width", 5.0),
+                param("end_width", 1.0),
+                param("taper_length", 0.25),
+            ],
+            "tiling" => vec![
+                param("rows", 2.0),
+                param("cols", 2.0),
+                param("spacing_x", 10.0),
+                param("spacing_y", 10.0),
+            ],
+            "von_koch" => vec![param("iterations", 3.0), param("scale", 1.0)],
+            "interpolate" => vec![param("steps", 2.0)],
+            "lattice" => vec![param("rows", 4.0), param("cols", 4.0)],
             _ => Vec::new(),
         }
     }
@@ -3601,7 +3693,7 @@ impl EditorEngine {
         Some(format!("sivgo:lpe-stack:{encoded}"))
     }
 
-    fn decode_lpe_stack(marker: Option<&str>) -> Vec<EngineLpeEntry> {
+    pub(crate) fn decode_lpe_stack(marker: Option<&str>) -> Vec<EngineLpeEntry> {
         let Some(marker) = marker else {
             return Vec::new();
         };
@@ -3656,7 +3748,7 @@ impl EditorEngine {
             .collect()
     }
 
-    fn next_lpe_id(entries: &[EngineLpeEntry]) -> String {
+    pub(crate) fn next_lpe_id(entries: &[EngineLpeEntry]) -> String {
         let next = entries
             .iter()
             .filter_map(|entry| entry.id.strip_prefix("lpe"))
@@ -3709,11 +3801,161 @@ impl EditorEngine {
                 );
                 Some(Box::new(lpe))
             }
-            // These effects need external helper geometry or multi-object
-            // context. They are still persisted and editable, but their
-            // viewport preview remains the original path until that context is
-            // available.
-            "bend_path" | "pattern_along_path" | "stitch_sub_paths" | "boolean_operation" => None,
+            "bspline" => {
+                let degree = Self::lpe_param_value(entry, "degree", 3.0).max(1.0) as u32;
+                Some(Box::new(BSplineLpe::new(degree)))
+            }
+            "copy_rotate" => {
+                let center = Point::new(
+                    Self::lpe_param_value(entry, "center_x", 0.0),
+                    Self::lpe_param_value(entry, "center_y", 0.0),
+                );
+                let copies = Self::lpe_param_value(entry, "copies", 6.0).max(1.0) as usize;
+                let include_original = Self::lpe_param_value(entry, "include_original", 1.0) >= 0.5;
+                Some(Box::new(CopyRotateLpe::new(
+                    center,
+                    copies,
+                    include_original,
+                )))
+            }
+            "dashed_stroke" => Some(Box::new(DashedStrokeLpe::new(
+                Self::lpe_param_value(entry, "dash_length", 10.0).max(0.0),
+                Self::lpe_param_value(entry, "gap_length", 5.0).max(0.0),
+            ))),
+            "envelope" | "perspective_envelope" => {
+                // Build the four corners from the input bounding box plus the
+                // stored per-corner offsets (zero offsets => identity map).
+                let bb = input.bounding_box();
+                let tl = Point::new(
+                    bb.x0 + Self::lpe_param_value(entry, "tl_dx", 0.0),
+                    bb.y0 + Self::lpe_param_value(entry, "tl_dy", 0.0),
+                );
+                let tr = Point::new(
+                    bb.x1 + Self::lpe_param_value(entry, "tr_dx", 0.0),
+                    bb.y0 + Self::lpe_param_value(entry, "tr_dy", 0.0),
+                );
+                let br = Point::new(
+                    bb.x1 + Self::lpe_param_value(entry, "br_dx", 0.0),
+                    bb.y1 + Self::lpe_param_value(entry, "br_dy", 0.0),
+                );
+                let bl = Point::new(
+                    bb.x0 + Self::lpe_param_value(entry, "bl_dx", 0.0),
+                    bb.y1 + Self::lpe_param_value(entry, "bl_dy", 0.0),
+                );
+                if entry.kind == "perspective_envelope" {
+                    Some(Box::new(PerspectiveEnvelopeLpe::new(tl, tr, br, bl)))
+                } else {
+                    // EnvelopeLpe::new(top_left, top_right, bottom_left, bottom_right)
+                    Some(Box::new(EnvelopeLpe::new(tl, tr, bl, br)))
+                }
+            }
+            "extrude" => Some(Box::new(ExtrudeLpe::new(
+                Self::lpe_param_value(entry, "offset_x", 10.0),
+                Self::lpe_param_value(entry, "offset_y", 10.0),
+            ))),
+            "fillet" => {
+                let radius = Self::lpe_param_value(entry, "radius", 10.0).max(0.0);
+                let mode = if Self::lpe_param_value(entry, "mode", 0.0) >= 0.5 {
+                    FilletMode::Chamfer
+                } else {
+                    FilletMode::Fillet
+                };
+                Some(Box::new(FilletChamferLpe::new(radius, mode)))
+            }
+            "gears" => {
+                let teeth = Self::lpe_param_value(entry, "teeth", 12.0).max(3.0) as usize;
+                Some(Box::new(GearsLpe::new(
+                    teeth,
+                    Self::lpe_param_value(entry, "module", 5.0).max(0.1),
+                    Self::lpe_param_value(entry, "pressure_angle", 20.0),
+                )))
+            }
+            "hatching" => Some(Box::new(HatchingLpe::new(
+                Self::lpe_param_value(entry, "angle", 45.0),
+                Self::lpe_param_value(entry, "spacing", 5.0).max(0.1),
+                Self::lpe_param_value(entry, "line_width", 0.5).max(0.0),
+            ))),
+            "knot" => Some(Box::new(KnotLpe::new(
+                Self::lpe_param_value(entry, "gap_width", 5.0).max(0.0),
+            ))),
+            "sketch" => {
+                let lines = Self::lpe_param_value(entry, "lines", 3.0).max(1.0) as u32;
+                let seed = Self::lpe_param_value(entry, "seed", 42.0).max(0.0) as u64;
+                Some(Box::new(SketchLpe::new(
+                    lines,
+                    Self::lpe_param_value(entry, "max_displacement", 2.0),
+                    seed,
+                )))
+            }
+            "slice" => Some(Box::new(SliceLpe::new(
+                Self::lpe_param_value(entry, "slice_x", 0.0),
+                Self::lpe_param_value(entry, "slice_y", 0.0),
+                Self::lpe_param_value(entry, "slice_angle", 0.0),
+            ))),
+            "spiro" => Some(Box::new(SpiroLpe::new())),
+            "taper_stroke" => Some(Box::new(TaperStrokeLpe::new(
+                Self::lpe_param_value(entry, "start_width", 5.0).max(0.0),
+                Self::lpe_param_value(entry, "end_width", 1.0).max(0.0),
+                Self::lpe_param_value(entry, "taper_length", 0.25),
+            ))),
+            "tiling" => {
+                let rows = Self::lpe_param_value(entry, "rows", 2.0).max(1.0) as usize;
+                let cols = Self::lpe_param_value(entry, "cols", 2.0).max(1.0) as usize;
+                Some(Box::new(TilingLpe::new(
+                    rows,
+                    cols,
+                    Self::lpe_param_value(entry, "spacing_x", 10.0),
+                    Self::lpe_param_value(entry, "spacing_y", 10.0),
+                )))
+            }
+            "von_koch" => {
+                let iterations =
+                    Self::lpe_param_value(entry, "iterations", 3.0).clamp(0.0, 8.0) as u32;
+                Some(Box::new(VonKochLpe::new(
+                    iterations,
+                    Self::lpe_param_value(entry, "scale", 1.0),
+                )))
+            }
+            "bend_path" => {
+                // Default skeleton: a straight horizontal line across the input
+                // bounding box (identity baseline; a custom skeleton can be set
+                // once geometry parameters are supported).
+                let bb = input.bounding_box();
+                let cy = (bb.y0 + bb.y1) * 0.5;
+                let mut skeleton = BezPath::new();
+                skeleton.move_to(Point::new(bb.x0, cy));
+                skeleton.line_to(Point::new(bb.x1, cy));
+                Some(Box::new(BendPathLpe::new(skeleton)))
+            }
+            "pattern_along_path" => {
+                // The input path acts as the skeleton; stamp a short default
+                // unit-segment pattern along it. spacing/offsets come from the
+                // (flat f64) params, so this effect is genuinely tunable.
+                let spacing = Self::lpe_param_value(entry, "spacing", 10.0).max(1.0);
+                let normal = Self::lpe_param_value(entry, "normal_offset", 0.0);
+                let tangent = Self::lpe_param_value(entry, "tangential_offset", 0.0);
+                let mut pattern = BezPath::new();
+                pattern.move_to(Point::new(0.0, 0.0));
+                pattern.line_to(Point::new(spacing * 0.5, 0.0));
+                Some(Box::new(PatternAlongPathLpe::new(
+                    pattern, 0, spacing, normal, tangent, false,
+                )))
+            }
+            "interpolate" => {
+                let steps = Self::lpe_param_value(entry, "steps", 2.0).max(1.0) as u32;
+                // Default reference = the input itself => identity interpolation
+                // until a distinct target path is provided.
+                Some(Box::new(InterpolateLpe::new(steps, input.clone())))
+            }
+            "lattice" => {
+                let rows = Self::lpe_param_value(entry, "rows", 4.0).max(1.0) as usize;
+                let cols = Self::lpe_param_value(entry, "cols", 4.0).max(1.0) as usize;
+                Some(Box::new(LatticeLpe::identity(rows, cols)))
+            }
+            // These remaining effects need multi-object context (other paths in
+            // the document) that the single-path LPE pipeline does not yet
+            // provide; they are persisted/editable but preview as the original.
+            "stitch_sub_paths" | "boolean_operation" => None,
             _ => None,
         };
 
@@ -3730,7 +3972,10 @@ impl EditorEngine {
         current
     }
 
-    fn rebuild_lpe_path_attrs(attrs: &PathAttrs, entries: &[EngineLpeEntry]) -> PathAttrs {
+    pub(crate) fn rebuild_lpe_path_attrs(
+        attrs: &PathAttrs,
+        entries: &[EngineLpeEntry],
+    ) -> PathAttrs {
         let original = attrs
             .inkscape_original_d
             .clone()

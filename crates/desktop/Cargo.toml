@@ -13,6 +13,7 @@ sivgo-render = { workspace = true }
 sivgo-io = { workspace = true }
 sivgo-math = { workspace = true }
 sivgo-core = { workspace = true }
+sivgo-plugin = { workspace = true }
 sivgo-ui = { workspace = true }
 dioxus = { workspace = true }
 dioxus-desktop = { workspace = true }

@@ -1,4 +1,4 @@
-﻿//! Recent files manager for the Sivgo editor.
+//! Recent files manager for the Sivgo editor.
 //!
 //! Tracks recently opened files with persistence via a simple JSON file.
 
@@ -81,8 +81,7 @@ impl RecentFiles {
 
     /// Persist the list to `path` as JSON.
     pub fn save_to_file(&self, path: impl AsRef<Path>) -> io::Result<()> {
-        let json = serde_json::to_string_pretty(self)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let json = serde_json::to_string_pretty(self).map_err(io::Error::other)?;
         std::fs::write(path, json)
     }
 

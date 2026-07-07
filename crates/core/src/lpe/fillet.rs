@@ -202,8 +202,8 @@ fn apply_fillet_chamfer_subpath(
     }
 
     // Walk points and emit segments.
-    let start_idx: usize = if closed { 0 } else { 0 };
-    let end_idx: usize = if closed { n } else { n };
+    let start_idx: usize = 0;
+    let end_idx: usize = n;
 
     let mut first_point: Option<Point> = None;
     let mut moved = false;

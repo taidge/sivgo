@@ -97,7 +97,7 @@ bench:
     cargo bench --workspace
 
 # Run fuzz tests (requires cargo-fuzz: cargo install cargo-fuzz)
-fuzz target="fuzz_svg_parser" duration="60":
+fuzz target="svg_parse" duration="60":
     cd fuzz && cargo +nightly fuzz run {{target}} -- -max_total_time={{duration}}
 
 # ─── Clean ────────────────────────────────────────────────────────────

@@ -9,3 +9,4 @@ pub mod oauth;
 pub mod openapi;
 pub mod plugins;
 pub mod preferences;
+pub mod shares;

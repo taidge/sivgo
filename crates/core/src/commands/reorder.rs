@@ -63,7 +63,7 @@ impl Command for ReorderCommand {
             Some(p) => p,
             None => return,
         };
-        if let Some(_) = doc.detach_node(self.node_id) {
+        if doc.detach_node(self.node_id).is_some() {
             doc.insert_child_at(parent_id, self.node_id, self.old_index);
         }
     }

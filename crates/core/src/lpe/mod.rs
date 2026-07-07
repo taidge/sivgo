@@ -1,4 +1,4 @@
-﻿//! Live Path Effects (LPE) framework for non-destructive path manipulation.
+//! Live Path Effects (LPE) framework for non-destructive path manipulation.
 //!
 //! Provides:
 //! - [`LivePathEffect`] trait defining the interface for all effects.
@@ -159,17 +159,25 @@ impl LpeStack {
         self.effects.push(effect);
     }
 
-    /// Remove the effect at `index`. Panics if out of bounds.
-    pub fn remove(&mut self, index: usize) -> Box<dyn LivePathEffect> {
-        self.effects.remove(index)
+    /// Remove and return the effect at `index`, or `None` if out of bounds.
+    pub fn remove(&mut self, index: usize) -> Option<Box<dyn LivePathEffect>> {
+        if index < self.effects.len() {
+            Some(self.effects.remove(index))
+        } else {
+            None
+        }
     }
 
-    /// Move the effect at position `from` to position `to`.
-    ///
-    /// Both indices must be valid (< `len()`), otherwise this panics.
-    pub fn reorder(&mut self, from: usize, to: usize) {
+    /// Move the effect at position `from` to position `to`. Out-of-range
+    /// indices are ignored (returns `false`); on success returns `true`.
+    pub fn reorder(&mut self, from: usize, to: usize) -> bool {
+        let len = self.effects.len();
+        if from >= len || to >= len {
+            return false;
+        }
         let effect = self.effects.remove(from);
         self.effects.insert(to, effect);
+        true
     }
 
     /// Number of effects in the stack.
@@ -250,9 +258,13 @@ mod tests {
         let mut stack = LpeStack::new();
         stack.push(Box::new(FilletChamferLpe::new(5.0, FilletMode::Fillet)));
         stack.push(Box::new(FilletChamferLpe::new(10.0, FilletMode::Chamfer)));
-        let removed = stack.remove(0);
+        let removed = stack.remove(0).expect("index 0 is in bounds");
         assert_eq!(removed.name(), "fillet_chamfer");
         assert_eq!(stack.len(), 1);
+        assert!(
+            stack.remove(5).is_none(),
+            "out-of-bounds remove returns None"
+        );
     }
 
     #[test]
@@ -266,11 +278,14 @@ mod tests {
         assert_eq!(p0[0].value, 5.0);
 
         // Reorder: move index 1 to index 0
-        stack.reorder(1, 0);
+        assert!(stack.reorder(1, 0));
 
         // After: [Chamfer(10), Fillet(5)]
         let p0 = stack.get(0).unwrap().params();
         assert_eq!(p0[0].value, 10.0);
+
+        // Out-of-range reorder is a no-op.
+        assert!(!stack.reorder(9, 0));
     }
 
     #[test]

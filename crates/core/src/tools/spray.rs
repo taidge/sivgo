@@ -1,4 +1,4 @@
-﻿//! Spray tool: spray clones/copies of the selected element.
+//! Spray tool: spray clones/copies of the selected element.
 //!
 //! On each drag event, create a clone of the currently selected element at a
 //! random offset within the spray radius.
@@ -57,21 +57,16 @@ impl SimpleRng {
 }
 
 /// Spray mode determines how copies are created.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SprayMode {
     /// Create a deep copy of the source element.
+    #[default]
     Copy,
     /// Create an SVG `<use>` clone referencing the source element.
     Clone,
     /// Create a translated copy as a single path (same as Copy but
     /// conceptually intended for path elements that could be merged later).
     SinglePath,
-}
-
-impl Default for SprayMode {
-    fn default() -> Self {
-        Self::Copy
-    }
 }
 
 /// The spray tool.
@@ -115,25 +110,21 @@ impl SprayTool {
     }
 
     /// Set the spray radius (width parameter).
-    #[allow(dead_code)]
     pub fn set_radius(&mut self, radius: f64) {
         self.radius = radius.max(1.0);
     }
 
     /// Get the current radius.
-    #[allow(dead_code)]
     pub fn radius(&self) -> f64 {
         self.radius
     }
 
     /// Set the density (clones per drag event / amount parameter).
-    #[allow(dead_code)]
     pub fn set_density(&mut self, density: u32) {
         self.density = density.max(1);
     }
 
     /// Get the current density.
-    #[allow(dead_code)]
     pub fn density(&self) -> u32 {
         self.density
     }
@@ -141,13 +132,11 @@ impl SprayTool {
     /// Set the maximum rotation variation in radians.
     ///
     /// Each sprayed copy will be randomly rotated by up to `+/- variation` radians.
-    #[allow(dead_code)]
     pub fn set_rotation_variation(&mut self, variation: f64) {
         self.rotation_variation = variation.abs();
     }
 
     /// Get the current rotation variation.
-    #[allow(dead_code)]
     pub fn rotation_variation(&self) -> f64 {
         self.rotation_variation
     }
@@ -156,25 +145,21 @@ impl SprayTool {
     ///
     /// Each sprayed copy will be scaled by a random factor in `[1 - v, 1 + v]`
     /// where `v` is the variation (clamped so the minimum scale is > 0).
-    #[allow(dead_code)]
     pub fn set_scale_variation(&mut self, variation: f64) {
         self.scale_variation = variation.abs().min(0.99);
     }
 
     /// Get the current scale variation.
-    #[allow(dead_code)]
     pub fn scale_variation(&self) -> f64 {
         self.scale_variation
     }
 
     /// Set the spray mode.
-    #[allow(dead_code)]
     pub fn set_mode(&mut self, mode: SprayMode) {
         self.mode = mode;
     }
 
     /// Get the current spray mode.
-    #[allow(dead_code)]
     pub fn mode(&self) -> SprayMode {
         self.mode
     }
@@ -414,6 +399,19 @@ mod tests {
     use crate::command::Command;
     use sivgo_dom::types::{LengthUnit, SvgLength};
     use sivgo_dom::{RectAttrs, SvgDocument, SvgElement, SvgSvgAttrs};
+
+    #[test]
+    fn configuration_setters_round_trip() {
+        let mut tool = SprayTool::new();
+        tool.set_radius(42.0);
+        tool.set_density(7);
+        tool.set_rotation_variation(0.5);
+        tool.set_scale_variation(0.25);
+        tool.set_mode(SprayMode::SinglePath);
+        assert_eq!(tool.radius(), 42.0);
+        assert_eq!(tool.density(), 7);
+        assert_eq!(tool.mode(), SprayMode::SinglePath);
+    }
 
     fn make_doc_with_rect() -> (SvgDocument, sivgo_dom::NodeId) {
         let mut doc = SvgDocument::new();

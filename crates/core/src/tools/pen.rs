@@ -47,10 +47,12 @@ impl PenTool {
             ..Default::default()
         });
 
-        let mut pres = PresentationAttrs::default();
-        pres.fill = Some(Paint::None);
-        pres.stroke = Some(Paint::Color(Color::BLACK));
-        pres.stroke_width = Some(SvgLength::new(2.0, LengthUnit::None));
+        let pres = PresentationAttrs {
+            fill: Some(Paint::None),
+            stroke: Some(Paint::Color(Color::BLACK)),
+            stroke_width: Some(SvgLength::new(2.0, LengthUnit::None)),
+            ..Default::default()
+        };
 
         let parent = match doc.root() {
             Some(r) => r,

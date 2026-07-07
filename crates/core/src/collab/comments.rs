@@ -32,13 +32,7 @@ pub struct Comment {
 
 impl Comment {
     /// Create a new top-level comment.
-    pub fn new(
-        id: &str,
-        author_id: &str,
-        author_name: &str,
-        text: &str,
-        created_at: u64,
-    ) -> Self {
+    pub fn new(id: &str, author_id: &str, author_name: &str, text: &str, created_at: u64) -> Self {
         Self {
             id: id.to_string(),
             author_id: author_id.to_string(),
@@ -321,9 +315,6 @@ mod tests {
         let nested_id = thread.reply(&reply_id, "charlie", "Charlie", "Nested");
         assert!(nested_id.is_some());
         assert_eq!(thread.comments[0].replies[0].replies.len(), 1);
-        assert_eq!(
-            thread.comments[0].replies[0].replies[0].text,
-            "Nested"
-        );
+        assert_eq!(thread.comments[0].replies[0].replies[0].text, "Nested");
     }
 }

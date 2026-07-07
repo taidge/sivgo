@@ -1,11 +1,10 @@
-﻿//! Benchmarks for SVG parsing and rendering.
+//! Benchmarks for SVG parsing and serialization.
 //!
 //! Run with:
-//!   cargo bench --bench render_bench
+//!   cargo bench -p sivgo-dom --bench parse_serialize
 //!
-//! These benchmarks use a simple timing harness compatible with
-//! `#[bench]`-style layout. For more sophisticated statistical
-//! analysis, consider adding criterion as a dev-dependency.
+//! These benchmarks use a simple timing harness. For more sophisticated
+//! statistical analysis, consider adding criterion as a dev-dependency.
 
 use std::time::Instant;
 
@@ -33,11 +32,11 @@ fn bench(name: &str, iterations: u32, f: impl Fn()) {
 // SVG test inputs
 // ---------------------------------------------------------------------------
 
-const SIMPLE_RECT_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+const SIMPLE_RECT_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
   <rect x="20" y="20" width="160" height="120" fill="#3366cc" stroke="black" stroke-width="2"/>
-</svg>"#;
+</svg>"##;
 
-const SHAPES_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400">
+const SHAPES_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400">
   <rect x="10" y="10" width="80" height="60" fill="red"/>
   <circle cx="200" cy="200" r="80" fill="blue"/>
   <ellipse cx="300" cy="100" rx="60" ry="30" fill="green"/>
@@ -45,7 +44,7 @@ const SHAPES_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="400" 
   <polyline points="50,300 100,250 150,300 200,250" fill="none" stroke="purple" stroke-width="2"/>
   <polygon points="300,300 350,250 400,300" fill="orange"/>
   <path d="M 10 200 C 40 100 160 100 190 200" fill="none" stroke="brown" stroke-width="3"/>
-</svg>"#;
+</svg>"##;
 
 const GRADIENT_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
   <defs>
@@ -58,7 +57,7 @@ const GRADIENT_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="20
   <rect x="10" y="10" width="180" height="180" fill="url(#g1)"/>
 </svg>"##;
 
-const NESTED_GROUPS_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="300" height="300">
+const NESTED_GROUPS_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="300" height="300">
   <g transform="translate(10,10)">
     <g transform="rotate(15)">
       <rect x="0" y="0" width="50" height="50" fill="red"/>
@@ -71,17 +70,17 @@ const NESTED_GROUPS_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width
       <ellipse cx="40" cy="20" rx="35" ry="18" fill="purple" opacity="0.6"/>
     </g>
   </g>
-</svg>"#;
+</svg>"##;
 
 fn generate_many_rects(count: usize) -> String {
     let mut svg = format!(
-        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{}" height="{}">"#,
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="{}" height="{}">"##,
         count * 2,
         count * 2
     );
     for i in 0..count {
         svg.push_str(&format!(
-            r#"<rect x="{}" y="{}" width="10" height="10" fill="#{:02x}{:02x}{:02x}"/>"#,
+            r##"<rect x="{}" y="{}" width="10" height="10" fill="#{:02x}{:02x}{:02x}"/>"##,
             (i * 12) % (count * 2),
             (i * 7) % (count * 2),
             (i * 37) % 256,

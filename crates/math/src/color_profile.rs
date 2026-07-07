@@ -102,7 +102,7 @@ impl DocumentColorProfile {
     /// returns the color unchanged.
     pub fn to_proof(&self, color: &ColorF64) -> ColorF64 {
         if !self.soft_proof_enabled || self.proof_profile.is_none() {
-            return color.clone();
+            return *color;
         }
         // Simplified: convert to CMYK and back as a basic proof simulation
         color.to_space(ColorSpace::Cmyk).to_srgb()

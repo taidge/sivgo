@@ -17,6 +17,26 @@ pub struct LayerEntry {
     pub blend_mode: String,
 }
 
+/// CSS/SVG blend mode keywords selectable per layer.
+const BLEND_MODES: &[&str] = &[
+    "normal",
+    "multiply",
+    "screen",
+    "overlay",
+    "darken",
+    "lighten",
+    "color-dodge",
+    "color-burn",
+    "hard-light",
+    "soft-light",
+    "difference",
+    "exclusion",
+    "hue",
+    "saturation",
+    "color",
+    "luminosity",
+];
+
 /// Event fired when a layer property changes.
 #[derive(Debug, Clone)]
 pub enum LayerAction {
@@ -61,7 +81,6 @@ pub fn LayersPanel(
                         } else {
                             format!("{edit_copy} - {visibility_copy}")
                         };
-                        let blend_copy = (entry_blend != "Normal").then(|| format!("Blend: {entry_blend}"));
                         let opacity_percent = (entry_opacity * 100.0).round() as u32;
                         let is_first = idx == 0;
                         let is_last = idx == layers.len() - 1;
@@ -117,9 +136,6 @@ pub fn LayersPanel(
                                                 "{entry.label}"
                                             }
                                             span { class: "layer-meta", "{state_copy}" }
-                                            if let Some(blend_copy) = blend_copy.clone() {
-                                                span { class: "layer-meta layer-blend-meta", "{blend_copy}" }
-                                            }
                                         }
                                     }
                                     button {
@@ -153,6 +169,21 @@ pub fn LayersPanel(
                                         },
                                     }
                                     span { class: "layer-opacity-value", "{opacity_percent}%" }
+                                    select {
+                                        class: "layer-blend-select",
+                                        title: "Blend mode",
+                                        value: "{entry_blend}",
+                                        onchange: move |evt: Event<FormData>| {
+                                            on_action.call(LayerAction::SetBlendMode(entry_id, evt.value().to_string()));
+                                        },
+                                        for mode in BLEND_MODES.iter() {
+                                            option {
+                                                value: "{mode}",
+                                                selected: entry_blend == *mode,
+                                                "{mode}"
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }

@@ -5,8 +5,9 @@ use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
 /// Top-level section within the preferences dialog.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum PreferencesSection {
+    #[default]
     Tools,
     Interface,
     IO,
@@ -35,12 +36,6 @@ impl PreferencesSection {
             Self::Rendering => "Rendering",
             Self::Snapping => "Snapping",
         }
-    }
-}
-
-impl Default for PreferencesSection {
-    fn default() -> Self {
-        Self::Tools
     }
 }
 
@@ -157,9 +152,9 @@ pub fn PreferencesDialog(
     on_action: EventHandler<PreferencesAction>,
 ) -> Element {
     let sections = PreferencesSection::all();
-    let themes = vec!["Dark", "Light", "System"];
-    let icon_sizes = vec!["Small", "Medium", "Large"];
-    let filter_qualities = vec!["Low", "Medium", "High"];
+    let themes = ["Dark", "Light", "System"];
+    let icon_sizes = ["Small", "Medium", "Large"];
+    let filter_qualities = ["Low", "Medium", "High"];
 
     let theme_val = state.theme.clone();
     let icon_val = state.icon_size.clone();

@@ -1,4 +1,4 @@
-﻿//! Node tool: edit individual path nodes (anchor points) and control handles.
+//! Node tool: edit individual path nodes (anchor points) and control handles.
 //!
 //! Allows clicking and dragging path nodes, dragging cubic Bezier control
 //! handles, deleting nodes, and toggling segment types between line and curve.
@@ -121,17 +121,15 @@ fn find_nearest_handle(path: &BezPath, doc_pt: Point, tolerance: f64) -> Option<
 
         for (kind, pos) in candidates {
             let dist_sq = pos.distance_squared(doc_pt);
-            if dist_sq <= tol_sq {
-                if best.is_none() || dist_sq < best.as_ref().unwrap().0 {
-                    best = Some((
-                        dist_sq,
-                        HitHandle {
-                            element_index: i,
-                            kind,
-                            position: pos,
-                        },
-                    ));
-                }
+            if dist_sq <= tol_sq && (best.is_none() || dist_sq < best.as_ref().unwrap().0) {
+                best = Some((
+                    dist_sq,
+                    HitHandle {
+                        element_index: i,
+                        kind,
+                        position: pos,
+                    },
+                ));
             }
         }
     }

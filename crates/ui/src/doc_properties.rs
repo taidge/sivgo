@@ -113,7 +113,7 @@ pub fn DocPropertiesPanel(
     snap_to_grid: bool,
     on_action: EventHandler<DocPropertiesAction>,
 ) -> Element {
-    let presets = vec!["A4", "A3", "Letter", "Legal", "Custom"];
+    let presets = ["A4", "A3", "Letter", "Legal", "Custom"];
     let preset_val = preset.clone();
     let bg_val = background_color.clone();
     let orient_val = orientation.clone();

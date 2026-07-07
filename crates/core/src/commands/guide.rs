@@ -27,7 +27,7 @@ impl AddGuideCommand {
         let root_id = doc.root()?;
         let namedview_id = Self::find_namedview(doc);
         let created_namedview = namedview_id.is_none();
-        let namedview_id = namedview_id.unwrap_or_else(NodeId::new);
+        let namedview_id = namedview_id.unwrap_or_default();
         let namedview_index = doc.children(root_id).len();
         let guide_index = if created_namedview {
             0

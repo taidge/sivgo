@@ -50,8 +50,8 @@ fn rdp(points: &[[f64; 2]], epsilon: f64) -> Vec<[f64; 2]> {
     let mut max_dist = 0.0;
     let mut max_idx = 0;
 
-    for i in 1..n - 1 {
-        let d = perpendicular_distance(points[i], first, last);
+    for (i, point) in points.iter().enumerate().take(n - 1).skip(1) {
+        let d = perpendicular_distance(*point, first, last);
         if d > max_dist {
             max_dist = d;
             max_idx = i;

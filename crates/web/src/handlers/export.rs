@@ -33,6 +33,13 @@ pub async fn export_document(req: &mut Request, res: &mut Response) {
         }
     };
 
+    // This endpoint is unauthenticated; bound the input to limit DoS surface.
+    const MAX_SVG_BYTES: usize = 8 * 1024 * 1024; // 8 MiB
+    if body.svg_content.len() > MAX_SVG_BYTES {
+        ApiError::bad_request("svg_content exceeds 8 MiB limit").write_to(res);
+        return;
+    }
+
     // Parse the SVG content using sivgo-dom.
     let doc = match sivgo_dom::parse_svg(&body.svg_content) {
         Ok(d) => d,
@@ -60,6 +67,14 @@ pub async fn export_document(req: &mut Request, res: &mut Response) {
 
             if width == 0 || height == 0 || width > 8192 || height > 8192 {
                 ApiError::bad_request("width and height must be 1..8192").write_to(res);
+                return;
+            }
+
+            // Cap total pixel area so a single request can't drive a huge
+            // (e.g. 8192x8192 ~ 256 MiB RGBA) allocation on this public route.
+            const MAX_PIXELS: u64 = 16 * 1024 * 1024; // 16 MP (~64 MiB RGBA)
+            if width as u64 * height as u64 > MAX_PIXELS {
+                ApiError::bad_request("width*height exceeds 16 megapixel limit").write_to(res);
                 return;
             }
 

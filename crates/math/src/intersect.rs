@@ -1,4 +1,5 @@
 //! Geometric intersection routines: line-line, line-curve, curve-curve.
+#![allow(clippy::too_many_arguments)]
 
 use crate::Point;
 
@@ -34,7 +35,8 @@ pub fn line_line_intersection(a1: Point, a2: Point, b1: Point, b2: Point) -> Opt
     let t = (dx * d2y - dy * d2x) / denom;
     let u = (dx * d1y - dy * d1x) / denom;
 
-    if t < -1e-12 || t > 1.0 + 1e-12 || u < -1e-12 || u > 1.0 + 1e-12 {
+    let segment_range = -1e-12..=1.0 + 1e-12;
+    if !segment_range.contains(&t) || !segment_range.contains(&u) {
         return None; // outside segments
     }
 

@@ -68,8 +68,8 @@ impl LivePathEffect for VonKochLpe {
                         // Replace this segment with a Koch subdivision.
                         let koch_pts = koch_subdivide(start, p, iters, scale);
                         // Skip the first point (it is the current position).
-                        for i in 1..koch_pts.len() {
-                            result.line_to(koch_pts[i]);
+                        for point in koch_pts.iter().skip(1) {
+                            result.line_to(*point);
                         }
                     }
                     current_pos = Some(p);
@@ -79,8 +79,8 @@ impl LivePathEffect for VonKochLpe {
                     if let (Some(start), Some(sp_start)) = (current_pos, subpath_start) {
                         if start.distance(sp_start) > 1e-10 {
                             let koch_pts = koch_subdivide(start, sp_start, iters, scale);
-                            for i in 1..koch_pts.len() {
-                                result.line_to(koch_pts[i]);
+                            for point in koch_pts.iter().skip(1) {
+                                result.line_to(*point);
                             }
                         }
                     }
@@ -90,8 +90,8 @@ impl LivePathEffect for VonKochLpe {
                 PathSegment::QuadTo(_, end) | PathSegment::CurveTo(_, _, end) => {
                     if let Some(start) = current_pos {
                         let koch_pts = koch_subdivide(start, end, iters, scale);
-                        for i in 1..koch_pts.len() {
-                            result.line_to(koch_pts[i]);
+                        for point in koch_pts.iter().skip(1) {
+                            result.line_to(*point);
                         }
                     }
                     current_pos = Some(end);

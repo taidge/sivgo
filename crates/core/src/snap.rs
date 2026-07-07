@@ -344,7 +344,7 @@ impl SnappingEngine {
                 continue;
             }
             let full_dist = snapped.distance(point);
-            if best.as_ref().map_or(true, |b| full_dist < b.distance) {
+            if best.as_ref().is_none_or(|b| full_dist < b.distance) {
                 let direction = guide.direction();
                 let indicator = Some((snapped - direction * 20.0, snapped + direction * 20.0));
                 best = Some(SnapResult {
@@ -376,7 +376,7 @@ impl SnappingEngine {
 
         let mut consider = |candidate: Point, target: SnapTarget| {
             let d = candidate.distance(point);
-            if d <= doc_tol && best.as_ref().map_or(true, |b| d < b.distance) {
+            if d <= doc_tol && best.as_ref().is_none_or(|b| d < b.distance) {
                 best = Some(SnapResult {
                     point: candidate,
                     snapped_x: (candidate.x - point.x).abs() > 1e-12,
@@ -442,7 +442,7 @@ impl SnappingEngine {
         let mut best: Option<SnapResult> = None;
         for &node in nodes {
             let d = node.distance(point);
-            if d <= doc_tol && best.as_ref().map_or(true, |b| d < b.distance) {
+            if d <= doc_tol && best.as_ref().is_none_or(|b| d < b.distance) {
                 best = Some(SnapResult {
                     point: node,
                     snapped_x: (node.x - point.x).abs() > 1e-12,
@@ -493,7 +493,7 @@ impl SnappingEngine {
         let mut best: Option<SnapResult> = None;
         for &ix in intersections {
             let d = ix.distance(point);
-            if d <= doc_tol && best.as_ref().map_or(true, |b| d < b.distance) {
+            if d <= doc_tol && best.as_ref().is_none_or(|b| d < b.distance) {
                 best = Some(SnapResult {
                     point: ix,
                     snapped_x: (ix.x - point.x).abs() > 1e-12,
@@ -561,7 +561,7 @@ impl SnappingEngine {
         if let Some((snapped_x, dx)) = check_axis(centers_x, point.x) {
             let candidate = Point::new(snapped_x, point.y);
             let d = candidate.distance(point);
-            if d <= doc_tol && best.as_ref().map_or(true, |b| d < b.distance) {
+            if d <= doc_tol && best.as_ref().is_none_or(|b| d < b.distance) {
                 best = Some(SnapResult {
                     point: candidate,
                     snapped_x: true,
@@ -576,10 +576,10 @@ impl SnappingEngine {
         if let Some((snapped_y, dy)) = check_axis(centers_y, point.y) {
             let candidate = Point::new(best.as_ref().map_or(point.x, |b| b.point.x), snapped_y);
             let d = candidate.distance(point);
-            if d <= doc_tol && best.as_ref().map_or(true, |b| d < b.distance) {
+            if d <= doc_tol && best.as_ref().is_none_or(|b| d < b.distance) {
                 best = Some(SnapResult {
                     point: candidate,
-                    snapped_x: best.as_ref().map_or(false, |b| b.snapped_x),
+                    snapped_x: best.as_ref().is_some_and(|b| b.snapped_x),
                     snapped_y: true,
                     distance: dy,
                     target: Some(SnapTarget::EqualSpacing),

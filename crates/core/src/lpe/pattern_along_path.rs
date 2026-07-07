@@ -76,6 +76,7 @@ impl PatternAlongPathLpe {
     }
 
     /// Map a single pattern point onto the skeleton at a given offset.
+    #[allow(clippy::too_many_arguments)]
     fn map_point(
         &self,
         skeleton: &BezPath,

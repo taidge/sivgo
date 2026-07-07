@@ -351,9 +351,7 @@ fn assign_levels(
             } else {
                 embed_level
             };
-            for level in &mut levels {
-                *level = embed_level;
-            }
+            levels.fill(embed_level);
         }
         _ => {
             // Normal / Isolate / Plaintext: resolve based on character types.
@@ -417,7 +415,7 @@ fn resolve_levels_from_chars(chars: &[char], levels: &mut [u8], para_level: u8) 
                     current_level
                 };
                 // Ensure even.
-                if levels[i] % 2 != 0 {
+                if !levels[i].is_multiple_of(2) {
                     levels[i] = (levels[i] + 1) & !1;
                 }
             }
@@ -459,8 +457,8 @@ fn resolve_levels_from_chars(chars: &[char], levels: &mut [u8], para_level: u8) 
 
             // Use the higher of the two surrounding levels (simplified rule N1/N2).
             let resolved_level = prev_level.max(next_level);
-            for j in run_start..run_end {
-                levels[j] = resolved_level;
+            for level in levels.iter_mut().take(run_end).skip(run_start) {
+                *level = resolved_level;
             }
         } else {
             i += 1;
@@ -488,7 +486,7 @@ fn compute_runs(levels: &[u8]) -> Vec<BidiRun> {
                 start: run_start,
                 end: i,
                 level: run_level,
-                is_rtl: run_level % 2 != 0,
+                is_rtl: !run_level.is_multiple_of(2),
             });
             run_start = i;
             run_level = level;
@@ -500,7 +498,7 @@ fn compute_runs(levels: &[u8]) -> Vec<BidiRun> {
         start: run_start,
         end: levels.len(),
         level: run_level,
-        is_rtl: run_level % 2 != 0,
+        is_rtl: !run_level.is_multiple_of(2),
     });
 
     runs
@@ -529,7 +527,7 @@ fn compute_visual_order(levels: &[u8]) -> Vec<usize> {
     let min_odd_level = levels
         .iter()
         .copied()
-        .filter(|&l| l % 2 != 0)
+        .filter(|&l| !l.is_multiple_of(2))
         .min()
         .unwrap_or(max_level + 1);
 

@@ -187,7 +187,7 @@ fn seg_seg_intersection(s1: &LineSeg, s2: &LineSeg) -> Option<Point> {
     let u = (d.x * d1.y - d.y * d1.x) / denom;
 
     // Check both parameters are in [0, 1] (proper intersection).
-    if t >= 0.0 && t <= 1.0 && u >= 0.0 && u <= 1.0 {
+    if (0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u) {
         Some(Point::new(s1.a.x + t * d1.x, s1.a.y + t * d1.y))
     } else {
         None

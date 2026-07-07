@@ -75,10 +75,10 @@ fn write_line(x1: f64, y1: f64, x2: f64, y2: f64, out: &mut String) {
     out.push_str("  8\n0\n"); // layer
     out.push_str(&format!(" 10\n{}\n", fmt_f64(x1)));
     out.push_str(&format!(" 20\n{}\n", fmt_f64(-y1))); // flip Y
-    out.push_str(&format!(" 30\n0.0\n"));
+    out.push_str(" 30\n0.0\n");
     out.push_str(&format!(" 11\n{}\n", fmt_f64(x2)));
     out.push_str(&format!(" 21\n{}\n", fmt_f64(-y2))); // flip Y
-    out.push_str(&format!(" 31\n0.0\n"));
+    out.push_str(" 31\n0.0\n");
 }
 
 /// Write a DXF CIRCLE entity.
@@ -87,7 +87,7 @@ fn write_circle(cx: f64, cy: f64, r: f64, out: &mut String) {
     out.push_str("  8\n0\n"); // layer
     out.push_str(&format!(" 10\n{}\n", fmt_f64(cx)));
     out.push_str(&format!(" 20\n{}\n", fmt_f64(-cy))); // flip Y
-    out.push_str(&format!(" 30\n0.0\n"));
+    out.push_str(" 30\n0.0\n");
     out.push_str(&format!(" 40\n{}\n", fmt_f64(r)));
 }
 

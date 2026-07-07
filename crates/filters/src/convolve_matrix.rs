@@ -24,6 +24,7 @@ pub enum EdgeMode {
 /// - `target_x`, `target_y`: the "hot spot" in the kernel (origin pixel).
 /// - `edge_mode`: how to handle out-of-bounds lookups.
 /// - `preserve_alpha`: if true, the alpha channel is copied from the input unchanged.
+#[allow(clippy::too_many_arguments)]
 pub fn convolve_matrix(
     input: &FilterBuffer,
     kernel: &[f32],

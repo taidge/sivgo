@@ -454,7 +454,7 @@ impl BezPath {
             }
             let mut remaining_in_dash =
                 dash_array[dash_idx % dash_array.len()] - (offset - consumed);
-            let mut drawing = dash_idx % 2 == 0; // even = on, odd = off
+            let mut drawing = dash_idx.is_multiple_of(2); // even = on, odd = off
             let mut needs_moveto = true;
 
             for seg in segs {
@@ -565,7 +565,7 @@ pub fn subdivide_cubic(
     p2: Point,
     p3: Point,
     t: f64,
-) -> ((Point, Point, Point, Point), (Point, Point, Point, Point)) {
+) -> (CubicPoints, CubicPoints) {
     let cb = kurbo::CubicBez::new(
         kurbo::Point::new(p0.x, p0.y),
         kurbo::Point::new(p1.x, p1.y),
@@ -609,6 +609,8 @@ pub fn subdivide_cubic(
         )
     }
 }
+
+type CubicPoints = (Point, Point, Point, Point);
 
 /// Subdivide a quadratic Bezier at parameter `t` (0..1).
 ///

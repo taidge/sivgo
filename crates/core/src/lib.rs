@@ -11,6 +11,7 @@
 
 pub mod bbox_cache;
 pub mod clone_tiler;
+pub mod collab;
 pub mod command;
 pub mod commands;
 pub mod engine;
@@ -27,6 +28,10 @@ pub mod viewport;
 // Re-export primary types at crate root.
 pub use bbox_cache::BBoxCache;
 pub use clone_tiler::{generate_tile_placements, SymmetryGroup, TileParams, TilePlacement};
+pub use collab::{
+    crdt::{CrdtDocument, CrdtOp, OpId},
+    transport::{InMemorySyncHub, SyncMessage, SyncTransport},
+};
 pub use command::{Command, CommandHistory};
 pub use commands::{
     AddNodeCommand, AddPageCommand, ClipMaskMode, CompoundCommand, GroupCommand, MergeLayerCommand,
@@ -2192,10 +2197,10 @@ mod tests {
         assert!(!engine.navigate_to_prev_page());
 
         let p1 = engine.add_page(0.0, 0.0, 100.0, 100.0, Some("P1")).unwrap();
-        let p2 = engine
+        let _p2 = engine
             .add_page(200.0, 0.0, 100.0, 100.0, Some("P2"))
             .unwrap();
-        let p3 = engine
+        let _p3 = engine
             .add_page(400.0, 0.0, 100.0, 100.0, Some("P3"))
             .unwrap();
 

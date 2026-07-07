@@ -353,6 +353,7 @@ pub fn layout_svg_text_positioned(
 ///
 /// This is a lightweight wrapper around shaping for scenarios where only the
 /// total advance width is needed (e.g., for `textLength` or hit testing).
+#[allow(clippy::too_many_arguments)]
 pub fn measure_text_width(
     engine: &mut TextEngine,
     text: &str,

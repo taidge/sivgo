@@ -12,19 +12,14 @@
 use crate::buffer::FilterBuffer;
 
 /// Coordinate unit system for filter region attributes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FilterUnits {
     /// Coordinates are fractions/percentages of the element's bounding box.
     /// x=0, y=0 is the top-left of the bbox; width=1, height=1 covers it fully.
+    #[default]
     ObjectBoundingBox,
     /// Coordinates are in the user coordinate system (absolute pixels).
     UserSpaceOnUse,
-}
-
-impl Default for FilterUnits {
-    fn default() -> Self {
-        FilterUnits::ObjectBoundingBox
-    }
 }
 
 /// An axis-aligned rectangle in absolute pixel coordinates.

@@ -1,7 +1,10 @@
-//! Lightweight Lua scripting boundary for Sivgo plugins.
+//! Lightweight scripting boundary for Sivgo plugins.
 //!
-//! This module keeps the existing expression evaluator but routes Sivgo API
-//! calls through explicit permission checks and auditable host commands.
+//! NOTE: despite the historical "Lua" naming, this is NOT a real Lua runtime
+//! (there is no `mlua`/`rlua` dependency). It is a small, sandboxed expression
+//! evaluator with a Lua-flavoured value model ([`LuaValue`]) that routes Sivgo
+//! API calls through explicit permission checks and auditable host commands.
+//! Treat it as a restricted DSL, not a general Lua interpreter.
 
 use std::collections::HashMap;
 

@@ -29,7 +29,7 @@ impl OAuthProvider {
     }
 
     /// Parse a provider name string (case-insensitive).
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse_name(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "google" => Some(OAuthProvider::Google),
             "github" => Some(OAuthProvider::GitHub),
@@ -305,7 +305,7 @@ pub fn build_state(provider_name: &str, nonce: &str) -> String {
 
 pub fn provider_name_from_state(state: &str) -> Option<String> {
     let (provider_name, nonce) = state.split_once(':')?;
-    if nonce.is_empty() || OAuthProvider::from_str(provider_name).is_none() {
+    if nonce.is_empty() || OAuthProvider::parse_name(provider_name).is_none() {
         return None;
     }
     Some(provider_name.to_string())
@@ -482,18 +482,18 @@ mod tests {
     #[test]
     fn provider_from_str() {
         assert_eq!(
-            OAuthProvider::from_str("google"),
+            OAuthProvider::parse_name("google"),
             Some(OAuthProvider::Google)
         );
         assert_eq!(
-            OAuthProvider::from_str("GitHub"),
+            OAuthProvider::parse_name("GitHub"),
             Some(OAuthProvider::GitHub)
         );
         assert_eq!(
-            OAuthProvider::from_str("GOOGLE"),
+            OAuthProvider::parse_name("GOOGLE"),
             Some(OAuthProvider::Google)
         );
-        assert_eq!(OAuthProvider::from_str("twitter"), None);
+        assert_eq!(OAuthProvider::parse_name("twitter"), None);
     }
 
     #[test]

@@ -3,16 +3,11 @@
 use crate::buffer::FilterBuffer;
 
 /// Turbulence type: classic turbulence or fractal noise.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TurbulenceType {
     FractalNoise,
+    #[default]
     Turbulence,
-}
-
-impl Default for TurbulenceType {
-    fn default() -> Self {
-        TurbulenceType::Turbulence
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -129,6 +124,7 @@ fn lerp(t: f64, a: f64, b: f64) -> f64 {
 /// Generate a turbulence or fractal noise pattern.
 ///
 /// Parameters mirror the SVG `<feTurbulence>` element attributes.
+#[allow(clippy::too_many_arguments)]
 pub fn turbulence(
     width: u32,
     height: u32,
@@ -146,7 +142,7 @@ pub fn turbulence(
         for x in 0..width {
             let mut pixel = [0.0f32; 4];
 
-            for channel in 0..4 {
+            for (channel, component) in pixel.iter_mut().enumerate() {
                 let mut freq_x = base_freq_x;
                 let mut freq_y = base_freq_y;
                 let mut amplitude = 1.0;
@@ -172,10 +168,10 @@ pub fn turbulence(
                 match turb_type {
                     TurbulenceType::FractalNoise => {
                         // Map from [-1, 1] to [0, 1]
-                        pixel[channel] = ((value + 1.0) / 2.0).clamp(0.0, 1.0) as f32;
+                        *component = ((value + 1.0) / 2.0).clamp(0.0, 1.0) as f32;
                     }
                     TurbulenceType::Turbulence => {
-                        pixel[channel] = value.clamp(0.0, 1.0) as f32;
+                        *component = value.clamp(0.0, 1.0) as f32;
                     }
                 }
             }
@@ -227,8 +223,8 @@ mod tests {
 
         let px = buf.get_pixel(5, 5);
         // FractalNoise maps to [0, 1], should have some value
-        assert!(px[0] >= 0.0 && px[0] <= 1.0);
-        assert!(px[3] >= 0.0 && px[3] <= 1.0);
+        assert!((0.0..=1.0).contains(&px[0]));
+        assert!((0.0..=1.0).contains(&px[3]));
     }
 
     #[test]

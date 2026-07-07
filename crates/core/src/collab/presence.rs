@@ -187,10 +187,7 @@ mod tests {
     #[test]
     fn test_remove_peer() {
         let mut pm = PresenceManager::new("alice", "Alice", "#e91e63");
-        pm.update_peer(
-            "bob",
-            UserPresence::new("bob", "Bob", "#2196f3"),
-        );
+        pm.update_peer("bob", UserPresence::new("bob", "Bob", "#2196f3"));
         assert_eq!(pm.get_all_peers().len(), 1);
         pm.remove_peer("bob");
         assert!(pm.get_all_peers().is_empty());

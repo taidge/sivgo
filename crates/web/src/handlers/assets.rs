@@ -79,6 +79,14 @@ pub async fn upload_asset(req: &mut Request, depot: &mut Depot, res: &mut Respon
         return;
     }
 
+    // Bound the upload size before decoding to limit memory-exhaustion DoS.
+    // Base64 inflates by ~4/3, so a 24 MiB payload decodes to ~18 MiB.
+    const MAX_ASSET_B64_BYTES: usize = 24 * 1024 * 1024;
+    if body.data.len() > MAX_ASSET_B64_BYTES {
+        ApiError::bad_request("asset data exceeds 24 MiB limit").write_to(res);
+        return;
+    }
+
     let data = match general_purpose::STANDARD.decode(body.data.trim()) {
         Ok(data) if !data.is_empty() => data,
         Ok(_) => {
@@ -133,12 +141,24 @@ pub async fn download_asset(req: &mut Request, depot: &mut Depot, res: &mut Resp
                     .parse()
                     .unwrap_or_else(|_| "application/octet-stream".parse().unwrap()),
             );
-            res.headers_mut().insert(
-                "content-disposition",
-                format!("attachment; filename=\"{}\"", asset.filename)
-                    .parse()
-                    .unwrap(),
-            );
+            // Sanitize the user-controlled filename before placing it in a
+            // response header: strip quotes, backslashes and control chars
+            // (CR/LF) to prevent header injection, and never unwrap on the
+            // resulting HeaderValue.
+            let safe_name: String = asset
+                .filename
+                .chars()
+                .map(|c| {
+                    if c == '"' || c == '\\' || c.is_control() {
+                        '_'
+                    } else {
+                        c
+                    }
+                })
+                .collect();
+            if let Ok(value) = format!("attachment; filename=\"{}\"", safe_name).parse() {
+                res.headers_mut().insert("content-disposition", value);
+            }
             res.body(asset.data);
         }
         Some(_) | None => {

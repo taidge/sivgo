@@ -1,5 +1,6 @@
 //! Concrete command implementations.
 
+pub mod add_lpe;
 pub mod add_node;
 pub mod clip_mask;
 pub mod compound;
@@ -21,6 +22,7 @@ pub mod set_visibility;
 pub mod transform;
 pub mod unlink_clone;
 
+pub use add_lpe::AddLpeCommand;
 pub use add_node::AddNodeCommand;
 pub use clip_mask::{ClipMaskMode, ReleaseClipMaskCommand, SetClipMaskCommand};
 pub use compound::CompoundCommand;

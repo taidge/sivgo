@@ -4,9 +4,7 @@
 //! so they can both be applied in a consistent order.  The functions here work
 //! on [`CrdtOp`] values from the [`crdt`](super::crdt) module.
 
-use std::collections::HashMap;
-
-use super::crdt::{CrdtOp, OpId};
+use super::crdt::CrdtOp;
 
 // ---------------------------------------------------------------------------
 // ConflictResolution
@@ -37,17 +35,11 @@ pub fn transform_ops(op1: &CrdtOp, op2: &CrdtOp) -> (CrdtOp, CrdtOp) {
         (CrdtOp::NoOp { .. }, _) | (_, CrdtOp::NoOp { .. }) => (op1.clone(), op2.clone()),
 
         // Two inserts – both survive, order by site id.
-        (CrdtOp::Insert { .. }, CrdtOp::Insert { .. }) => {
-            (op1.clone(), op2.clone())
-        }
+        (CrdtOp::Insert { .. }, CrdtOp::Insert { .. }) => (op1.clone(), op2.clone()),
 
         // Insert vs Delete – insert wins, delete unaffected.
-        (CrdtOp::Insert { .. }, CrdtOp::Delete { .. }) => {
-            (op1.clone(), op2.clone())
-        }
-        (CrdtOp::Delete { .. }, CrdtOp::Insert { .. }) => {
-            (op1.clone(), op2.clone())
-        }
+        (CrdtOp::Insert { .. }, CrdtOp::Delete { .. }) => (op1.clone(), op2.clone()),
+        (CrdtOp::Delete { .. }, CrdtOp::Insert { .. }) => (op1.clone(), op2.clone()),
 
         (CrdtOp::Delete { target: t1, .. }, CrdtOp::Delete { target: t2, .. }) if t1 == t2 => {
             if op_wins(op1, op2) {
@@ -62,10 +54,14 @@ pub fn transform_ops(op1: &CrdtOp, op2: &CrdtOp) -> (CrdtOp, CrdtOp) {
         // implementation would apply last-writer-wins logic in `apply`).
         (
             CrdtOp::Update {
-                target: t1, key: k1, ..
+                target: t1,
+                key: k1,
+                ..
             },
             CrdtOp::Update {
-                target: t2, key: k2, ..
+                target: t2,
+                key: k2,
+                ..
             },
         ) if t1 == t2 && k1 == k2 => {
             if op_wins(op1, op2) {
@@ -76,14 +72,10 @@ pub fn transform_ops(op1: &CrdtOp, op2: &CrdtOp) -> (CrdtOp, CrdtOp) {
         }
 
         // Update vs Delete on the same target – delete wins.
-        (CrdtOp::Update { target, .. }, CrdtOp::Delete { target: dt, .. })
-            if target == dt =>
-        {
+        (CrdtOp::Update { target, .. }, CrdtOp::Delete { target: dt, .. }) if target == dt => {
             (noop_like(op1, "target deleted"), op2.clone())
         }
-        (CrdtOp::Delete { target: dt, .. }, CrdtOp::Update { target, .. })
-            if dt == target =>
-        {
+        (CrdtOp::Delete { target: dt, .. }, CrdtOp::Update { target, .. }) if dt == target => {
             (op1.clone(), noop_like(op2, "target deleted"))
         }
 
@@ -156,14 +148,10 @@ pub fn resolve_conflict(local: &CrdtOp, remote: &CrdtOp) -> ConflictResolution {
         }
 
         // Delete vs Update on same target – delete wins.
-        (CrdtOp::Delete { target: dt, .. }, CrdtOp::Update { target: ut, .. })
-            if dt == ut =>
-        {
+        (CrdtOp::Delete { target: dt, .. }, CrdtOp::Update { target: ut, .. }) if dt == ut => {
             ConflictResolution::KeepLocal
         }
-        (CrdtOp::Update { target: ut, .. }, CrdtOp::Delete { target: dt, .. })
-            if ut == dt =>
-        {
+        (CrdtOp::Update { target: ut, .. }, CrdtOp::Delete { target: dt, .. }) if ut == dt => {
             ConflictResolution::KeepRemote
         }
 
@@ -215,7 +203,9 @@ pub fn resolve_conflict(local: &CrdtOp, remote: &CrdtOp) -> ConflictResolution {
 
 #[cfg(test)]
 mod tests {
+    use super::super::crdt::OpId;
     use super::*;
+    use std::collections::HashMap;
 
     fn make_insert(site: u64, clock: u64) -> CrdtOp {
         CrdtOp::Insert {
@@ -368,10 +358,7 @@ mod tests {
     fn test_resolve_default_higher_site_wins() {
         let op1 = make_insert(10, 1);
         let op2 = make_insert(2, 1);
-        assert_eq!(
-            resolve_conflict(&op1, &op2),
-            ConflictResolution::KeepLocal
-        );
+        assert_eq!(resolve_conflict(&op1, &op2), ConflictResolution::KeepLocal);
     }
 
     #[test]

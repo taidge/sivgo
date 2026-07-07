@@ -1,52 +1,116 @@
-﻿//! Lightweight authentication helpers.
-//!
-//! For development purposes we use a simplified HMAC-SHA256 "JWT" and a
-//! basic password hash.  In production these should be replaced with
-//! proper `jsonwebtoken` + `argon2` implementations.
+﻿//! Authentication helpers: HS256 JWT session tokens and Argon2 password hashing.
 
-use std::collections::HashMap;
-use std::fmt::Write as _;
-
+use argon2::password_hash::{
+    rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString,
+};
+use argon2::Argon2;
+use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use salvo::prelude::*;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::config::ServerConfig;
 
-/// Minimal JWT-style token: base64(json(header)) . base64(json(payload)) . signature
-///
-/// For the dev server we skip real crypto and just encode the user id in the
-/// payload so that handlers can extract it. This MUST NOT be used in production.
+/// Token lifetime in seconds (24 hours).
+const TOKEN_TTL_SECONDS: i64 = 24 * 60 * 60;
+
+/// JWT claims. `sub` holds the user id; `exp` is the Unix expiry timestamp.
+#[derive(Debug, Serialize, Deserialize)]
+struct Claims {
+    sub: String,
+    exp: usize,
+}
+
+/// Create a signed HS256 session token for `user_id` that expires in 24h.
 pub fn create_token(user_id: Uuid, secret: &str) -> String {
-    // Simple token: "userId:{uuid}:secret_hash"
-    let payload = format!("{}:{}", user_id, simple_hmac(&user_id.to_string(), secret));
-    base64_encode(&payload)
+    let exp = (chrono::Utc::now().timestamp() + TOKEN_TTL_SECONDS).max(0) as usize;
+    let claims = Claims {
+        sub: user_id.to_string(),
+        exp,
+    };
+    encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(secret.as_bytes()),
+    )
+    // Signing only fails on serialization errors, which cannot happen for this
+    // fixed claims shape; fall back to an empty (always-invalid) token.
+    .unwrap_or_default()
 }
 
-/// Verify a token and return the user id if valid.
+/// Verify a token's signature and expiry, returning the user id if valid.
 pub fn verify_token(token: &str, secret: &str) -> Option<Uuid> {
-    let decoded = base64_decode(token)?;
-    let parts: Vec<&str> = decoded.splitn(2, ':').collect();
-    if parts.len() != 2 {
-        return None;
-    }
-    let user_id: Uuid = parts[0].parse().ok()?;
-    let expected_hmac = simple_hmac(&user_id.to_string(), secret);
-    if parts[1] == expected_hmac {
-        Some(user_id)
-    } else {
-        None
-    }
+    let data = decode::<Claims>(
+        token,
+        &DecodingKey::from_secret(secret.as_bytes()),
+        &Validation::default(),
+    )
+    .ok()?;
+    data.claims.sub.parse().ok()
 }
 
-/// Hash a password (simplified for dev -- NOT secure for production).
+/// OAuth `state` lifetime in seconds (10 minutes — long enough to complete the
+/// provider round-trip, short enough to limit replay).
+const OAUTH_STATE_TTL_SECONDS: i64 = 10 * 60;
+
+/// Signed OAuth `state` claims: the provider and a random nonce, plus expiry.
+#[derive(Debug, Serialize, Deserialize)]
+struct StateClaims {
+    provider: String,
+    nonce: String,
+    exp: usize,
+}
+
+/// Build a signed, short-lived OAuth `state` value. Because it is an HS256 JWT
+/// over the server secret, the callback can prove the state was issued by this
+/// server (anti-forgery/CSRF) and has not expired (anti-replay).
+pub fn create_oauth_state(provider: &str, secret: &str) -> String {
+    let exp = (chrono::Utc::now().timestamp() + OAUTH_STATE_TTL_SECONDS).max(0) as usize;
+    let claims = StateClaims {
+        provider: provider.to_string(),
+        nonce: Uuid::new_v4().to_string(),
+        exp,
+    };
+    encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(secret.as_bytes()),
+    )
+    .unwrap_or_default()
+}
+
+/// Verify a signed OAuth `state` and return the provider name if valid.
+pub fn verify_oauth_state(state: &str, secret: &str) -> Option<String> {
+    let data = decode::<StateClaims>(
+        state,
+        &DecodingKey::from_secret(secret.as_bytes()),
+        &Validation::default(),
+    )
+    .ok()?;
+    Some(data.claims.provider)
+}
+
+/// Hash a password with Argon2id using a fresh random per-password salt.
+/// Returns a self-describing PHC string (algorithm, params and salt embedded).
 pub fn hash_password(password: &str) -> String {
-    // Use a simple hash so the dev server works without heavy crypto deps.
-    simple_hmac(password, "sivgo-password-salt")
+    let salt = SaltString::generate(&mut OsRng);
+    Argon2::default()
+        .hash_password(password.as_bytes(), &salt)
+        .map(|hash| hash.to_string())
+        // A hashing failure here would be an environment/OOM problem; return an
+        // empty string, which `verify_password` treats as never-matching.
+        .unwrap_or_default()
 }
 
-/// Verify a password against a stored hash.
+/// Verify a password against a stored Argon2 PHC hash. The comparison is
+/// constant-time inside Argon2's verifier.
 pub fn verify_password(password: &str, hash: &str) -> bool {
-    hash_password(password) == hash
+    let Ok(parsed) = PasswordHash::new(hash) else {
+        return false;
+    };
+    Argon2::default()
+        .verify_password(password.as_bytes(), &parsed)
+        .is_ok()
 }
 
 /// Extract the authenticated user id from the request's `Authorization`
@@ -84,79 +148,6 @@ pub async fn auth_guard(
 /// Helper to get the authenticated user id that was injected by [`auth_guard`].
 pub fn get_user_id(depot: &Depot) -> Option<Uuid> {
     depot.get::<Uuid>("user_id").ok().copied()
-}
-
-// ---------------------------------------------------------------------------
-// Trivial helpers (dev-only, not cryptographically secure)
-// ---------------------------------------------------------------------------
-
-/// A very simple HMAC-like hash using std only.  NOT for production use.
-fn simple_hmac(data: &str, key: &str) -> String {
-    // XOR-fold the data+key bytes into a 32-byte digest.
-    let mut buf = [0u8; 32];
-    for (i, b) in data.bytes().chain(key.bytes()).enumerate() {
-        buf[i % 32] ^= b;
-        // mix bits around a little
-        buf[(i + 7) % 32] = buf[(i + 7) % 32].wrapping_add(b);
-    }
-    let mut hex = String::with_capacity(64);
-    for b in &buf {
-        let _ = write!(hex, "{b:02x}");
-    }
-    hex
-}
-
-fn base64_encode(input: &str) -> String {
-    // Manual base64 encoding (no extra deps).
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-    let bytes = input.as_bytes();
-    let mut out = String::with_capacity((bytes.len() + 2) / 3 * 4);
-    for chunk in bytes.chunks(3) {
-        let b0 = chunk[0] as u32;
-        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
-        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
-        let triple = (b0 << 16) | (b1 << 8) | b2;
-        out.push(ALPHABET[((triple >> 18) & 0x3F) as usize] as char);
-        out.push(ALPHABET[((triple >> 12) & 0x3F) as usize] as char);
-        if chunk.len() > 1 {
-            out.push(ALPHABET[((triple >> 6) & 0x3F) as usize] as char);
-        }
-        if chunk.len() > 2 {
-            out.push(ALPHABET[(triple & 0x3F) as usize] as char);
-        }
-    }
-    out
-}
-
-fn base64_decode(input: &str) -> Option<String> {
-    let mut table = HashMap::new();
-    for (i, &c) in b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
-        .iter()
-        .enumerate()
-    {
-        table.insert(c, i as u32);
-    }
-    let bytes: Vec<u32> = input
-        .bytes()
-        .filter_map(|b| table.get(&b).copied())
-        .collect();
-    let mut out = Vec::new();
-    for chunk in bytes.chunks(4) {
-        let len = chunk.len();
-        let b0 = chunk[0];
-        let b1 = if len > 1 { chunk[1] } else { 0 };
-        let b2 = if len > 2 { chunk[2] } else { 0 };
-        let b3 = if len > 3 { chunk[3] } else { 0 };
-        let triple = (b0 << 18) | (b1 << 12) | (b2 << 6) | b3;
-        out.push(((triple >> 16) & 0xFF) as u8);
-        if len > 2 {
-            out.push(((triple >> 8) & 0xFF) as u8);
-        }
-        if len > 3 {
-            out.push((triple & 0xFF) as u8);
-        }
-    }
-    String::from_utf8(out).ok()
 }
 
 #[cfg(test)]

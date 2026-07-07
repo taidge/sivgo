@@ -48,7 +48,7 @@ impl GrayBitmap {
             let lum = 0.299 * r + 0.587 * g + 0.114 * b;
             // Blend against white background using alpha
             let blended = lum * a + 255.0 * (1.0 - a);
-            pixels.push(blended.round().min(255.0).max(0.0) as u8);
+            pixels.push(blended.round().clamp(0.0, 255.0) as u8);
         }
 
         GrayBitmap {
@@ -147,6 +147,6 @@ mod tests {
         let bmp = GrayBitmap::from_rgba(&data, 1, 1);
         // 0.0 * (128/255) + 255.0 * (1 - 128/255) ≈ 127.0
         let val = bmp.get(0, 0);
-        assert!(val >= 126 && val <= 128, "got {}", val);
+        assert!((126..=128).contains(&val), "got {}", val);
     }
 }

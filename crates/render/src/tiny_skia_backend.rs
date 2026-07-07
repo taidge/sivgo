@@ -14,6 +14,13 @@ use crate::types::{
     SpreadMethod, StrokeStyle,
 };
 
+fn anti_aliased_paint<'a>() -> TsPaint<'a> {
+    TsPaint {
+        anti_alias: true,
+        ..TsPaint::default()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Graphics state
 // ---------------------------------------------------------------------------
@@ -81,9 +88,8 @@ impl TinySkiaBackend {
         match render_paint {
             RenderPaint::Solid(c) => {
                 let alpha = (c.a as f64 / 255.0) * self.state.opacity;
-                let mut paint = TsPaint::default();
+                let mut paint = anti_aliased_paint();
                 paint.set_color_rgba8(c.r, c.g, c.b, (alpha * 255.0).round() as u8);
-                paint.anti_alias = true;
                 paint
             }
             RenderPaint::LinearGradient {
@@ -180,8 +186,7 @@ impl TinySkiaBackend {
 
         let shader = tiny_skia::LinearGradient::new(start, end, ts_stops, spread_mode, extra_ts);
 
-        let mut paint = TsPaint::default();
-        paint.anti_alias = true;
+        let mut paint = anti_aliased_paint();
         if let Some(shader) = shader {
             paint.shader = shader;
         }
@@ -249,8 +254,7 @@ impl TinySkiaBackend {
             extra_ts,
         );
 
-        let mut paint = TsPaint::default();
-        paint.anti_alias = true;
+        let mut paint = anti_aliased_paint();
         if let Some(shader) = shader {
             paint.shader = shader;
         }
@@ -266,8 +270,7 @@ impl TinySkiaBackend {
         pattern_transform: &Transform2D,
         opacity: f64,
     ) -> TsPaint<'a> {
-        let mut paint = TsPaint::default();
-        paint.anti_alias = true;
+        let mut paint = anti_aliased_paint();
         if tile_width == 0 || tile_height == 0 {
             return paint;
         }
@@ -306,8 +309,7 @@ impl TinySkiaBackend {
         units: GradientUnits,
         shape_bbox: Option<Rect>,
     ) -> TsPaint<'a> {
-        let mut paint = TsPaint::default();
-        paint.anti_alias = true;
+        let mut paint = anti_aliased_paint();
 
         if width == 0 || height == 0 {
             return paint;

@@ -1063,7 +1063,7 @@ mod tests {
         // Midpoint should be at 0 (or 360)
         let h = mid.c0();
         assert!(
-            h < 1.0 || h > 359.0,
+            !(1.0..=359.0).contains(&h),
             "hue midpoint of 350..10 should be ~0/360, got {}",
             h,
         );

@@ -193,8 +193,11 @@ use crate::command::Command;
 /// the viewport changes after execution. For simplicity in this architecture
 /// we store the viewport mutation inside execute/undo and perform it by
 /// computing the resulting pan/zoom directly.
-#[derive(Debug)]
+// Fields encode the requested zoom for a future dedicated ViewportCommand
+// channel (see execute()); the current engine routes viewport changes by other
+// means, so they are not yet read.
 #[allow(dead_code)]
+#[derive(Debug)]
 struct ZoomCommand {
     center: Point,
     factor: f64,
@@ -223,8 +226,9 @@ impl Command for ZoomCommand {
 
 /// A command for marquee-zoom: adjusts the viewport to fit a document-space
 /// rectangle.
-#[derive(Debug)]
+// See ZoomCommand: fields are retained for the planned ViewportCommand channel.
 #[allow(dead_code)]
+#[derive(Debug)]
 struct MarqueeZoomCommand {
     doc_rect: Rect,
     old_zoom: f64,

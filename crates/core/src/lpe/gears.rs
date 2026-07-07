@@ -98,7 +98,7 @@ impl GearsLpe {
                 root_radius,
             ];
 
-            for (_j, (&angle, &radius)) in angles.iter().zip(radii.iter()).enumerate() {
+            for (&angle, &radius) in angles.iter().zip(radii.iter()) {
                 let px = center.x + radius * angle.cos();
                 let py = center.y + radius * angle.sin();
                 let pt = Point::new(px, py);

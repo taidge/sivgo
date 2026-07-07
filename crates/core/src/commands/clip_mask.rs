@@ -29,7 +29,7 @@ impl ClipMaskMode {
         }
     }
 
-    fn presentation_ref<'a>(self, pres: &'a PresentationAttrs) -> Option<&'a str> {
+    fn presentation_ref(self, pres: &PresentationAttrs) -> Option<&str> {
         match self {
             Self::Clip => pres.clip_path.as_deref(),
             Self::Mask => pres.mask.as_deref(),
@@ -144,7 +144,7 @@ impl SetClipMaskCommand {
             format!(
                 "{}_{}",
                 self.mode.prefix(),
-                self.source_id.to_string().replace('-', "")[..8].to_string()
+                &self.source_id.to_string().replace('-', "")[..8]
             )
         });
 

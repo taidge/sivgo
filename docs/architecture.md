@@ -2,7 +2,8 @@
 
 Sivgo is an SVG editor written in Rust, designed as a modern alternative to
 Inkscape. It uses a 14-crate workspace to enforce clean separation of concerns,
-with a Dioxus-based desktop UI and a Salvo-based web backend.
+with a Dioxus-based desktop UI and a Salvo-based REST API backend. The current
+worktree does not include a Web/WASM frontend.
 
 ## Crate Dependency Graph
 
@@ -66,9 +67,9 @@ sivgo-trace               ── Bitmap-to-vector tracing
 | **sivgo-io** | File I/O: SVG/SVGZ read/write, PNG/JPEG/WebP export, base64 image embedding. |
 | **sivgo-core** | Editor engine: tools (select, pen, pencil, shapes, text, etc.), the command pattern for undo/redo, live path effects (LPEs), snap system, viewport management, and keyboard shortcuts. |
 | **sivgo-plugin** | Plugin system allowing extensions to register tools and commands. |
-| **sivgo-ui** | Dioxus UI layer: canvas widget, toolbox, property panels, layer panel. |
+| **sivgo-ui** | Dioxus UI layer for the desktop app: canvas widget, toolbox, property panels, layer panel. |
 | **sivgo-desktop** | Desktop application entry point. Integrates Dioxus Desktop, file dialogs (`rfd`), clipboard (`arboard`), and CLI argument parsing (`clap`). |
-| **sivgo-web** | Web backend using Salvo. Exposes a REST API for server-side SVG editing, rendering, and export. |
+| **sivgo-web** | Web backend using Salvo. Exposes REST APIs for server-side SVG editing, rendering, export, assets, preferences, and plugins. Current storage is in-memory. |
 
 ## Key Design Decisions
 

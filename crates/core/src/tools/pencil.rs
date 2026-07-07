@@ -43,13 +43,11 @@ impl PencilTool {
     }
 
     /// Set the smoothing amount (`0.0` to `1.0`).
-    #[allow(dead_code)]
     pub fn set_smoothing(&mut self, amount: f64) {
         self.smoothing = amount.clamp(0.0, 1.0);
     }
 
     /// Return the current smoothing amount.
-    #[allow(dead_code)]
     pub fn smoothing(&self) -> f64 {
         self.smoothing
     }
@@ -147,12 +145,14 @@ impl PencilTool {
             ..Default::default()
         });
 
-        let mut pres = PresentationAttrs::default();
-        pres.fill = Some(Paint::None);
-        pres.stroke = Some(Paint::Color(Color::BLACK));
-        pres.stroke_width = Some(SvgLength::new(2.0, LengthUnit::None));
-        pres.stroke_linecap = Some(LineCap::Round);
-        pres.stroke_linejoin = Some(LineJoin::Round);
+        let pres = PresentationAttrs {
+            fill: Some(Paint::None),
+            stroke: Some(Paint::Color(Color::BLACK)),
+            stroke_width: Some(SvgLength::new(2.0, LengthUnit::None)),
+            stroke_linecap: Some(LineCap::Round),
+            stroke_linejoin: Some(LineJoin::Round),
+            ..Default::default()
+        };
 
         let parent = match doc.root() {
             Some(r) => r,
@@ -336,6 +336,13 @@ fn perpendicular_distance(point: Point, a: Point, b: Point) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn smoothing_setter_round_trips() {
+        let mut tool = PencilTool::new();
+        tool.set_smoothing(0.6);
+        assert_eq!(tool.smoothing(), 0.6);
+    }
 
     #[test]
     fn rdp_keeps_endpoints() {

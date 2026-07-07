@@ -84,18 +84,22 @@ pub async fn login(req: &mut Request, depot: &mut Depot, res: &mut Response) {
         }
     };
 
-    let user = match store.find_user_by_email(&body.email) {
-        Some(u) => u,
-        None => {
+    // Always run a password verification — even when the email is unknown —
+    // to avoid leaking account existence through response timing.
+    let user = store.find_user_by_email(&body.email);
+    let stored_hash = user
+        .as_ref()
+        .map(|u| u.password_hash.clone())
+        .unwrap_or_else(|| hash_password("\0invalid-account\0"));
+    let password_ok = verify_password(&body.password, &stored_hash);
+
+    let user = match (user, password_ok) {
+        (Some(u), true) => u,
+        _ => {
             ApiError::unauthorized("Invalid credentials").write_to(res);
             return;
         }
     };
-
-    if !verify_password(&body.password, &user.password_hash) {
-        ApiError::unauthorized("Invalid credentials").write_to(res);
-        return;
-    }
 
     let token = create_token(user.id, &config.jwt_secret);
     res.render(Json(AuthResponse { token, user }));

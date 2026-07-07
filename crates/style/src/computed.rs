@@ -232,13 +232,15 @@ mod tests {
 
     #[test]
     fn inherit_copies_inherited_props() {
-        let mut parent = ComputedStyle::default();
-        parent.fill = Paint::Color(Color::RED);
-        parent.stroke = Paint::Color(Color::BLUE);
-        parent.font_size = 24.0;
-        parent.visibility = Visibility::Hidden;
-        parent.clip_rule = FillRule::EvenOdd;
-        parent.stroke_dasharray = Some(vec![5.0, 3.0]);
+        let parent = ComputedStyle {
+            fill: Paint::Color(Color::RED),
+            stroke: Paint::Color(Color::BLUE),
+            font_size: 24.0,
+            visibility: Visibility::Hidden,
+            clip_rule: FillRule::EvenOdd,
+            stroke_dasharray: Some(vec![5.0, 3.0]),
+            ..Default::default()
+        };
 
         let child = ComputedStyle::inherit_from(&parent);
 
@@ -253,13 +255,15 @@ mod tests {
 
     #[test]
     fn inherit_resets_non_inherited_props() {
-        let mut parent = ComputedStyle::default();
-        parent.opacity = 0.5;
-        parent.display = Display::None;
-        parent.mix_blend_mode = BlendMode::Multiply;
-        parent.clip_path = Some("url(#clip)".to_string());
-        parent.filter = Some("url(#blur)".to_string());
-        parent.marker_start = Some("url(#arrow)".to_string());
+        let parent = ComputedStyle {
+            opacity: 0.5,
+            display: Display::None,
+            mix_blend_mode: BlendMode::Multiply,
+            clip_path: Some("url(#clip)".to_string()),
+            filter: Some("url(#blur)".to_string()),
+            marker_start: Some("url(#arrow)".to_string()),
+            ..Default::default()
+        };
 
         let child = ComputedStyle::inherit_from(&parent);
 

@@ -382,7 +382,7 @@ impl SvgDocument {
     pub fn deep_clone(&mut self, id: NodeId) -> Option<NodeId> {
         // Collect the original subtree in pre-order so we can clone top-down.
         let originals = self.traverse_pre_order(id);
-        if originals.is_empty() || self.nodes.get(&id).is_none() {
+        if originals.is_empty() || !self.nodes.contains_key(&id) {
             return None;
         }
 

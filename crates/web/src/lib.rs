@@ -20,10 +20,10 @@
 //! }
 //! ```
 
+#![recursion_limit = "512"]
+
 pub mod assets;
 pub mod auth;
-pub mod collab;
-pub mod comments;
 pub mod config;
 pub mod errors;
 pub mod handlers;
@@ -32,8 +32,6 @@ pub mod oauth;
 pub mod openapi;
 pub mod plugin_registry;
 pub mod preferences;
-pub mod pwa;
+pub mod rate_limit;
 pub mod router;
-pub mod share_dialog;
 pub mod store;
-pub mod web_file;

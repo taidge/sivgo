@@ -83,8 +83,8 @@ impl LivePathEffect for RoughenLpe {
             let n = subdivided.len();
             result.move_to(displace(subdivided[0], max_disp, &mut rng));
 
-            for i in 1..n {
-                result.line_to(displace(subdivided[i], max_disp, &mut rng));
+            for point in subdivided.iter().take(n).skip(1) {
+                result.line_to(displace(*point, max_disp, &mut rng));
             }
 
             if sp.closed {

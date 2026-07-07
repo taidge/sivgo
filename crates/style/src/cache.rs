@@ -199,14 +199,14 @@ impl StyleCache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sivgo_dom::{Color, GroupAttrs, Paint, RectAttrs, SvgElement, SvgSvgAttrs};
+    use sivgo_dom::{GroupAttrs, RectAttrs, SvgElement, SvgSvgAttrs};
 
     fn make_doc() -> SvgDocument {
         let mut doc = SvgDocument::new();
         let svg = doc.add_node(SvgElement::Svg(SvgSvgAttrs::default()));
         doc.set_root(svg);
 
-        let mut g_attrs = GroupAttrs::default();
+        let g_attrs = GroupAttrs::default();
         let g = doc.add_node(SvgElement::Group(g_attrs));
         doc.append_child(svg, g);
 

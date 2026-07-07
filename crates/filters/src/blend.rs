@@ -3,8 +3,9 @@
 use crate::buffer::FilterBuffer;
 
 /// SVG/CSS blend modes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum BlendMode {
+    #[default]
     Normal,
     Multiply,
     Screen,
@@ -17,12 +18,6 @@ pub enum BlendMode {
     SoftLight,
     Difference,
     Exclusion,
-}
-
-impl Default for BlendMode {
-    fn default() -> Self {
-        BlendMode::Normal
-    }
 }
 
 /// Blend two buffers using the specified mode.

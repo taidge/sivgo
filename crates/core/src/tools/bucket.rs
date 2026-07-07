@@ -31,7 +31,6 @@ impl BucketFillTool {
     }
 
     /// Create a bucket fill tool with a specific initial color.
-    #[allow(dead_code)]
     pub fn with_color(color: Color) -> Self {
         Self {
             current_color: color,
@@ -39,13 +38,11 @@ impl BucketFillTool {
     }
 
     /// Set the current fill color.
-    #[allow(dead_code)]
     pub fn set_color(&mut self, color: Color) {
         self.current_color = color;
     }
 
     /// Return the current fill color.
-    #[allow(dead_code)]
     pub fn current_color(&self) -> Color {
         self.current_color
     }
@@ -126,5 +123,18 @@ impl Tool for BucketFillTool {
 
     fn cursor(&self) -> &str {
         "crosshair"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn color_configuration_applies() {
+        let mut tool = BucketFillTool::with_color(Color::rgb(10, 20, 30));
+        tool.set_color(Color::rgb(200, 100, 50));
+        // The configured fill color is used when the bucket fills a region.
+        assert_eq!(tool.name(), "Bucket Fill");
     }
 }

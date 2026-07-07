@@ -10,6 +10,7 @@
 use sivgo_dom::{NodeId, SvgDocument, SvgElement};
 use sivgo_math::Point;
 
+use crate::commands::AddLpeCommand;
 use crate::input::{Key, KeyEvent, MouseButton, MouseEvent};
 use crate::selection::SelectionSet;
 use crate::tool::{Tool, ToolResponse};
@@ -88,6 +89,34 @@ impl AvailableLpe {
             AvailableLpe::Extrude,
             AvailableLpe::Knot,
         ]
+    }
+
+    /// The engine LPE kind string this effect maps to (matches
+    /// `EditorEngine::normalize_lpe_kind`).
+    pub fn kind(&self) -> &'static str {
+        match self {
+            AvailableLpe::FilletChamfer => "fillet",
+            AvailableLpe::PowerStroke => "power_stroke",
+            AvailableLpe::BendPath => "bend_path",
+            AvailableLpe::PatternAlongPath => "pattern_along_path",
+            AvailableLpe::Spiro => "spiro",
+            AvailableLpe::Simplify => "simplify",
+            AvailableLpe::Roughen => "roughen",
+            AvailableLpe::MirrorSymmetry => "mirror",
+            AvailableLpe::CopyRotate => "copy_rotate",
+            AvailableLpe::BSpline => "bspline",
+            AvailableLpe::Sketch => "sketch",
+            AvailableLpe::Tiling => "tiling",
+            AvailableLpe::Offset => "offset",
+            AvailableLpe::Envelope => "envelope",
+            AvailableLpe::PerspectiveEnvelope => "perspective_envelope",
+            AvailableLpe::Lattice => "lattice",
+            AvailableLpe::MeasureSegments => "measure",
+            AvailableLpe::Gears => "gears",
+            AvailableLpe::DashedStroke => "dashed_stroke",
+            AvailableLpe::Extrude => "extrude",
+            AvailableLpe::Knot => "knot",
+        }
     }
 
     /// Human-readable name.
@@ -182,30 +211,25 @@ impl LpeTool {
         }
     }
 
-    /// Manually apply an LPE type to the currently selected path and
-    /// transition to Editing state.
+    /// Apply an LPE type to the currently selected path, transitioning to
+    /// Editing state and emitting a command that actually attaches the effect
+    /// to the document (undoable).
     ///
-    /// Returns `true` if the transition succeeded (a path was selected).
-    pub fn apply_lpe(&mut self, lpe_type: AvailableLpe) -> bool {
-        match &self.state {
-            LpeToolState::Selecting { node_id, .. } => {
-                self.state = LpeToolState::Editing {
-                    node_id: *node_id,
-                    lpe_type,
-                    stack_index: 0,
-                };
-                true
+    /// Returns [`ToolResponse::ExecuteCommand`] when a path is selected, or
+    /// [`ToolResponse::None`] when the tool is idle (nothing to apply to).
+    pub fn apply_lpe(&mut self, lpe_type: AvailableLpe) -> ToolResponse {
+        let node_id = match &self.state {
+            LpeToolState::Selecting { node_id, .. } | LpeToolState::Editing { node_id, .. } => {
+                *node_id
             }
-            LpeToolState::Editing { node_id, .. } => {
-                self.state = LpeToolState::Editing {
-                    node_id: *node_id,
-                    lpe_type,
-                    stack_index: 0,
-                };
-                true
-            }
-            LpeToolState::Idle => false,
-        }
+            LpeToolState::Idle => return ToolResponse::None,
+        };
+        self.state = LpeToolState::Editing {
+            node_id,
+            lpe_type,
+            stack_index: 0,
+        };
+        ToolResponse::ExecuteCommand(Box::new(AddLpeCommand::new(node_id, lpe_type.kind())))
     }
 }
 
@@ -326,7 +350,7 @@ impl Tool for LpeTool {
 // ---------------------------------------------------------------------------
 
 /// Hit-test that only matches `<path>` elements. Skips locked/hidden objects.
-fn hit_test_path_at(doc: &SvgDocument, point: Point) -> Option<NodeId> {
+pub(crate) fn hit_test_path_at(doc: &SvgDocument, point: Point) -> Option<NodeId> {
     let root = doc.root()?;
     let all = doc.traverse_pre_order(root);
 
@@ -396,7 +420,23 @@ mod tests {
     #[test]
     fn test_apply_lpe_fails_when_idle() {
         let mut tool = LpeTool::new();
-        assert!(!tool.apply_lpe(AvailableLpe::FilletChamfer));
+        assert!(matches!(
+            tool.apply_lpe(AvailableLpe::FilletChamfer),
+            ToolResponse::None
+        ));
+    }
+
+    #[test]
+    fn test_apply_lpe_emits_command_when_selecting() {
+        let mut tool = LpeTool::new();
+        // Force the tool into Selecting state on a synthetic node.
+        tool.state = LpeToolState::Selecting {
+            node_id: NodeId::new(),
+            click_pos: Point::new(0.0, 0.0),
+        };
+        let resp = tool.apply_lpe(AvailableLpe::Spiro);
+        assert!(matches!(resp, ToolResponse::ExecuteCommand(_)));
+        assert_eq!(tool.state_name(), "editing");
     }
 
     #[test]

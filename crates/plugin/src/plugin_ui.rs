@@ -378,7 +378,7 @@ mod tests {
     #[test]
     fn all_element_variants_constructible() {
         // Verify that every variant can be constructed without issues.
-        let elements = vec![
+        let elements = [
             DialogElement::Label("A label".to_string()),
             DialogElement::TextInput {
                 id: "t".to_string(),

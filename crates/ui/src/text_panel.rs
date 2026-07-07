@@ -50,11 +50,11 @@ pub fn TextPanel(
     let style_val = font_style.clone();
     let align_val = text_align.clone();
 
-    let font_weights = vec![
+    let font_weights = [
         "Normal", "Bold", "100", "200", "300", "400", "500", "600", "700", "800", "900",
     ];
-    let font_styles = vec!["Normal", "Italic", "Oblique"];
-    let alignments = vec!["Start", "Middle", "End"];
+    let font_styles = ["Normal", "Italic", "Oblique"];
+    let alignments = ["Start", "Middle", "End"];
 
     rsx! {
         div { class: "text-panel",

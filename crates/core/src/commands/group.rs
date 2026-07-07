@@ -147,11 +147,9 @@ impl Command for UngroupCommand {
         };
 
         // Move each child from the group to the parent, maintaining order.
-        let mut insert_at = self.group_index;
-        for &child_id in &self.children {
+        for (insert_at, &child_id) in (self.group_index..).zip(self.children.iter()) {
             doc.detach_node(child_id);
             doc.insert_child_at(parent, child_id, insert_at);
-            insert_at += 1;
         }
 
         // Remove the now-empty group.

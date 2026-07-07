@@ -113,8 +113,10 @@ impl Tool for TextTool {
             ..Default::default()
         };
 
-        let mut pres = PresentationAttrs::default();
-        pres.fill = Some(Paint::Color(Color::BLACK));
+        let pres = PresentationAttrs {
+            fill: Some(Paint::Color(Color::BLACK)),
+            ..Default::default()
+        };
 
         if is_drag {
             // For a text area, compute the bounding box from the drag rectangle.

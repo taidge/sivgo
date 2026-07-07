@@ -113,10 +113,12 @@ impl Tool for EllipseTool {
             })
         };
 
-        let mut pres = PresentationAttrs::default();
-        pres.fill = Some(Paint::Color(Color::rgb(100, 149, 237)));
-        pres.stroke = Some(Paint::Color(Color::BLACK));
-        pres.stroke_width = Some(SvgLength::new(1.0, LengthUnit::None));
+        let pres = PresentationAttrs {
+            fill: Some(Paint::Color(Color::rgb(100, 149, 237))),
+            stroke: Some(Paint::Color(Color::BLACK)),
+            stroke_width: Some(SvgLength::new(1.0, LengthUnit::None)),
+            ..Default::default()
+        };
 
         let parent = match doc.root() {
             Some(r) => r,

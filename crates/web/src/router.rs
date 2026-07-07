@@ -1,8 +1,10 @@
 //! Route definitions for the Sivgo web API.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use salvo::cors::Cors;
+use salvo::http::Method;
 use salvo::logging::Logger;
 use salvo::prelude::*;
 
@@ -13,6 +15,7 @@ use crate::handlers;
 use crate::oauth::{OAuthClient, ReqwestOAuthHttpClient};
 use crate::plugin_registry::PluginRegistry;
 use crate::preferences::PreferencesStore;
+use crate::rate_limit::{public_rate_limit, RateLimiter};
 use crate::store::Store;
 
 /// Build the full Salvo [`Router`] tree for the API.
@@ -35,6 +38,7 @@ use crate::store::Store;
 ///                             DELETE(auth)
 ///       versions              GET   (auth)
 ///   export                    POST  (public)
+///   shared/{token}            GET   (public, rate-limited)
 ///   assets/                   GET   (auth)
 ///                             POST  (auth)
 ///     {id}                    GET   (auth)
@@ -48,16 +52,35 @@ use crate::store::Store;
 ///     {pluginId}/uninstall    POST  (auth)
 /// ```
 pub fn create_router(store: Store, config: &ServerConfig) -> Service {
-    let cors = Cors::permissive().into_handler();
+    // Restrict CORS to the configured origins; fall back to permissive only
+    // when no allowlist is provided (local-dev convenience — see ServerConfig).
+    let cors = if config.cors_allowed_origins.is_empty() {
+        Cors::permissive().into_handler()
+    } else {
+        Cors::new()
+            .allow_origin(&config.cors_allowed_origins)
+            .allow_methods(vec![
+                Method::GET,
+                Method::POST,
+                Method::PUT,
+                Method::PATCH,
+                Method::DELETE,
+                Method::OPTIONS,
+            ])
+            .allow_headers(vec!["authorization", "content-type"])
+            .into_handler()
+    };
 
     // Create additional stores.
     let asset_store = AssetStore::new();
     let prefs_store = PreferencesStore::new();
     let plugin_registry = PluginRegistry::new();
     let oauth_client = OAuthClient::from_env(Arc::new(ReqwestOAuthHttpClient::new()));
+    let public_rate_limiter = RateLimiter::new(120, Duration::from_secs(60));
 
     // Public routes (no auth required).
     let public = Router::with_path("api/v1")
+        .hoop(public_rate_limit)
         .push(Router::with_path("health").get(handlers::health::health_check))
         .push(Router::with_path("openapi.json").get(handlers::openapi::openapi_spec))
         .push(
@@ -71,6 +94,7 @@ pub fn create_router(store: Store, config: &ServerConfig) -> Service {
                 ),
         )
         .push(Router::with_path("export").post(handlers::export::export_document))
+        .push(Router::with_path("shared/<token>").get(handlers::shares::get_shared_document))
         .push(Router::with_path("plugins").get(handlers::plugins::list_plugins));
 
     // Authenticated routes.
@@ -85,8 +109,15 @@ pub fn create_router(store: Store, config: &ServerConfig) -> Service {
                         .get(handlers::documents::get_document)
                         .put(handlers::documents::update_document)
                         .delete(handlers::documents::delete_document)
+                        .push(Router::with_path("versions").get(handlers::documents::list_versions))
                         .push(
-                            Router::with_path("versions").get(handlers::documents::list_versions),
+                            Router::with_path("shares")
+                                .get(handlers::shares::list_shares)
+                                .post(handlers::shares::create_share)
+                                .push(
+                                    Router::with_path("<share_id>")
+                                        .delete(handlers::shares::revoke_share),
+                                ),
                         ),
                 ),
         )
@@ -125,7 +156,8 @@ pub fn create_router(store: Store, config: &ServerConfig) -> Service {
                 .inject(config.clone())
                 .inject(asset_store)
                 .inject(prefs_store)
-                .inject(plugin_registry),
+                .inject(plugin_registry)
+                .inject(public_rate_limiter),
         )
         .hoop(affix_state::inject(oauth_client))
         .push(public)

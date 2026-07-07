@@ -5,9 +5,11 @@
 //! * **GUI mode** (default, no arguments): launches the Dioxus desktop editor.
 //! * **CLI mode** (`render` / `info` subcommands): batch operations.
 
+#![allow(clippy::items_after_test_module)]
+
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::OnceLock;
 
@@ -36,8 +38,8 @@ use sivgo_desktop::clipboard::{
     ClipboardManager, ClipboardPayload, ClipboardSnapshot,
 };
 use sivgo_dom::{
-    Align, Color, ImageAttrs, LengthUnit, MeetOrSlice, NodeId, Paint, PresentationAttrs,
-    PreserveAspectRatio, SvgElement, SvgLength, TextAttrs, ViewBox,
+    Align, BlendMode, Color, ImageAttrs, LengthUnit, LineCap, LineJoin, MeetOrSlice, NodeId, Paint,
+    PresentationAttrs, PreserveAspectRatio, SvgElement, SvgLength, TextAttrs, ViewBox,
 };
 use sivgo_math::{Point, Rect};
 use sivgo_render::{DocumentRenderer, TinySkiaBackend};
@@ -221,7 +223,9 @@ impl CanvasSelectPreview {
 }
 
 #[cfg(test)]
-const IN_WINDOW_MENU_RENDERED: bool = false;
+fn in_window_menu_rendered() -> bool {
+    false
+}
 
 fn inspector_panel_for_tool(tool: ToolId) -> Option<InspectorPanel> {
     match tool {
@@ -234,22 +238,12 @@ fn inspector_panel_for_tool(tool: ToolId) -> Option<InspectorPanel> {
 
 static INITIAL_DESKTOP_SETTINGS: OnceLock<DesktopSettings> = OnceLock::new();
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 struct DesktopSettings {
     preferences: PreferencesState,
     document_defaults: DocumentDefaults,
     layout: LayoutSettings,
-}
-
-impl Default for DesktopSettings {
-    fn default() -> Self {
-        Self {
-            preferences: PreferencesState::default(),
-            document_defaults: DocumentDefaults::default(),
-            layout: LayoutSettings::default(),
-        }
-    }
 }
 
 impl DesktopSettings {
@@ -2150,11 +2144,25 @@ input[type="number"].prop-input:focus::-webkit-inner-spin-button {
 
 .layer-opacity-row {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 38px;
+    grid-template-columns: minmax(0, 1fr) 38px auto;
     align-items: center;
     gap: 8px;
     min-width: 0;
     padding-left: 60px;
+}
+
+.layer-blend-select {
+    height: 22px;
+    max-width: 96px;
+    padding: 0 4px;
+    border-radius: var(--radius-sm);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--ink-1);
+    font-size: 10px;
+}
+.layer-blend-select:focus {
+    border-color: var(--accent-border);
 }
 
 .layer-label {
@@ -2314,11 +2322,11 @@ mod frontend_layout_tests {
     }
 
     #[test]
-    fn layers_panel_uses_compact_rows_without_blend_selects() {
+    fn layers_panel_styles_rows_and_blend_select() {
         assert!(CSS.contains(".layer-main-row"));
         assert!(CSS.contains(".layer-opacity-row"));
         assert!(CSS.contains(".layer-icon"));
-        assert!(!CSS.contains(".layer-blend-select"));
+        assert!(CSS.contains(".layer-blend-select"));
     }
 
     #[test]
@@ -2454,7 +2462,7 @@ mod frontend_layout_tests {
 
     #[test]
     fn in_window_menu_is_not_rendered_in_topbar() {
-        assert!(!IN_WINDOW_MENU_RENDERED);
+        assert!(!in_window_menu_rendered());
         assert!(CSS.contains(".tool-svg-icon"));
         assert!(CSS.contains("pointer-events: none"));
     }
@@ -2680,7 +2688,7 @@ mod frontend_layout_tests {
             active: true,
         };
         assert!(!pages_tool_should_preview_new_page(
-            &[page.clone()],
+            std::slice::from_ref(&page),
             10.0,
             40.0,
             0.0,
@@ -2932,6 +2940,14 @@ fn run_cli() {
 // ---------------------------------------------------------------------------
 
 fn launch_gui() {
+    // Initialize the plugin/extension subsystem so the built-in plugins are
+    // registered and loaded at startup; their ids are logged for the
+    // extensions menu to surface.
+    let plugin_manager = sivgo_desktop::plugins::init_plugin_manager();
+    for (id, name) in sivgo_desktop::plugins::available_plugins(&plugin_manager) {
+        log::info!("Available plugin: {id} ({name})");
+    }
+
     dioxus_desktop::launch::launch_virtual_dom(
         VirtualDom::new(App),
         Config::new()
@@ -3489,10 +3505,10 @@ fn safe_page_file_stem(label: &str, index: usize) -> String {
     let stem: String = raw
         .chars()
         .map(|ch| {
-            if ch.is_control() || matches!(ch, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*')
+            if ch.is_control()
+                || ch.is_whitespace()
+                || matches!(ch, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*')
             {
-                '_'
-            } else if ch.is_whitespace() {
                 '_'
             } else {
                 ch
@@ -3509,7 +3525,7 @@ fn safe_page_file_stem(label: &str, index: usize) -> String {
     }
 }
 
-fn export_pages_svg_to_folder(engine: &EditorEngine, folder: &PathBuf) -> Result<usize, String> {
+fn export_pages_svg_to_folder(engine: &EditorEngine, folder: &Path) -> Result<usize, String> {
     let exports = engine.export_all_pages_svg();
     if exports.is_empty() {
         return Err("Document has no pages to export".to_string());
@@ -3526,7 +3542,7 @@ fn export_pages_svg_to_folder(engine: &EditorEngine, folder: &PathBuf) -> Result
     Ok(written)
 }
 
-fn export_pages_pdf(engine: &EditorEngine, path: &PathBuf) -> Result<usize, String> {
+fn export_pages_pdf(engine: &EditorEngine, path: &Path) -> Result<usize, String> {
     let pages = engine.get_pages();
     if pages.is_empty() {
         return Err("Document has no pages to export".to_string());
@@ -3913,9 +3929,11 @@ fn paste_text_into_document(engine: &mut EditorEngine, text: &str) -> Option<Nod
         text_content: text.to_string(),
         ..Default::default()
     });
-    let mut presentation = PresentationAttrs::default();
-    presentation.fill = Some(Paint::Color(Color::BLACK));
-    presentation.font_size = Some(SvgLength::new(16.0, LengthUnit::None));
+    let presentation = PresentationAttrs {
+        fill: Some(Paint::Color(Color::BLACK)),
+        font_size: Some(SvgLength::new(16.0, LengthUnit::None)),
+        ..Default::default()
+    };
 
     execute_add_element(engine, element, presentation)
 }
@@ -4503,7 +4521,12 @@ fn build_layer_entries(engine: &EditorEngine) -> Vec<LayerEntry> {
                 visible: !node.hidden,
                 locked: node.locked,
                 opacity: node.presentation.opacity.unwrap_or(1.0),
-                blend_mode: "Normal".to_string(),
+                blend_mode: node
+                    .presentation
+                    .mix_blend_mode
+                    .unwrap_or_default()
+                    .to_svg()
+                    .to_string(),
             })
         })
         .collect()
@@ -4556,7 +4579,12 @@ fn push_layer_entries(
             visible: !node.hidden,
             locked: node.locked,
             opacity: node.presentation.opacity.unwrap_or(1.0),
-            blend_mode: "Normal".to_string(),
+            blend_mode: node
+                .presentation
+                .mix_blend_mode
+                .unwrap_or_default()
+                .to_svg()
+                .to_string(),
         });
         depth + 1
     } else {
@@ -4568,26 +4596,34 @@ fn push_layer_entries(
     }
 }
 
-fn get_selected_fill(engine: &EditorEngine) -> String {
+/// Hex color and whether the paint is explicitly `none` for the primary
+/// selection's fill. Falls back to the default fill color.
+fn get_selected_fill(engine: &EditorEngine) -> (String, bool) {
     if let Some(id) = engine.selection.primary() {
         if let Some(node) = engine.document.get_node(id) {
-            if let Some(Paint::Color(c)) = &node.presentation.fill {
-                return color_to_hex(c);
+            match &node.presentation.fill {
+                Some(Paint::Color(c)) => return (color_to_hex(c), false),
+                Some(Paint::None) => return (String::new(), true),
+                _ => {}
             }
         }
     }
-    "#ff8a5b".to_string()
+    ("#ff8a5b".to_string(), false)
 }
 
-fn get_selected_stroke(engine: &EditorEngine) -> String {
+/// Hex color and whether the paint is explicitly `none` for the primary
+/// selection's stroke. Falls back to the default stroke color.
+fn get_selected_stroke(engine: &EditorEngine) -> (String, bool) {
     if let Some(id) = engine.selection.primary() {
         if let Some(node) = engine.document.get_node(id) {
-            if let Some(Paint::Color(c)) = &node.presentation.stroke {
-                return color_to_hex(c);
+            match &node.presentation.stroke {
+                Some(Paint::Color(c)) => return (color_to_hex(c), false),
+                Some(Paint::None) => return (String::new(), true),
+                _ => {}
             }
         }
     }
-    "#10232a".to_string()
+    ("#10232a".to_string(), false)
 }
 
 fn get_selected_stroke_width(engine: &EditorEngine) -> f64 {
@@ -4599,6 +4635,160 @@ fn get_selected_stroke_width(engine: &EditorEngine) -> f64 {
         }
     }
     1.0
+}
+
+/// Style snapshot of the primary selection for the Fill & Stroke panel.
+struct SelectedStyleState {
+    fill_paint_type: &'static str,
+    fill_opacity: f64,
+    stroke_paint_type: &'static str,
+    stroke_opacity: f64,
+    line_cap: &'static str,
+    line_join: &'static str,
+    dash_pattern: String,
+    dash_offset: f64,
+    marker_start: String,
+    marker_mid: String,
+    marker_end: String,
+}
+
+impl Default for SelectedStyleState {
+    fn default() -> Self {
+        SelectedStyleState {
+            fill_paint_type: "Flat Color",
+            fill_opacity: 1.0,
+            stroke_paint_type: "Flat Color",
+            stroke_opacity: 1.0,
+            line_cap: "Butt",
+            line_join: "Miter",
+            dash_pattern: String::new(),
+            dash_offset: 0.0,
+            marker_start: String::new(),
+            marker_mid: String::new(),
+            marker_end: String::new(),
+        }
+    }
+}
+
+/// Resolve a paint to the matching Fill & Stroke panel paint-type label,
+/// following `url(#...)` references to the paint server they point at.
+fn paint_type_label(engine: &EditorEngine, paint: &Option<Paint>) -> &'static str {
+    match paint {
+        Some(Paint::None) => "None",
+        Some(Paint::Url(reference)) => {
+            let id = reference
+                .trim_start_matches("url(")
+                .trim_end_matches(')')
+                .trim_matches('#');
+            match engine
+                .document
+                .find_by_xml_id(id)
+                .and_then(|node_id| engine.document.get_node(node_id))
+                .map(|node| &node.element)
+            {
+                Some(SvgElement::LinearGradient(_)) => "Linear Gradient",
+                Some(SvgElement::RadialGradient(_)) => "Radial Gradient",
+                Some(SvgElement::Pattern(_)) => "Pattern",
+                _ => "Flat Color",
+            }
+        }
+        _ => "Flat Color",
+    }
+}
+
+fn selected_style_state(engine: &EditorEngine) -> SelectedStyleState {
+    let node = engine
+        .selection
+        .primary()
+        .and_then(|id| engine.document.get_node(id));
+    let Some(node) = node else {
+        return SelectedStyleState::default();
+    };
+    let p = &node.presentation;
+    SelectedStyleState {
+        fill_paint_type: paint_type_label(engine, &p.fill),
+        fill_opacity: p.fill_opacity.unwrap_or(1.0),
+        stroke_paint_type: paint_type_label(engine, &p.stroke),
+        stroke_opacity: p.stroke_opacity.unwrap_or(1.0),
+        line_cap: match p.stroke_linecap.unwrap_or_default() {
+            LineCap::Butt => "Butt",
+            LineCap::Round => "Round",
+            LineCap::Square => "Square",
+        },
+        line_join: match p.stroke_linejoin.unwrap_or_default() {
+            LineJoin::Miter => "Miter",
+            LineJoin::Round => "Round",
+            LineJoin::Bevel => "Bevel",
+        },
+        dash_pattern: p
+            .stroke_dasharray
+            .as_ref()
+            .map(|dashes| {
+                dashes
+                    .iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            })
+            .unwrap_or_default(),
+        dash_offset: p.stroke_dashoffset.unwrap_or(0.0),
+        marker_start: p.marker_start.clone().unwrap_or_default(),
+        marker_mid: p.marker_mid.clone().unwrap_or_default(),
+        marker_end: p.marker_end.clone().unwrap_or_default(),
+    }
+}
+
+/// Apply an undoable presentation-attribute change to the primary selection.
+/// Returns `true` if a command was executed.
+fn modify_primary_presentation(
+    mut engine: Signal<EditorEngine>,
+    mutate: impl FnOnce(&mut PresentationAttrs),
+) -> bool {
+    let mut eng = engine.write();
+    let Some(id) = eng.selection.primary() else {
+        return false;
+    };
+    let Some(node) = eng.document.get_node(id) else {
+        return false;
+    };
+    let old_attrs = node.presentation.clone();
+    let mut new_attrs = old_attrs.clone();
+    mutate(&mut new_attrs);
+    let cmd = ModifyAttributeCommand::new(id, old_attrs, new_attrs);
+    eng.execute(Box::new(cmd));
+    true
+}
+
+/// Serialize the current document and write it to `path`.
+fn save_svg_document(engine: Signal<EditorEngine>, path: &std::path::Path) -> bool {
+    let xml = {
+        let eng = engine.read();
+        sivgo_dom::serialize_svg(&eng.document)
+    };
+    match fs::write(path, xml.as_bytes()) {
+        Ok(()) => true,
+        Err(e) => {
+            log::error!("Failed to save {}: {}", path.display(), e);
+            false
+        }
+    }
+}
+
+/// Empty or whitespace-only marker references clear the marker.
+fn normalize_marker_ref(value: String) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+/// Parse a dash pattern like "5,3,2" or "5 3 2" into lengths.
+fn parse_dash_pattern(value: &str) -> Option<Vec<f64>> {
+    let dashes: Vec<f64> = value
+        .split([',', ' '])
+        .filter(|token| !token.trim().is_empty())
+        .filter_map(|token| token.trim().parse::<f64>().ok())
+        .filter(|v| *v >= 0.0)
+        .collect();
+    (!dashes.is_empty()).then_some(dashes)
 }
 
 /// Convert dioxus mouse event to our engine MouseEvent.
@@ -4658,6 +4848,7 @@ fn current_layer_id(engine: &EditorEngine) -> Option<NodeId> {
         .or_else(|| engine.get_layers().last().map(|(id, _)| *id))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_editor_action(
     action: &str,
     mut engine: Signal<EditorEngine>,
@@ -4718,14 +4909,7 @@ fn handle_editor_action(
                 }
             };
 
-            let xml = {
-                let eng = engine.read();
-                sivgo_dom::serialize_svg(&eng.document)
-            };
-
-            if let Err(e) = fs::write(&path, xml.as_bytes()) {
-                log::error!("Failed to save: {}", e);
-            } else {
+            if save_svg_document(engine, &path) {
                 file_path.set(Some(path.clone()));
                 set_window_title(&desktop, Some(&path));
                 info!("Saved to {}", path.display());
@@ -4736,13 +4920,7 @@ fn handle_editor_action(
                 .add_filter("SVG files", &["svg"])
                 .save_file()
             {
-                let xml = {
-                    let eng = engine.read();
-                    sivgo_dom::serialize_svg(&eng.document)
-                };
-                if let Err(e) = fs::write(&path, xml.as_bytes()) {
-                    log::error!("Failed to save: {}", e);
-                } else {
+                if save_svg_document(engine, &path) {
                     file_path.set(Some(path.clone()));
                     set_window_title(&desktop, Some(&path));
                     info!("Saved as {}", path.display());
@@ -4754,13 +4932,7 @@ fn handle_editor_action(
                 .add_filter("SVG files", &["svg"])
                 .save_file()
             {
-                let xml = {
-                    let eng = engine.read();
-                    sivgo_dom::serialize_svg(&eng.document)
-                };
-                if let Err(e) = fs::write(&path, xml.as_bytes()) {
-                    log::error!("Failed to write SVG copy: {}", e);
-                } else {
+                if save_svg_document(engine, &path) {
                     info!("Wrote SVG copy to {}", path.display());
                 }
             }
@@ -5427,12 +5599,12 @@ fn App() -> Element {
     let mut transform_lock_aspect = use_signal(|| true);
     let mut transform_percent_mode = use_signal(|| false);
     let mut object_editing_id = use_signal(|| None::<NodeId>);
-    let mut object_edit_value = use_signal(|| String::new());
+    let mut object_edit_value = use_signal(String::new);
     let mut object_xml_id_editing_id = use_signal(|| None::<NodeId>);
-    let mut object_xml_id_edit_value = use_signal(|| String::new());
+    let mut object_xml_id_edit_value = use_signal(String::new);
     let mut object_dragging_id = use_signal(|| None::<NodeId>);
     let mut layer_editing_id = use_signal(|| None::<NodeId>);
-    let mut layer_edit_value = use_signal(|| String::new());
+    let mut layer_edit_value = use_signal(String::new);
     let mut lpe_selected_id = use_signal(|| None::<String>);
     let mut filter_selected_id = use_signal(|| None::<String>);
     let mut resource_kind_filter = use_signal(|| None::<String>);
@@ -5541,9 +5713,10 @@ fn App() -> Element {
     let has_filter_target = eng.selected_filter_target_available();
     let text_state = eng.selected_text_state();
     let selected_object_details = selected_object_details(&eng);
-    let fill_hex = get_selected_fill(&eng);
-    let stroke_hex = get_selected_stroke(&eng);
+    let (fill_hex, fill_is_none) = get_selected_fill(&eng);
+    let (stroke_hex, stroke_is_none) = get_selected_stroke(&eng);
     let stroke_width_val = get_selected_stroke_width(&eng);
+    let style_state = selected_style_state(&eng);
     let selection_bounds = eng.selection.bounding_box(&eng.document);
     let transform_decomposition = eng.primary_transform_decomposition().unwrap_or_default();
     let zoom = eng.viewport.zoom;
@@ -5576,6 +5749,30 @@ fn App() -> Element {
     let canvas_cursor = canvas_cursor_for_tool(active_tool_id);
     let capture_canvas_mouse_move =
         should_capture_canvas_mouse_move(*canvas_pointer_down.read(), active_tool_id);
+    // Shared by the viewport and the drag-capture overlay so releasing the
+    // mouse behaves identically on both.
+    let mut handle_canvas_mouse_up = move |evt: Event<dioxus::events::MouseData>| {
+        canvas_pointer_down.set(false);
+        canvas_drag_preview.set(None);
+        canvas_select_preview.set(None);
+        let me = make_engine_mouse_event(&evt);
+        let release_hit_id = {
+            let eng = engine.peek();
+            canvas_hit_id_at(&eng, me.x, me.y)
+        };
+        let source_hit_id = *canvas_interaction_source_hit.peek();
+        let release_feedback =
+            canvas_tool_feedback_on_mouse_up(active_tool_id, source_hit_id, release_hit_id);
+        engine.write().on_mouse_up(me);
+        if active_tool_id != ToolId::Pen {
+            canvas_path_preview.set(None);
+        }
+        if let Some(message) = release_feedback {
+            canvas_tool_feedback.set(Some(message));
+        }
+        canvas_interaction_source_hit.set(None);
+        bump_render(render_version);
+    };
     let zoom_pct = format!("{:.0}%", zoom * 100.0);
     let display_mode_name = match display_mode {
         DisplayMode::Normal => "Normal",
@@ -6200,29 +6397,7 @@ fn App() -> Element {
                                 }
                             },
                             onmouseup: move |evt: Event<dioxus::events::MouseData>| {
-                                canvas_pointer_down.set(false);
-                                canvas_drag_preview.set(None);
-                                canvas_select_preview.set(None);
-                                let me = make_engine_mouse_event(&evt);
-                                let release_hit_id = {
-                                    let eng = engine.peek();
-                                    canvas_hit_id_at(&eng, me.x, me.y)
-                                };
-                                let source_hit_id = *canvas_interaction_source_hit.peek();
-                                let release_feedback = canvas_tool_feedback_on_mouse_up(
-                                    active_tool_id,
-                                    source_hit_id,
-                                    release_hit_id,
-                                );
-                                engine.write().on_mouse_up(me);
-                                if active_tool_id != ToolId::Pen {
-                                    canvas_path_preview.set(None);
-                                }
-                                if let Some(message) = release_feedback {
-                                    canvas_tool_feedback.set(Some(message));
-                                }
-                                canvas_interaction_source_hit.set(None);
-                                bump_render(render_version);
+                                handle_canvas_mouse_up(evt);
                             },
                             div {
                                 class: "canvas-document",
@@ -6530,29 +6705,7 @@ fn App() -> Element {
                                     },
                                     onmouseup: move |evt: Event<dioxus::events::MouseData>| {
                                         evt.stop_propagation();
-                                        canvas_pointer_down.set(false);
-                                        canvas_drag_preview.set(None);
-                                        canvas_select_preview.set(None);
-                                        let me = make_engine_mouse_event(&evt);
-                                        let release_hit_id = {
-                                            let eng = engine.peek();
-                                            canvas_hit_id_at(&eng, me.x, me.y)
-                                        };
-                                        let source_hit_id = *canvas_interaction_source_hit.peek();
-                                        let release_feedback = canvas_tool_feedback_on_mouse_up(
-                                            active_tool_id,
-                                            source_hit_id,
-                                            release_hit_id,
-                                        );
-                                        engine.write().on_mouse_up(me);
-                                        if active_tool_id != ToolId::Pen {
-                                            canvas_path_preview.set(None);
-                                        }
-                                        if let Some(message) = release_feedback {
-                                            canvas_tool_feedback.set(Some(message));
-                                        }
-                                        canvas_interaction_source_hit.set(None);
-                                        bump_render(render_version);
+                                        handle_canvas_mouse_up(evt);
                                     },
                                 }
                             }
@@ -6589,13 +6742,13 @@ fn App() -> Element {
                         ColorBar {
                             fill_color: fill_hex.clone(),
                             stroke_color: stroke_hex.clone(),
-                            fill_none: false,
-                            stroke_none: false,
+                            fill_none: fill_is_none,
+                            stroke_none: stroke_is_none,
                             on_fill_click: move |_| {
-                                log::info!("Fill swatch clicked; use the Fill & Stroke panel to edit exact values.");
+                                inspector_panel.set(InspectorPanel::Style);
                             },
                             on_stroke_click: move |_| {
-                                log::info!("Stroke swatch clicked; use the Fill & Stroke panel to edit exact values.");
+                                inspector_panel.set(InspectorPanel::Style);
                             },
                             on_set_none: move |_| {
                                 let mut eng = engine.write();
@@ -6692,70 +6845,136 @@ fn App() -> Element {
                         if active_inspector == InspectorPanel::Style {
                             PropertiesPanel {
                                 fill: fill_hex.clone(),
-                                fill_paint_type: "Flat Color".to_string(),
-                                fill_opacity: 1.0,
+                                fill_paint_type: style_state.fill_paint_type.to_string(),
+                                fill_opacity: style_state.fill_opacity,
                                 stroke: stroke_hex.clone(),
-                                stroke_paint_type: "Flat Color".to_string(),
-                                stroke_opacity: 1.0,
+                                stroke_paint_type: style_state.stroke_paint_type.to_string(),
+                                stroke_opacity: style_state.stroke_opacity,
                                 stroke_width: stroke_width_val,
-                                line_cap: "Butt".to_string(),
-                                line_join: "Miter".to_string(),
-                                dash_pattern: String::new(),
-                                dash_offset: 0.0,
-                                marker_start: String::new(),
-                                marker_mid: String::new(),
-                                marker_end: String::new(),
+                                line_cap: style_state.line_cap.to_string(),
+                                line_join: style_state.line_join.to_string(),
+                                dash_pattern: style_state.dash_pattern.clone(),
+                                dash_offset: style_state.dash_offset,
+                                marker_start: style_state.marker_start.clone(),
+                                marker_mid: style_state.marker_mid.clone(),
+                                marker_end: style_state.marker_end.clone(),
                                 has_selection: selection_count > 0,
                                 on_action: move |action: sivgo_ui::properties_panel::PropertiesAction| {
-                                    use sivgo_ui::properties_panel::PropertiesAction;
-                                    match action {
+                                    use sivgo_ui::properties_panel::{PaintType, PropertiesAction};
+                                    let changed = match action {
+                                        PropertiesAction::SetFillPaintType(paint_type) => match paint_type {
+                                            PaintType::None => modify_primary_presentation(engine, |attrs| {
+                                                attrs.fill = Some(Paint::None);
+                                            }),
+                                            PaintType::FlatColor => modify_primary_presentation(engine, |attrs| {
+                                                if !matches!(attrs.fill, Some(Paint::Color(_))) {
+                                                    attrs.fill = Some(Paint::Color(Color::BLACK));
+                                                }
+                                            }),
+                                            other => {
+                                                log::info!(
+                                                    "Fill paint type '{}' needs an existing paint server; assign it via url(#id).",
+                                                    other.label()
+                                                );
+                                                false
+                                            }
+                                        },
                                         PropertiesAction::SetFillColor(hex) => {
-                                            let mut eng = engine.write();
-                                            if let Some(id) = eng.selection.primary() {
-                                                if let Some(color) = hex_to_color(&hex) {
-                                                    if let Some(node) = eng.document.get_node(id) {
-                                                        let old_attrs = node.presentation.clone();
-                                                        let mut new_attrs = old_attrs.clone();
-                                                        new_attrs.fill = Some(Paint::Color(color));
-                                                        let cmd = ModifyAttributeCommand::new(id, old_attrs, new_attrs);
-                                                        eng.execute(Box::new(cmd));
-                                                    }
-                                                }
-                                            }
-                                            drop(eng);
-                                            bump_render(render_version);
+                                            hex_to_color(&hex).is_some_and(|color| {
+                                                modify_primary_presentation(engine, |attrs| {
+                                                    attrs.fill = Some(Paint::Color(color));
+                                                })
+                                            })
                                         }
+                                        PropertiesAction::SetFillOpacity(value) => {
+                                            modify_primary_presentation(engine, |attrs| {
+                                                attrs.fill_opacity = Some(value.clamp(0.0, 1.0));
+                                            })
+                                        }
+                                        PropertiesAction::SetStrokePaintType(paint_type) => match paint_type {
+                                            PaintType::None => modify_primary_presentation(engine, |attrs| {
+                                                attrs.stroke = Some(Paint::None);
+                                            }),
+                                            PaintType::FlatColor => modify_primary_presentation(engine, |attrs| {
+                                                if !matches!(attrs.stroke, Some(Paint::Color(_))) {
+                                                    attrs.stroke = Some(Paint::Color(Color::BLACK));
+                                                }
+                                            }),
+                                            other => {
+                                                log::info!(
+                                                    "Stroke paint type '{}' needs an existing paint server; assign it via url(#id).",
+                                                    other.label()
+                                                );
+                                                false
+                                            }
+                                        },
                                         PropertiesAction::SetStrokeColor(hex) => {
-                                            let mut eng = engine.write();
-                                            if let Some(id) = eng.selection.primary() {
-                                                if let Some(color) = hex_to_color(&hex) {
-                                                    if let Some(node) = eng.document.get_node(id) {
-                                                        let old_attrs = node.presentation.clone();
-                                                        let mut new_attrs = old_attrs.clone();
-                                                        new_attrs.stroke = Some(Paint::Color(color));
-                                                        let cmd = ModifyAttributeCommand::new(id, old_attrs, new_attrs);
-                                                        eng.execute(Box::new(cmd));
-                                                    }
-                                                }
-                                            }
-                                            drop(eng);
-                                            bump_render(render_version);
+                                            hex_to_color(&hex).is_some_and(|color| {
+                                                modify_primary_presentation(engine, |attrs| {
+                                                    attrs.stroke = Some(Paint::Color(color));
+                                                })
+                                            })
                                         }
-                                        PropertiesAction::SetStrokeWidth(val) => {
-                                            let mut eng = engine.write();
-                                            if let Some(id) = eng.selection.primary() {
-                                                if let Some(node) = eng.document.get_node(id) {
-                                                    let old_attrs = node.presentation.clone();
-                                                    let mut new_attrs = old_attrs.clone();
-                                                    new_attrs.stroke_width = Some(sivgo_dom::SvgLength::new(val, sivgo_dom::LengthUnit::None));
-                                                    let cmd = ModifyAttributeCommand::new(id, old_attrs, new_attrs);
-                                                    eng.execute(Box::new(cmd));
-                                                }
-                                            }
-                                            drop(eng);
-                                            bump_render(render_version);
+                                        PropertiesAction::SetStrokeOpacity(value) => {
+                                            modify_primary_presentation(engine, |attrs| {
+                                                attrs.stroke_opacity = Some(value.clamp(0.0, 1.0));
+                                            })
                                         }
-                                        _ => log::info!("Unhandled properties action: {:?}", action),
+                                        PropertiesAction::SetStrokeWidth(value) => {
+                                            modify_primary_presentation(engine, |attrs| {
+                                                attrs.stroke_width = Some(SvgLength::new(
+                                                    value.max(0.0),
+                                                    LengthUnit::None,
+                                                ));
+                                            })
+                                        }
+                                        PropertiesAction::SetLineCap(value) => {
+                                            LineCap::parse(&value.to_ascii_lowercase()).is_some_and(|cap| {
+                                                modify_primary_presentation(engine, |attrs| {
+                                                    attrs.stroke_linecap = Some(cap);
+                                                })
+                                            })
+                                        }
+                                        PropertiesAction::SetLineJoin(value) => {
+                                            LineJoin::parse(&value.to_ascii_lowercase()).is_some_and(|join| {
+                                                modify_primary_presentation(engine, |attrs| {
+                                                    attrs.stroke_linejoin = Some(join);
+                                                })
+                                            })
+                                        }
+                                        PropertiesAction::SetDashPattern(value) => {
+                                            let dashes = parse_dash_pattern(&value);
+                                            modify_primary_presentation(engine, |attrs| {
+                                                attrs.stroke_dasharray = dashes;
+                                            })
+                                        }
+                                        PropertiesAction::SetDashOffset(value) => {
+                                            modify_primary_presentation(engine, |attrs| {
+                                                attrs.stroke_dashoffset =
+                                                    (value != 0.0).then_some(value);
+                                            })
+                                        }
+                                        PropertiesAction::SetMarkerStart(value) => {
+                                            let marker = normalize_marker_ref(value);
+                                            modify_primary_presentation(engine, |attrs| {
+                                                attrs.marker_start = marker;
+                                            })
+                                        }
+                                        PropertiesAction::SetMarkerMid(value) => {
+                                            let marker = normalize_marker_ref(value);
+                                            modify_primary_presentation(engine, |attrs| {
+                                                attrs.marker_mid = marker;
+                                            })
+                                        }
+                                        PropertiesAction::SetMarkerEnd(value) => {
+                                            let marker = normalize_marker_ref(value);
+                                            modify_primary_presentation(engine, |attrs| {
+                                                attrs.marker_end = marker;
+                                            })
+                                        }
+                                    };
+                                    if changed {
+                                        bump_render(render_version);
                                     }
                                 },
                             }
@@ -6832,8 +7051,20 @@ fn App() -> Element {
                                             drop(eng);
                                             bump_render(render_version);
                                         }
-                                        LayerAction::SetBlendMode(_, mode) => {
-                                            log::info!("Blend mode editing is not wired yet: {}", mode);
+                                        LayerAction::SetBlendMode(id, mode) => {
+                                            if let Some(blend) = BlendMode::parse(&mode) {
+                                                let mut eng = engine.write();
+                                                if let Some(node) = eng.document.get_node(id) {
+                                                    let old_attrs = node.presentation.clone();
+                                                    let mut new_attrs = old_attrs.clone();
+                                                    new_attrs.mix_blend_mode =
+                                                        (blend != BlendMode::Normal).then_some(blend);
+                                                    let cmd = ModifyAttributeCommand::new(id, old_attrs, new_attrs);
+                                                    eng.execute(Box::new(cmd));
+                                                }
+                                                drop(eng);
+                                                bump_render(render_version);
+                                            }
                                         }
                                     }
                                 },

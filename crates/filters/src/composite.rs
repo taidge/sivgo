@@ -3,20 +3,20 @@
 use crate::buffer::FilterBuffer;
 
 /// Compositing operators for feComposite.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum CompositeOp {
+    #[default]
     Over,
     In,
     Out,
     Atop,
     Xor,
-    Arithmetic { k1: f32, k2: f32, k3: f32, k4: f32 },
-}
-
-impl Default for CompositeOp {
-    fn default() -> Self {
-        CompositeOp::Over
-    }
+    Arithmetic {
+        k1: f32,
+        k2: f32,
+        k3: f32,
+        k4: f32,
+    },
 }
 
 /// Composite two buffers.

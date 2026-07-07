@@ -1,4 +1,4 @@
-﻿//! Connector tool: draw lines connecting two elements.
+//! Connector tool: draw lines connecting two elements.
 //!
 //! ## Features
 //!
@@ -18,9 +18,10 @@ use crate::tools::select::hit_test_at;
 use crate::viewport::Viewport;
 
 /// The connector routing type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ConnectorType {
     /// A direct straight line between source and target centers.
+    #[default]
     Straight,
     /// A polyline with intermediate waypoints that avoids bounding boxes of
     /// other elements in the document (simple obstacle avoidance).
@@ -28,12 +29,6 @@ pub enum ConnectorType {
     /// An orthogonal (right-angle) connector: horizontal then vertical segments
     /// connecting the two endpoints.
     Orthogonal,
-}
-
-impl Default for ConnectorType {
-    fn default() -> Self {
-        Self::Straight
-    }
 }
 
 /// State of the connector tool.
@@ -76,31 +71,26 @@ impl ConnectorTool {
     }
 
     /// Set the connector type.
-    #[allow(dead_code)]
     pub fn set_connector_type(&mut self, ct: ConnectorType) {
         self.connector_type = ct;
     }
 
     /// Get the current connector type.
-    #[allow(dead_code)]
     pub fn connector_type(&self) -> ConnectorType {
         self.connector_type
     }
 
     /// Enable or disable auto-routing around obstacles (17.5.2).
-    #[allow(dead_code)]
     pub fn set_auto_route(&mut self, enabled: bool) {
         self.auto_route = enabled;
     }
 
     /// Whether auto-routing is enabled.
-    #[allow(dead_code)]
     pub fn auto_route(&self) -> bool {
         self.auto_route
     }
 
     /// Set the margin for routed connectors.
-    #[allow(dead_code)]
     pub fn set_route_margin(&mut self, margin: f64) {
         self.route_margin = margin.max(0.0);
     }
@@ -377,11 +367,13 @@ impl Tool for ConnectorTool {
 
         let element = self.create_connector_element(&points);
 
-        let mut pres = PresentationAttrs::default();
-        pres.fill = Some(Paint::None);
-        pres.stroke = Some(Paint::Color(Color::BLACK));
-        pres.stroke_width = Some(SvgLength::new(2.0, LengthUnit::None));
-        pres.stroke_linecap = Some(LineCap::Round);
+        let pres = PresentationAttrs {
+            fill: Some(Paint::None),
+            stroke: Some(Paint::Color(Color::BLACK)),
+            stroke_width: Some(SvgLength::new(2.0, LengthUnit::None)),
+            stroke_linecap: Some(LineCap::Round),
+            ..Default::default()
+        };
 
         let parent = match doc.root() {
             Some(r) => r,
@@ -425,6 +417,16 @@ mod tests {
     use super::*;
     use sivgo_dom::types::{LengthUnit, SvgLength};
     use sivgo_dom::{RectAttrs, SvgDocument, SvgElement, SvgSvgAttrs};
+
+    #[test]
+    fn configuration_setters_round_trip() {
+        let mut tool = ConnectorTool::new();
+        tool.set_connector_type(ConnectorType::Orthogonal);
+        tool.set_auto_route(false);
+        tool.set_route_margin(12.0);
+        assert_eq!(tool.connector_type(), ConnectorType::Orthogonal);
+        assert!(!tool.auto_route());
+    }
 
     fn make_doc_with_two_rects() -> (SvgDocument, NodeId, NodeId) {
         let mut doc = SvgDocument::new();

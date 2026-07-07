@@ -41,11 +41,7 @@ pub enum CrdtOp {
         attrs: HashMap<String, String>,
     },
     /// Delete an existing SVG node.
-    Delete {
-        site: u64,
-        clock: u64,
-        target: OpId,
-    },
+    Delete { site: u64, clock: u64, target: OpId },
     /// Update a single attribute on an existing SVG node.
     Update {
         site: u64,
@@ -102,7 +98,12 @@ pub struct CrdtNodeState {
 }
 
 impl CrdtNodeState {
-    fn new(id: OpId, parent: Option<OpId>, node_type: String, attrs: HashMap<String, String>) -> Self {
+    fn new(
+        id: OpId,
+        parent: Option<OpId>,
+        node_type: String,
+        attrs: HashMap<String, String>,
+    ) -> Self {
         let attr_versions = attrs.keys().map(|key| (key.clone(), id)).collect();
         Self {
             id,
@@ -188,7 +189,11 @@ impl CrdtDocument {
         }
 
         if clock > current + 1 {
-            if !self.pending_remote.iter().any(|pending| pending.op_id() == op.op_id()) {
+            if !self
+                .pending_remote
+                .iter()
+                .any(|pending| pending.op_id() == op.op_id())
+            {
                 self.pending_remote.push(op);
                 self.pending_remote
                     .sort_by_key(|pending| (pending.site(), pending.clock()));
@@ -220,7 +225,8 @@ impl CrdtDocument {
     }
 
     pub fn visible_nodes(&self) -> Vec<&CrdtNodeState> {
-        let mut nodes: Vec<&CrdtNodeState> = self.nodes.values().filter(|node| !node.deleted).collect();
+        let mut nodes: Vec<&CrdtNodeState> =
+            self.nodes.values().filter(|node| !node.deleted).collect();
         nodes.sort_by_key(|node| (node.id.site, node.id.clock));
         nodes
     }
@@ -232,13 +238,10 @@ impl CrdtDocument {
     }
 
     fn drain_pending(&mut self) {
-        loop {
-            let Some(index) = self.pending_remote.iter().position(|op| {
-                let current = *self.version_vector.get(&op.site()).unwrap_or(&0);
-                op.clock() == current + 1
-            }) else {
-                break;
-            };
+        while let Some(index) = self.pending_remote.iter().position(|op| {
+            let current = *self.version_vector.get(&op.site()).unwrap_or(&0);
+            op.clock() == current + 1
+        }) {
             let op = self.pending_remote.remove(index);
             self.commit_remote(op);
         }
@@ -541,7 +544,6 @@ mod tests {
     #[test]
     fn test_merge_idempotent() {
         let mut doc_a = CrdtDocument::new(1);
-        let doc_b_clone;
 
         let mut doc_b = CrdtDocument::new(2);
         let id_b = doc_b.generate_id();
@@ -552,7 +554,7 @@ mod tests {
             node_type: "line".into(),
             attrs: HashMap::new(),
         });
-        doc_b_clone = doc_b.clone();
+        let doc_b_clone = doc_b.clone();
 
         doc_a.merge(&doc_b);
         doc_a.merge(&doc_b_clone);

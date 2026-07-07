@@ -86,8 +86,12 @@ impl VersionTimeline {
 
     /// Append a new entry to the timeline.
     pub fn add_entry(&mut self, entry: VersionEntry) {
-        self.operation_log.entry(entry.version_id.clone()).or_default();
-        self.inverse_log.entry(entry.version_id.clone()).or_default();
+        self.operation_log
+            .entry(entry.version_id.clone())
+            .or_default();
+        self.inverse_log
+            .entry(entry.version_id.clone())
+            .or_default();
         self.entries.push(entry);
         self.current_index = self.entries.len().saturating_sub(1);
     }
@@ -131,10 +135,7 @@ impl VersionTimeline {
     /// given `version_id`.
     ///
     pub fn revert_to(&mut self, version_id: &str) -> Vec<CrdtOp> {
-        let target_index = self
-            .entries
-            .iter()
-            .position(|e| e.version_id == version_id);
+        let target_index = self.entries.iter().position(|e| e.version_id == version_id);
 
         let target_index = match target_index {
             Some(i) => i,
@@ -271,7 +272,7 @@ mod tests {
             vec![CrdtOp::Delete {
                 site: 2,
                 clock: 2,
-                target: super::crdt::OpId::new(2, 1),
+                target: crate::collab::crdt::OpId::new(2, 1),
             }],
         );
         tl.add_entry_with_ops(
@@ -279,14 +280,14 @@ mod tests {
             vec![CrdtOp::Update {
                 site: 1,
                 clock: 2,
-                target: super::crdt::OpId::new(2, 1),
+                target: crate::collab::crdt::OpId::new(2, 1),
                 key: "fill".into(),
                 value: "blue".into(),
             }],
             vec![CrdtOp::Update {
                 site: 1,
                 clock: 3,
-                target: super::crdt::OpId::new(2, 1),
+                target: crate::collab::crdt::OpId::new(2, 1),
                 key: "fill".into(),
                 value: "red".into(),
             }],

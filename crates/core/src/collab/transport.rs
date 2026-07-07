@@ -15,18 +15,11 @@ use super::crdt::CrdtOp;
 #[derive(Debug, Clone, PartialEq)]
 pub enum SyncMessage {
     /// Request to join a collaboration room.
-    Join {
-        room_id: String,
-        user_id: String,
-    },
+    Join { room_id: String, user_id: String },
     /// Notify that a user has left.
-    Leave {
-        user_id: String,
-    },
+    Leave { user_id: String },
     /// Broadcast one or more CRDT operations.
-    Op {
-        operations: Vec<CrdtOp>,
-    },
+    Op { operations: Vec<CrdtOp> },
     /// Full state synchronisation: version vector + operations the receiver
     /// may be missing.
     Sync {
@@ -34,9 +27,7 @@ pub enum SyncMessage {
         operations: Vec<CrdtOp>,
     },
     /// Acknowledge receipt of operations up to the given clock.
-    Ack {
-        clock: u64,
-    },
+    Ack { clock: u64 },
     /// User presence update (cursor position, selection).
     Presence {
         user_id: String,
@@ -215,11 +206,7 @@ impl InMemorySyncHub {
         Ok(delivered)
     }
 
-    pub fn drain_user(
-        &mut self,
-        room_id: &str,
-        user_id: &str,
-    ) -> Result<Vec<SyncMessage>, String> {
+    pub fn drain_user(&mut self, room_id: &str, user_id: &str) -> Result<Vec<SyncMessage>, String> {
         let Some(room) = self.rooms.get_mut(room_id) else {
             return Err(format!("room not found: {room_id}"));
         };

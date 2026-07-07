@@ -202,16 +202,16 @@ fn fit_spiro_subpath(points: &[Point], closed: bool, iterations: usize, out: &mu
     // -----------------------------------------------------------------------
     for _ in 0..iterations {
         if closed {
-            for i in 0..n {
+            for (i, tangent) in tangents.iter_mut().enumerate() {
                 let prev = (i + n - 1) % n;
                 let next = i % chord_count;
                 let target = angle_avg(chord_angles[prev], chord_angles[next]);
-                tangents[i] = angle_avg(tangents[i], target);
+                *tangent = angle_avg(*tangent, target);
             }
         } else {
-            for i in 1..n - 1 {
+            for (i, tangent) in tangents.iter_mut().enumerate().take(n - 1).skip(1) {
                 let target = angle_avg(chord_angles[i - 1], chord_angles[i]);
-                tangents[i] = angle_avg(tangents[i], target);
+                *tangent = angle_avg(*tangent, target);
             }
         }
     }

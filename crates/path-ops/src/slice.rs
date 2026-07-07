@@ -168,7 +168,7 @@ fn segment_infinite_line_intersection(
     let t = (dx * d2y - dy * d2x) / denom;
 
     // t must be within the segment [0, 1], but u is unconstrained (infinite line).
-    if t < -1e-12 || t > 1.0 + 1e-12 {
+    if !(-1e-12..=1.0 + 1e-12).contains(&t) {
         return None;
     }
 

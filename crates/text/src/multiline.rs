@@ -211,6 +211,7 @@ fn wrap_paragraph(
 }
 
 /// Measure text width using the engine (thin wrapper around shape_text).
+#[allow(clippy::too_many_arguments)]
 fn measure_line_width(
     engine: &mut TextEngine,
     text: &str,
