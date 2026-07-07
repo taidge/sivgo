@@ -62,6 +62,18 @@ just serve
 just render examples/basic_shapes.svg output.png
 ```
 
+For local development, `sivgo-web` uses an in-memory store and permissive
+CORS defaults. Production runs must set a non-default `JWT_SECRET`, set
+`SIVGO_ENV=production`, and provide exact frontend origins through
+`CORS_ALLOWED_ORIGINS`, for example:
+
+```sh
+SIVGO_ENV=production \
+JWT_SECRET=<strong-random-secret> \
+CORS_ALLOWED_ORIGINS=https://app.example.com \
+just serve
+```
+
 ## Project Layout
 
 ```

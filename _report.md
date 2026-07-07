@@ -16,8 +16,10 @@
 - [x] 删除指向缺失 `render_bench.rs` 的旧 `benches/Cargo.toml`; 当前 workspace bench 位于 `crates/dom/benches/parse_serialize.rs`。
 - [x] 为 Web public routes 增加进程内基础限流。
 - [x] 为 document shares 增加 `expires_at`, `revoked_at`, `created_by`, `last_accessed_at`, active-token 解析和 owner-only revoke API。
+- [x] 生产环境缺 `JWT_SECRET` 或 `CORS_ALLOWED_ORIGINS` 时拒绝启动, README 已补运行配置。
+- [x] 为 Web 关键成功动作增加基础内存审计日志。
 - [x] 清理当前 staged/unstaged/untracked 工作区并形成可审查提交边界。
-- [ ] Web 持久化、生产级分布式限流、真实 Web/WASM 前端、协作 WebSocket/UI、插件动作落地、视觉回归 CI 等生产化缺口仍未完成。
+- [ ] Web 持久化、生产级分布式限流、持久审计管道、真实 Web/WASM 前端、协作 WebSocket/UI、插件动作落地、视觉回归 CI 等生产化缺口仍未完成。
 
 ## 1. 结论摘要
 
@@ -25,7 +27,7 @@ Sivgo 当前更像一个覆盖面很广的 SVG 编辑器技术原型, 而不是�
 
 但当前项目不能判定为交付完成:
 
-- 当前大范围工作区变更已收敛为本轮提交边界, 包括既有 UI/Web/桌面平台模块删除和本轮 Web 分享/限流改进。
+- 当前大范围工作区变更已收敛为本轮提交边界, 包括既有 UI/Web/桌面平台模块删除和本轮 Web 分享/限流/安全配置/审计日志改进。
 - 原 CI 阻塞项已修复, 本轮提交前已重新跑通全 workspace 质量门禁。
 - README 与 architecture 的当前实现描述已修正; 但产品长期目标和已删除 Web 前端/PWA/浏览器文件模块仍需项目层面确认。
 - Web、协作、插件、视觉回归、发布合规仍有明显生产化 gap。
@@ -163,11 +165,12 @@ Sivgo 当前更像一个覆盖面很广的 SVG 编辑器技术原型, 而不是�
 - 全部核心存储仍是内存态: `Store` 使用 `Arc<RwLock<HashMap<...>>>`, `AssetStore`, `PreferencesStore`, `PluginRegistry` 也都是内存态。进程重启即丢数据。
 - `router.rs` 已为 public API tree 挂载进程内 `RateLimiter`, 覆盖 `register`, `login`, `oauth`, `export`, `shared`, `plugins` 等公开路由; 生产环境仍建议用 edge/cache/数据库实现分布式限流。
 - `handlers/export.rs:36` 明确 export 是 unauthenticated, 目前有 8 MiB SVG 和 16MP 限制, 但仍可能被公开接口消耗 CPU。
-- `config.rs:70-73` 生产环境 CORS 未配置时只是 warn 后 fallback permissive, 不拒绝启动。
+- `config.rs` 在 `SIVGO_ENV=production` 时会拒绝默认 `JWT_SECRET` 和缺失 `CORS_ALLOWED_ORIGINS` 的配置。
+- `audit.rs` 提供基础内存审计日志, handler 会记录注册、登录、OAuth、文档、分享、资产、偏好、插件和导出成功动作; 生产仍需接入持久日志管道。
 - 分享模型已增加 `expires_at`, `revoked_at`, `created_by`, `last_accessed_at`; store 解析 token 时会过滤过期/撤销分享并记录访问时间, handler 已提供 owner-only revoke API。
 - OpenAPI 与实际响应仍需复核: 历史输出里 OAuth token schema 和当前 `AuthResponse` 形态可能存在残留不一致风险。
 
-判断: Web 后端是开发/演示级别, 不是生产服务。必须引入数据库、迁移、限流、持久会话/刷新策略、生产 CORS 策略和审计日志。
+判断: Web 后端是开发/演示级别, 不是生产服务。必须引入数据库、迁移、分布式限流、持久会话/刷新策略和持久审计日志。
 
 ### 4.6 Web 前端/WASM
 
@@ -274,10 +277,10 @@ Sivgo 当前更像一个覆盖面很广的 SVG 编辑器技术原型, 而不是�
 主要风险:
 
 - 公开 login/register/oauth/export/shared/plugins 已有基础进程内限流; 生产级分布式限流仍需补。
-- 生产 CORS 未配置时不拒绝启动。
-- Web 全内存存储, 缺会话撤销、审计日志、备份、隔离策略。
+- 生产 CORS 和 JWT 基础拒绝策略已补, 但仍缺完整生产配置校验清单。
+- Web 全内存存储, 缺会话撤销、持久审计管道、备份、隔离策略。
 - 插件 sandbox 不完整, 第三方代码执行能力必须继续收紧。
-- public share token 无过期/撤销。
+- public share token 已有过期/撤销, 仍需持久化和更细权限策略。
 
 判断: 安全基础比原型早期更好, 但生产暴露仍不建议。
 
@@ -306,6 +309,8 @@ Sivgo 当前更像一个覆盖面很广的 SVG 编辑器技术原型, 而不是�
 - [x] 修正 README 中 Web client/WASM/PostgreSQL 与当前代码不一致的描述。
 - [x] 为公开 API 增加基础进程内 rate limiting; 生产级分布式限流仍需补。
 - [x] 分享链接增加过期、撤销和访问审计字段。
+- [x] 生产环境缺默认安全配置时拒绝启动。
+- [x] 增加 Web 基础内存审计日志; 持久审计管道仍需补。
 - [ ] 桌面平台能力模块大量删除, 需要确认真实 UX 是否回退。
 - [ ] 插件只初始化/log, 缺 UI 入口和动作落地。
 - [ ] 协作只在 core 模型层, 无真实 WebSocket/API/UI。
@@ -337,7 +342,9 @@ Sivgo 当前更像一个覆盖面很广的 SVG 编辑器技术原型, 而不是�
 - [ ] 决定 Web 方向: 只保留 REST server, 或恢复 Dioxus Web/WASM frontend。
 - [ ] 引入数据库层与迁移, 替换 Web in-memory store。
 - [x] 给 login/register/oauth/export/shared/plugins 增加基础进程内限流。
-- [ ] 增加生产级分布式限流、审计日志和生产配置拒绝策略。
+- [x] 增加生产配置拒绝策略。
+- [x] 增加基础内存审计日志。
+- [ ] 增加生产级分布式限流和持久审计日志管道。
 - [x] 把分享模型扩展为可撤销、可过期、可审计。
 - [ ] 接通插件 UI 入口和 `PluginAction` 应用路径。
 - [ ] 接通协作 WebSocket/API/UI, 或把协作文档降级为内部实验模块。

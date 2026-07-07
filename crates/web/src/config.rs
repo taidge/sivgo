@@ -1,4 +1,4 @@
-﻿//! Server configuration.
+//! Server configuration.
 //!
 //! Reads settings from environment variables with sensible defaults for
 //! local development.
@@ -68,9 +68,9 @@ impl ServerConfig {
             })
             .unwrap_or_default();
         if cors_allowed_origins.is_empty() && is_production {
-            log::warn!(
-                "CORS_ALLOWED_ORIGINS is unset in production — falling back to a permissive \
-                 any-origin CORS policy. Set it to your frontend origin(s)."
+            panic!(
+                "Refusing to start in production without CORS_ALLOWED_ORIGINS. \
+                 Set it to the exact frontend origin(s) that may call this API."
             );
         }
         Self {
@@ -87,5 +87,119 @@ impl ServerConfig {
     /// Return the `host:port` bind address.
     pub fn bind_addr(&self) -> String {
         format!("{}:{}", self.host, self.port)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::panic;
+    use std::sync::{Mutex, OnceLock};
+
+    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    struct EnvSnapshot {
+        values: Vec<(&'static str, Option<String>)>,
+    }
+
+    impl EnvSnapshot {
+        fn new(keys: &[&'static str]) -> Self {
+            let values = keys
+                .iter()
+                .map(|key| (*key, std::env::var(key).ok()))
+                .collect();
+            Self { values }
+        }
+    }
+
+    impl Drop for EnvSnapshot {
+        fn drop(&mut self) {
+            for (key, value) in &self.values {
+                match value {
+                    Some(value) => unsafe { std::env::set_var(key, value) },
+                    None => unsafe { std::env::remove_var(key) },
+                }
+            }
+        }
+    }
+
+    fn set_env(key: &str, value: &str) {
+        unsafe { std::env::set_var(key, value) };
+    }
+
+    fn clear_env(key: &str) {
+        unsafe { std::env::remove_var(key) };
+    }
+
+    fn with_config_env(test: impl FnOnce()) {
+        let lock = ENV_LOCK.get_or_init(|| Mutex::new(()));
+        let _guard = lock.lock().unwrap();
+        let _snapshot = EnvSnapshot::new(&[
+            "HOST",
+            "PORT",
+            "JWT_SECRET",
+            "SIVGO_ENV",
+            "CORS_ALLOWED_ORIGINS",
+        ]);
+        clear_env("HOST");
+        clear_env("PORT");
+        clear_env("JWT_SECRET");
+        clear_env("SIVGO_ENV");
+        clear_env("CORS_ALLOWED_ORIGINS");
+        test();
+    }
+
+    #[test]
+    fn development_allows_permissive_cors_defaults() {
+        with_config_env(|| {
+            let config = ServerConfig::from_env();
+
+            assert_eq!(config.jwt_secret, DEV_JWT_SECRET);
+            assert!(config.cors_allowed_origins.is_empty());
+            assert_eq!(config.bind_addr(), "127.0.0.1:3000");
+        });
+    }
+
+    #[test]
+    fn production_rejects_default_jwt_secret() {
+        with_config_env(|| {
+            set_env("SIVGO_ENV", "production");
+            set_env("CORS_ALLOWED_ORIGINS", "https://app.example.com");
+
+            let result = panic::catch_unwind(ServerConfig::from_env);
+
+            assert!(result.is_err());
+        });
+    }
+
+    #[test]
+    fn production_rejects_missing_cors_allowlist() {
+        with_config_env(|| {
+            set_env("SIVGO_ENV", "production");
+            set_env("JWT_SECRET", "strong-secret-used-in-tests");
+
+            let result = panic::catch_unwind(ServerConfig::from_env);
+
+            assert!(result.is_err());
+        });
+    }
+
+    #[test]
+    fn production_accepts_explicit_cors_allowlist() {
+        with_config_env(|| {
+            set_env("SIVGO_ENV", "production");
+            set_env("JWT_SECRET", "strong-secret-used-in-tests");
+            set_env(
+                "CORS_ALLOWED_ORIGINS",
+                "https://app.example.com, https://admin.example.com",
+            );
+
+            let config = ServerConfig::from_env();
+
+            assert_eq!(
+                config.cors_allowed_origins,
+                vec!["https://app.example.com", "https://admin.example.com"]
+            );
+        });
     }
 }

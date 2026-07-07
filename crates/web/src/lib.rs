@@ -23,6 +23,7 @@
 #![recursion_limit = "512"]
 
 pub mod assets;
+pub mod audit;
 pub mod auth;
 pub mod config;
 pub mod errors;

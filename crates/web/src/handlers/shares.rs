@@ -8,6 +8,7 @@ use chrono::Utc;
 use salvo::prelude::*;
 use uuid::Uuid;
 
+use crate::audit::{self, AuditAction};
 use crate::auth;
 use crate::errors::ApiError;
 use crate::models::{CreateShareRequest, SharePermission};
@@ -61,6 +62,19 @@ pub async fn create_share(req: &mut Request, depot: &mut Depot, res: &mut Respon
         body.shared_with,
         body.permission,
         body.expires_at,
+    );
+    audit::record_if_available(
+        depot,
+        AuditAction::ShareCreated,
+        Some(user_id),
+        Some("share"),
+        Some(share.id.to_string()),
+        serde_json::json!({
+            "document_id": doc_id,
+            "shared_with": share.shared_with,
+            "permission": format!("{:?}", share.permission),
+            "expires_at": share.expires_at,
+        }),
     );
     res.status_code(StatusCode::CREATED);
     res.render(Json(share));
@@ -128,7 +142,17 @@ pub async fn revoke_share(req: &mut Request, depot: &mut Depot, res: &mut Respon
     }
 
     match store.revoke_share(doc_id, share_id) {
-        Some(share) => res.render(Json(share)),
+        Some(share) => {
+            audit::record_if_available(
+                depot,
+                AuditAction::ShareRevoked,
+                Some(user_id),
+                Some("share"),
+                Some(share.id.to_string()),
+                serde_json::json!({ "document_id": doc_id }),
+            );
+            res.render(Json(share));
+        }
         None => ApiError::not_found("Share not found").write_to(res),
     }
 }
@@ -166,21 +190,36 @@ pub async fn get_shared_document(req: &mut Request, depot: &mut Depot, res: &mut
 
     // Direct shares require the caller to be the designated user. We treat a
     // missing/invalid token as "not found" to avoid leaking share existence.
-    if let Some(target) = share.shared_with {
+    let actor_id = if let Some(target) = share.shared_with {
         match auth::extract_user_id(req, depot) {
-            Some(uid) if uid == target => {}
+            Some(uid) if uid == target => Some(uid),
             _ => {
                 ApiError::not_found("Share not found").write_to(res);
                 return;
             }
         }
-    }
+    } else {
+        None
+    };
 
     match store.get_document(share.document_id) {
-        Some(doc) => res.render(Json(SharedDocumentResponse {
-            permission: share.permission,
-            document: doc,
-        })),
+        Some(doc) => {
+            audit::record_if_available(
+                depot,
+                AuditAction::SharedDocumentAccessed,
+                actor_id,
+                Some("share"),
+                Some(share.id.to_string()),
+                serde_json::json!({
+                    "document_id": share.document_id,
+                    "permission": format!("{:?}", share.permission),
+                }),
+            );
+            res.render(Json(SharedDocumentResponse {
+                permission: share.permission,
+                document: doc,
+            }));
+        }
         None => ApiError::not_found("Document not found").write_to(res),
     }
 }

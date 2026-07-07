@@ -2,6 +2,7 @@
 
 use salvo::prelude::*;
 
+use crate::audit::{self, AuditAction};
 use crate::auth::{create_token, hash_password, verify_password};
 use crate::config::ServerConfig;
 use crate::errors::ApiError;
@@ -51,6 +52,14 @@ pub async fn register(req: &mut Request, depot: &mut Depot, res: &mut Response) 
     let password_hash = hash_password(&body.password);
     let user = store.create_user(&body.email, &body.username, &password_hash);
     let token = create_token(user.id, &config.jwt_secret);
+    audit::record_if_available(
+        depot,
+        AuditAction::UserRegistered,
+        Some(user.id),
+        Some("user"),
+        Some(user.id.to_string()),
+        serde_json::json!({ "method": "password" }),
+    );
 
     res.status_code(StatusCode::CREATED);
     res.render(Json(AuthResponse { token, user }));
@@ -102,5 +111,13 @@ pub async fn login(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     };
 
     let token = create_token(user.id, &config.jwt_secret);
+    audit::record_if_available(
+        depot,
+        AuditAction::UserLoggedIn,
+        Some(user.id),
+        Some("user"),
+        Some(user.id.to_string()),
+        serde_json::json!({ "method": "password" }),
+    );
     res.render(Json(AuthResponse { token, user }));
 }

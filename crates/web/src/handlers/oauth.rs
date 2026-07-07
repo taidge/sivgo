@@ -2,6 +2,7 @@
 
 use salvo::prelude::*;
 
+use crate::audit::{self, AuditAction};
 use crate::auth::{self, create_token, hash_password};
 use crate::config::ServerConfig;
 use crate::errors::ApiError;
@@ -166,6 +167,14 @@ pub async fn oauth_callback(req: &mut Request, depot: &mut Depot, res: &mut Resp
     };
 
     let session_token = create_token(user.id, &config.jwt_secret);
+    audit::record_if_available(
+        depot,
+        AuditAction::OAuthUserAuthenticated,
+        Some(user.id),
+        Some("user"),
+        Some(user.id.to_string()),
+        serde_json::json!({ "provider": provider.name() }),
+    );
     res.render(Json(AuthResponse {
         token: session_token,
         user,

@@ -2,6 +2,7 @@
 
 use salvo::prelude::*;
 
+use crate::audit::{self, AuditAction};
 use crate::auth;
 use crate::errors::ApiError;
 use crate::plugin_registry::PluginRegistry;
@@ -76,6 +77,14 @@ pub async fn install_plugin(req: &mut Request, depot: &mut Depot, res: &mut Resp
     };
 
     if registry.install(user_id, &plugin_id) {
+        audit::record_if_available(
+            depot,
+            AuditAction::PluginInstalled,
+            Some(user_id),
+            Some("plugin"),
+            Some(plugin_id.clone()),
+            serde_json::json!({}),
+        );
         res.render(Json(serde_json::json!({
             "status": "installed",
             "plugin_id": plugin_id,
@@ -115,6 +124,14 @@ pub async fn uninstall_plugin(req: &mut Request, depot: &mut Depot, res: &mut Re
     };
 
     if registry.uninstall(user_id, &plugin_id) {
+        audit::record_if_available(
+            depot,
+            AuditAction::PluginUninstalled,
+            Some(user_id),
+            Some("plugin"),
+            Some(plugin_id.clone()),
+            serde_json::json!({}),
+        );
         res.render(Json(serde_json::json!({
             "status": "uninstalled",
             "plugin_id": plugin_id,

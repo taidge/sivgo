@@ -9,6 +9,7 @@ use salvo::logging::Logger;
 use salvo::prelude::*;
 
 use crate::assets::AssetStore;
+use crate::audit::AuditLog;
 use crate::auth;
 use crate::config::ServerConfig;
 use crate::handlers;
@@ -75,6 +76,7 @@ pub fn create_router(store: Store, config: &ServerConfig) -> Service {
     let asset_store = AssetStore::new();
     let prefs_store = PreferencesStore::new();
     let plugin_registry = PluginRegistry::new();
+    let audit_log = AuditLog::default();
     let oauth_client = OAuthClient::from_env(Arc::new(ReqwestOAuthHttpClient::new()));
     let public_rate_limiter = RateLimiter::new(120, Duration::from_secs(60));
 
@@ -157,6 +159,7 @@ pub fn create_router(store: Store, config: &ServerConfig) -> Service {
                 .inject(asset_store)
                 .inject(prefs_store)
                 .inject(plugin_registry)
+                .inject(audit_log)
                 .inject(public_rate_limiter),
         )
         .hoop(affix_state::inject(oauth_client))

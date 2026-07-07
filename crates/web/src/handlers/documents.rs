@@ -3,6 +3,7 @@
 use salvo::prelude::*;
 use uuid::Uuid;
 
+use crate::audit::{self, AuditAction};
 use crate::auth;
 use crate::errors::ApiError;
 use crate::models::*;
@@ -83,6 +84,14 @@ pub async fn create_document(req: &mut Request, depot: &mut Depot, res: &mut Res
 
     // Save initial version.
     store.save_version(doc.id, svg_content);
+    audit::record_if_available(
+        depot,
+        AuditAction::DocumentCreated,
+        Some(user_id),
+        Some("document"),
+        Some(doc.id.to_string()),
+        serde_json::json!({ "title": doc.title.clone() }),
+    );
 
     res.status_code(StatusCode::CREATED);
     res.render(Json(doc));
@@ -184,7 +193,20 @@ pub async fn update_document(req: &mut Request, depot: &mut Depot, res: &mut Res
     }
 
     match store.update_document(doc_id, body.title.as_deref(), body.svg_content.as_deref()) {
-        Some(doc) => res.render(Json(doc)),
+        Some(doc) => {
+            audit::record_if_available(
+                depot,
+                AuditAction::DocumentUpdated,
+                Some(user_id),
+                Some("document"),
+                Some(doc.id.to_string()),
+                serde_json::json!({
+                    "title_changed": body.title.is_some(),
+                    "svg_changed": body.svg_content.is_some(),
+                }),
+            );
+            res.render(Json(doc));
+        }
         None => ApiError::not_found("Document not found").write_to(res),
     }
 }
@@ -227,6 +249,14 @@ pub async fn delete_document(req: &mut Request, depot: &mut Depot, res: &mut Res
     }
 
     store.delete_document(doc_id);
+    audit::record_if_available(
+        depot,
+        AuditAction::DocumentDeleted,
+        Some(user_id),
+        Some("document"),
+        Some(doc_id.to_string()),
+        serde_json::json!({}),
+    );
     res.status_code(StatusCode::NO_CONTENT);
 }
 

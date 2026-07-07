@@ -2,6 +2,7 @@
 
 use salvo::prelude::*;
 
+use crate::audit::{self, AuditAction};
 use crate::auth;
 use crate::errors::ApiError;
 use crate::preferences::{PreferencesStore, UserPreferences};
@@ -60,6 +61,14 @@ pub async fn set_preferences(req: &mut Request, depot: &mut Depot, res: &mut Res
     };
 
     store.set(user_id, prefs.clone());
+    audit::record_if_available(
+        depot,
+        AuditAction::PreferencesUpdated,
+        Some(user_id),
+        Some("preferences"),
+        Some(user_id.to_string()),
+        serde_json::json!({ "mode": "replace" }),
+    );
     res.render(Json(prefs));
 }
 
@@ -92,6 +101,14 @@ pub async fn merge_preferences(req: &mut Request, depot: &mut Depot, res: &mut R
     };
 
     store.merge(user_id, partial);
+    audit::record_if_available(
+        depot,
+        AuditAction::PreferencesUpdated,
+        Some(user_id),
+        Some("preferences"),
+        Some(user_id.to_string()),
+        serde_json::json!({ "mode": "merge" }),
+    );
 
     let prefs = store.get(user_id).unwrap_or_default();
     res.render(Json(prefs));

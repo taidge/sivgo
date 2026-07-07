@@ -7,6 +7,7 @@ use std::io::BufWriter;
 
 use salvo::prelude::*;
 
+use crate::audit::{self, AuditAction};
 use crate::errors::ApiError;
 use crate::models::*;
 
@@ -24,7 +25,7 @@ use crate::models::*;
 /// }
 /// ```
 #[handler]
-pub async fn export_document(req: &mut Request, res: &mut Response) {
+pub async fn export_document(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     let body: ExportRequest = match req.parse_json().await {
         Ok(b) => b,
         Err(e) => {
@@ -48,6 +49,8 @@ pub async fn export_document(req: &mut Request, res: &mut Response) {
             return;
         }
     };
+    let svg_bytes = body.svg_content.len();
+    let format_name = format!("{:?}", body.format);
 
     match body.format {
         ExportFormat::Svg => {
@@ -58,6 +61,17 @@ pub async fn export_document(req: &mut Request, res: &mut Response) {
             res.headers_mut().insert(
                 "content-disposition",
                 "attachment; filename=\"export.svg\"".parse().unwrap(),
+            );
+            audit::record_if_available(
+                depot,
+                AuditAction::ExportRequested,
+                None,
+                Some("export"),
+                None,
+                serde_json::json!({
+                    "format": format_name,
+                    "svg_bytes": svg_bytes,
+                }),
             );
             res.render(xml);
         }
@@ -124,6 +138,19 @@ pub async fn export_document(req: &mut Request, res: &mut Response) {
             res.headers_mut().insert(
                 "content-disposition",
                 "attachment; filename=\"export.png\"".parse().unwrap(),
+            );
+            audit::record_if_available(
+                depot,
+                AuditAction::ExportRequested,
+                None,
+                Some("export"),
+                None,
+                serde_json::json!({
+                    "format": format_name,
+                    "svg_bytes": svg_bytes,
+                    "width": width,
+                    "height": height,
+                }),
             );
             res.body(png_buf);
         }

@@ -5,6 +5,7 @@ use salvo::prelude::*;
 use uuid::Uuid;
 
 use crate::assets::AssetStore;
+use crate::audit::{self, AuditAction};
 use crate::auth;
 use crate::errors::ApiError;
 
@@ -99,6 +100,18 @@ pub async fn upload_asset(req: &mut Request, depot: &mut Depot, res: &mut Respon
         }
     };
     let info = store.upload_asset(user_id, &body.filename, &body.content_type, data);
+    audit::record_if_available(
+        depot,
+        AuditAction::AssetUploaded,
+        Some(user_id),
+        Some("asset"),
+        Some(info.id.to_string()),
+        serde_json::json!({
+            "filename": info.filename.clone(),
+            "content_type": info.content_type.clone(),
+            "size_bytes": info.size_bytes,
+        }),
+    );
 
     res.status_code(StatusCode::CREATED);
     res.render(Json(info));
@@ -198,6 +211,14 @@ pub async fn delete_asset(req: &mut Request, depot: &mut Depot, res: &mut Respon
     match store.download_asset(asset_id) {
         Some(asset) if asset.owner_id == user_id => match store.delete_asset(asset_id) {
             Ok(()) => {
+                audit::record_if_available(
+                    depot,
+                    AuditAction::AssetDeleted,
+                    Some(user_id),
+                    Some("asset"),
+                    Some(asset_id.to_string()),
+                    serde_json::json!({}),
+                );
                 res.status_code(StatusCode::NO_CONTENT);
             }
             Err(_) => ApiError::not_found("Asset not found").write_to(res),
