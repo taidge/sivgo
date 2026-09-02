@@ -91,6 +91,90 @@ impl RenderPaint {
     pub fn solid(color: Color) -> Self {
         RenderPaint::Solid(color)
     }
+
+    /// Scale this paint's alpha by `opacity` (clamped to 0..=1).
+    ///
+    /// `fill-opacity` and `stroke-opacity` multiply the paint's own alpha
+    /// rather than the element's overall opacity, so they have to be folded
+    /// into the paint before it reaches the backend.
+    #[must_use]
+    pub fn with_opacity(self, opacity: f64) -> Self {
+        let opacity = opacity.clamp(0.0, 1.0);
+        if opacity >= 1.0 {
+            return self;
+        }
+        // The cast saturates, so values stay within 0..=255.
+        let scale = |a: u8| (f64::from(a) * opacity).round() as u8;
+        match self {
+            RenderPaint::Solid(c) => RenderPaint::Solid(Color::new(c.r, c.g, c.b, scale(c.a))),
+            RenderPaint::LinearGradient {
+                x1,
+                y1,
+                x2,
+                y2,
+                mut stops,
+                spread,
+                transform,
+                units,
+            } => {
+                for stop in &mut stops {
+                    stop.color.a = scale(stop.color.a);
+                }
+                RenderPaint::LinearGradient {
+                    x1,
+                    y1,
+                    x2,
+                    y2,
+                    stops,
+                    spread,
+                    transform,
+                    units,
+                }
+            }
+            RenderPaint::RadialGradient {
+                cx,
+                cy,
+                r,
+                fx,
+                fy,
+                mut stops,
+                spread,
+                transform,
+                units,
+            } => {
+                for stop in &mut stops {
+                    stop.color.a = scale(stop.color.a);
+                }
+                RenderPaint::RadialGradient {
+                    cx,
+                    cy,
+                    r,
+                    fx,
+                    fy,
+                    stops,
+                    spread,
+                    transform,
+                    units,
+                }
+            }
+            RenderPaint::Pattern {
+                pixels,
+                tile_width,
+                tile_height,
+                transform,
+                opacity: pattern_opacity,
+            } => RenderPaint::Pattern {
+                pixels,
+                tile_width,
+                tile_height,
+                transform,
+                opacity: pattern_opacity * opacity,
+            },
+            // The mesh is already rasterized; scaling it would mean rewriting
+            // every pixel, which the callers do not need today.
+            other @ RenderPaint::MeshGradient { .. } => other,
+        }
+    }
 }
 
 /// Describes how a path or shape should be stroked.

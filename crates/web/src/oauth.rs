@@ -3,6 +3,7 @@
 //! Provides configuration and helpers for Google and GitHub OAuth2 flows with
 //! injectable HTTP transport for token exchange and userinfo retrieval.
 
+use salvo::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -57,7 +58,11 @@ impl OAuthProvider {
 // ---------------------------------------------------------------------------
 
 /// OAuth2 credentials and endpoint URLs for a single provider.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// Neither `Debug` nor `Serialize` is derived: both would print the client
+/// secret, and a config struct ends up in log lines and error reports very
+/// easily. `Debug` is implemented by hand below with the secret masked.
+#[derive(Clone, Deserialize)]
 pub struct OAuthConfig {
     pub client_id: String,
     pub client_secret: String,
@@ -87,28 +92,54 @@ pub struct OAuthUserInfo {
     pub provider_user_id: String,
 }
 
+impl std::fmt::Debug for OAuthConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OAuthConfig")
+            .field("client_id", &self.client_id)
+            .field("client_secret", &"<redacted>")
+            .field("redirect_uri", &self.redirect_uri)
+            .field("auth_url", &self.auth_url)
+            .field("token_url", &self.token_url)
+            .finish()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Client
 // ---------------------------------------------------------------------------
 
 /// An OAuth2 client that holds configurations for multiple providers and
 /// exposes methods for the authorization-code flow.
+/// Transport used to talk to an OAuth provider.
+///
+/// The methods are async: they are called from request handlers, and a
+/// blocking HTTP client would tie up a runtime worker for the whole round trip
+/// (and panics outright if its own runtime is dropped inside an async context).
+#[async_trait]
 pub trait OAuthHttpClient: Send + Sync {
-    fn post_form(&self, url: &str, fields: &[(&str, String)]) -> Result<String, String>;
-    fn get_bearer(&self, url: &str, access_token: &str) -> Result<String, String>;
+    async fn post_form(&self, url: &str, fields: &[(&str, String)]) -> Result<String, String>;
+    async fn get_bearer(&self, url: &str, access_token: &str) -> Result<String, String>;
 }
+
+/// How long to wait on a provider before giving up.
+///
+/// Without a bound, a slow or unresponsive provider holds the request open for
+/// as long as it likes; the callback route is public, so that is worth
+/// capping.
+const OAUTH_HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[derive(Debug, Clone)]
 pub struct ReqwestOAuthHttpClient {
-    client: reqwest::blocking::Client,
+    client: reqwest::Client,
 }
 
 impl ReqwestOAuthHttpClient {
     pub fn new() -> Self {
-        let client = reqwest::blocking::Client::builder()
+        let client = reqwest::Client::builder()
             .user_agent("Sivgo/0.1 OAuth client")
+            .timeout(OAUTH_HTTP_TIMEOUT)
             .build()
-            .unwrap_or_else(|_| reqwest::blocking::Client::new());
+            .unwrap_or_default();
         Self { client }
     }
 }
@@ -119,8 +150,9 @@ impl Default for ReqwestOAuthHttpClient {
     }
 }
 
+#[async_trait]
 impl OAuthHttpClient for ReqwestOAuthHttpClient {
-    fn post_form(&self, url: &str, fields: &[(&str, String)]) -> Result<String, String> {
+    async fn post_form(&self, url: &str, fields: &[(&str, String)]) -> Result<String, String> {
         let form = fields
             .iter()
             .map(|(key, value)| (*key, value.as_str()))
@@ -130,23 +162,27 @@ impl OAuthHttpClient for ReqwestOAuthHttpClient {
             .header(reqwest::header::ACCEPT, "application/json")
             .form(&form)
             .send()
+            .await
             .map_err(|err| format!("OAuth token request failed: {err}"))?
             .error_for_status()
             .map_err(|err| format!("OAuth token request was rejected: {err}"))?
             .text()
+            .await
             .map_err(|err| format!("OAuth token response read failed: {err}"))
     }
 
-    fn get_bearer(&self, url: &str, access_token: &str) -> Result<String, String> {
+    async fn get_bearer(&self, url: &str, access_token: &str) -> Result<String, String> {
         self.client
             .get(url)
             .bearer_auth(access_token)
             .header(reqwest::header::ACCEPT, "application/json")
             .send()
+            .await
             .map_err(|err| format!("OAuth userinfo request failed: {err}"))?
             .error_for_status()
             .map_err(|err| format!("OAuth userinfo request was rejected: {err}"))?
             .text()
+            .await
             .map_err(|err| format!("OAuth userinfo response read failed: {err}"))
     }
 }
@@ -239,7 +275,11 @@ impl OAuthClient {
         ))
     }
 
-    pub fn exchange_code(&self, provider: OAuthProvider, code: &str) -> Result<OAuthToken, String> {
+    pub async fn exchange_code(
+        &self,
+        provider: OAuthProvider,
+        code: &str,
+    ) -> Result<OAuthToken, String> {
         let config = self
             .configs
             .get(&provider)
@@ -253,20 +293,22 @@ impl OAuthClient {
             .http_client
             .as_ref()
             .ok_or_else(|| "OAuth HTTP client is not configured".to_string())?;
-        let body = http.post_form(
-            &config.token_url,
-            &[
-                ("grant_type", "authorization_code".to_string()),
-                ("code", code.to_string()),
-                ("client_id", config.client_id.clone()),
-                ("client_secret", config.client_secret.clone()),
-                ("redirect_uri", config.redirect_uri.clone()),
-            ],
-        )?;
+        let body = http
+            .post_form(
+                &config.token_url,
+                &[
+                    ("grant_type", "authorization_code".to_string()),
+                    ("code", code.to_string()),
+                    ("client_id", config.client_id.clone()),
+                    ("client_secret", config.client_secret.clone()),
+                    ("redirect_uri", config.redirect_uri.clone()),
+                ],
+            )
+            .await?;
         parse_token_response(&body)
     }
 
-    pub fn get_user_info(
+    pub async fn get_user_info(
         &self,
         provider: OAuthProvider,
         token: &OAuthToken,
@@ -284,7 +326,9 @@ impl OAuthClient {
             .http_client
             .as_ref()
             .ok_or_else(|| "OAuth HTTP client is not configured".to_string())?;
-        let body = http.get_bearer(userinfo_url(provider), &token.access_token)?;
+        let body = http
+            .get_bearer(userinfo_url(provider), &token.access_token)
+            .await?;
         parse_user_info(provider, &body)
     }
 }
@@ -433,8 +477,9 @@ mod tests {
     #[derive(Debug)]
     struct FakeHttpClient;
 
+    #[async_trait]
     impl OAuthHttpClient for FakeHttpClient {
-        fn post_form(&self, _url: &str, fields: &[(&str, String)]) -> Result<String, String> {
+        async fn post_form(&self, _url: &str, fields: &[(&str, String)]) -> Result<String, String> {
             assert!(fields
                 .iter()
                 .any(|(key, value)| *key == "code" && value == "auth-code-123"));
@@ -444,7 +489,7 @@ mod tests {
             )
         }
 
-        fn get_bearer(&self, url: &str, access_token: &str) -> Result<String, String> {
+        async fn get_bearer(&self, url: &str, access_token: &str) -> Result<String, String> {
             assert_eq!(access_token, "access-123");
             if url.contains("googleapis") {
                 Ok(r#"{"sub":"google-1","email":"user@gmail.com","name":"Google User","picture":"https://img.test/g.png"}"#.to_string())
@@ -520,26 +565,27 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[test]
-    fn exchange_code_returns_token() {
+    #[tokio::test]
+    async fn exchange_code_returns_token() {
         let client = make_client();
         let token = client
             .exchange_code(OAuthProvider::GitHub, "auth-code-123")
+            .await
             .unwrap();
         assert_eq!(token.access_token, "access-123");
         assert!(token.refresh_token.is_some());
         assert_eq!(token.expires_in, 7200);
     }
 
-    #[test]
-    fn exchange_code_rejects_empty_code() {
+    #[tokio::test]
+    async fn exchange_code_rejects_empty_code() {
         let client = make_client();
-        let result = client.exchange_code(OAuthProvider::Google, "");
+        let result = client.exchange_code(OAuthProvider::Google, "").await;
         assert!(result.is_err());
     }
 
-    #[test]
-    fn exchange_code_requires_http_client() {
+    #[tokio::test]
+    async fn exchange_code_requires_http_client() {
         let mut configs = HashMap::new();
         configs.insert(
             OAuthProvider::Google,
@@ -554,44 +600,52 @@ mod tests {
         let client = OAuthClient::new(configs);
         assert!(client
             .exchange_code(OAuthProvider::Google, "auth-code-123")
+            .await
             .unwrap_err()
             .contains("HTTP client"));
     }
 
-    #[test]
-    fn get_user_info_returns_provider_data() {
+    #[tokio::test]
+    async fn get_user_info_returns_provider_data() {
         let client = make_client();
         let token = client
             .exchange_code(OAuthProvider::Google, "auth-code-123")
+            .await
             .unwrap();
-        let info = client.get_user_info(OAuthProvider::Google, &token).unwrap();
+        let info = client
+            .get_user_info(OAuthProvider::Google, &token)
+            .await
+            .unwrap();
         assert_eq!(info.email, "user@gmail.com");
         assert_eq!(info.name, "Google User");
         assert_eq!(info.provider_user_id, "google-1");
     }
 
-    #[test]
-    fn get_user_info_github_falls_back_to_noreply_email() {
+    #[tokio::test]
+    async fn get_user_info_github_falls_back_to_noreply_email() {
         let client = make_client();
         let token = OAuthToken {
             access_token: "access-123".to_string(),
             refresh_token: None,
             expires_in: 3600,
         };
-        let info = client.get_user_info(OAuthProvider::GitHub, &token).unwrap();
+        let info = client
+            .get_user_info(OAuthProvider::GitHub, &token)
+            .await
+            .unwrap();
         assert_eq!(info.email, "octo@users.noreply.github.com");
         assert!(info.avatar_url.is_some());
     }
 
-    #[test]
-    fn get_user_info_rejects_empty_token() {
+    #[tokio::test]
+    async fn get_user_info_rejects_empty_token() {
         let client = make_client();
         let token = OAuthToken {
             access_token: "".to_string(),
             refresh_token: None,
             expires_in: 0,
         };
-        let result = client.get_user_info(OAuthProvider::Google, &token);
+        let result = client.get_user_info(OAuthProvider::Google, &token).await;
         assert!(result.is_err());
     }
 

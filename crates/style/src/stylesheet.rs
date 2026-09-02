@@ -81,7 +81,7 @@ impl CssSelector {
 
     /// Check if this selector matches the given element (simple selectors only).
     ///
-    /// For combinator selectors, use [`matches_in_context`] instead.
+    /// For combinator selectors, use [`Self::matches_in_context`] instead.
     pub fn matches(&self, tag_name: &str, id: Option<&str>, classes: &[&str]) -> bool {
         match self {
             CssSelector::Universal => true,

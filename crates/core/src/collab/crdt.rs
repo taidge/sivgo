@@ -4,6 +4,7 @@
 //! multiple users to concurrently edit an SVG document. Each editing site gets
 //! a unique `site_id` and maintains a version vector to track causality.
 
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 // ---------------------------------------------------------------------------
@@ -12,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 
 /// Unique identifier for a CRDT operation, composed of the originating site
 /// and a monotonically increasing logical clock at that site.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct OpId {
     pub site: u64,
     pub clock: u64,
@@ -30,7 +31,7 @@ impl OpId {
 // ---------------------------------------------------------------------------
 
 /// A single CRDT operation that can be applied to the collaborative document.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum CrdtOp {
     /// Insert a new SVG node.
     Insert {
@@ -138,6 +139,14 @@ pub struct CrdtDocument {
     pub tombstones: HashSet<OpId>,
     /// Causally future remote operations waiting for missing clocks.
     pub pending_remote: Vec<CrdtOp>,
+    /// Updates whose target node has not arrived yet.
+    ///
+    /// Per-site clocks only order operations from the *same* replica. An
+    /// update made on one site to a node inserted on another can still be
+    /// delivered before that insert, and dropping it there made replicas
+    /// diverge permanently: one had the attribute, the other did not, with no
+    /// later operation to reconcile them.
+    pub deferred_updates: Vec<CrdtOp>,
 }
 
 impl CrdtDocument {
@@ -152,6 +161,7 @@ impl CrdtDocument {
             nodes: HashMap::new(),
             tombstones: HashSet::new(),
             pending_remote: Vec::new(),
+            deferred_updates: Vec::new(),
         }
     }
 
@@ -235,6 +245,24 @@ impl CrdtDocument {
         self.version_vector.insert(op.site(), op.clock());
         self.materialize(&op);
         self.operations.push(op);
+        self.retry_deferred_updates();
+    }
+
+    /// Re-apply buffered updates whose target has since arrived.
+    ///
+    /// Runs to a fixed point because applying one update can be what makes
+    /// another applicable.
+    fn retry_deferred_updates(&mut self) {
+        loop {
+            let Some(index) = self.deferred_updates.iter().position(|op| match op {
+                CrdtOp::Update { target, .. } => self.nodes.contains_key(target),
+                _ => true,
+            }) else {
+                return;
+            };
+            let op = self.deferred_updates.remove(index);
+            self.materialize(&op);
+        }
     }
 
     fn drain_pending(&mut self) {
@@ -280,6 +308,19 @@ impl CrdtDocument {
             CrdtOp::Update {
                 target, key, value, ..
             } => {
+                // A tombstoned target is genuinely gone; a merely unknown one
+                // may still be on its way, so hold the update rather than
+                // losing it.
+                if !self.nodes.contains_key(target) && !self.tombstones.contains(target) {
+                    if !self
+                        .deferred_updates
+                        .iter()
+                        .any(|pending| pending.op_id() == op.op_id())
+                    {
+                        self.deferred_updates.push(op.clone());
+                    }
+                    return;
+                }
                 if let Some(node) = self.nodes.get_mut(target) {
                     if node.deleted {
                         return;

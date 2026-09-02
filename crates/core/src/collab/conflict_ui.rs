@@ -70,7 +70,7 @@ impl ConflictResolver {
     /// Automatically resolve all pending conflicts by keeping the local
     /// change.
     pub fn auto_resolve_all(&mut self) {
-        let pending: Vec<ConflictInfo> = self.conflicts.drain(..).collect();
+        let pending: Vec<ConflictInfo> = std::mem::take(&mut self.conflicts);
         for info in pending {
             self.resolved
                 .push((info.op_id, ConflictResolution::KeepLocal));

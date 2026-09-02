@@ -152,7 +152,7 @@ impl Tool for SelectTool {
         let release_doc = viewport.screen_to_document(Point::new(event.x, event.y));
 
         match state {
-            SelectState::PressedOnObject { node_id: _, .. } => {
+            SelectState::PressedOnObject { .. } => {
                 // It was a click (not a drag).  Selection logic will be
                 // handled by the engine based on modifiers.
                 // We return a special "select this" response: we encode it
@@ -224,6 +224,14 @@ impl Tool for SelectTool {
 
     fn cursor(&self) -> &str {
         "default"
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }
 

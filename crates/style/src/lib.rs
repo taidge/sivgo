@@ -29,13 +29,18 @@ pub mod cache;
 pub mod cascade;
 pub mod computed;
 pub mod inline;
+pub mod overrides;
 pub mod properties;
 pub mod stylesheet;
 
 // Re-export the primary API at the crate root.
 pub use cache::StyleCache;
-pub use cascade::{apply_inline_style, apply_presentation_attrs, resolve_single, resolve_styles};
+pub use cascade::{
+    apply_declaration_to_presentation, apply_inline_style, apply_presentation_attrs,
+    resolve_single, resolve_styles,
+};
 pub use computed::ComputedStyle;
 pub use inline::parse_inline_style;
+pub use overrides::{stylesheet_overrides, StyleOverrides};
 pub use properties::{is_inherited, is_non_inherited};
 pub use stylesheet::{parse_stylesheet, CssRule, CssSelector, Specificity, Stylesheet};

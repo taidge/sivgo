@@ -7,4 +7,3 @@ edition.workspace = true
 sivgo-math = { workspace = true }
 cosmic-text = { workspace = true }
 swash = { workspace = true }
-log = { workspace = true }

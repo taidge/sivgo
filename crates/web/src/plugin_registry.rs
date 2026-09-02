@@ -48,12 +48,12 @@ impl PluginRegistry {
 
     /// List all plugins in the catalogue.
     pub fn list(&self) -> Vec<PluginInfo> {
-        self.plugins.read().unwrap().clone()
+        crate::lock::read(&self.plugins).clone()
     }
 
     /// Register a new plugin in the catalogue.
     pub fn register(&self, plugin: PluginInfo) {
-        self.plugins.write().unwrap().push(plugin);
+        crate::lock::write(&self.plugins).push(plugin);
     }
 
     /// Install a plugin for a user. Returns `true` if the plugin exists and
@@ -70,14 +70,14 @@ impl PluginRegistry {
             return false;
         }
 
-        let mut installs = self.installations.write().unwrap();
+        let mut installs = crate::lock::write(&self.installations);
         let user_plugins = installs.entry(user_id).or_default();
         user_plugins.insert(plugin_id.to_string())
     }
 
     /// Uninstall a plugin for a user. Returns `true` if it was installed.
     pub fn uninstall(&self, user_id: Uuid, plugin_id: &str) -> bool {
-        let mut installs = self.installations.write().unwrap();
+        let mut installs = crate::lock::write(&self.installations);
         if let Some(user_plugins) = installs.get_mut(&user_id) {
             user_plugins.remove(plugin_id)
         } else {
@@ -87,7 +87,7 @@ impl PluginRegistry {
 
     /// List the plugins installed by a specific user.
     pub fn user_plugins(&self, user_id: Uuid) -> Vec<PluginInfo> {
-        let installs = self.installations.read().unwrap();
+        let installs = crate::lock::read(&self.installations);
         let installed_ids = match installs.get(&user_id) {
             Some(ids) => ids.clone(),
             None => return Vec::new(),

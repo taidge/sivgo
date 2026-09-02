@@ -53,12 +53,12 @@ impl PreferencesStore {
 
     /// Get the preferences for a user, or `None` if not yet stored.
     pub fn get(&self, user_id: Uuid) -> Option<UserPreferences> {
-        self.prefs.read().unwrap().get(&user_id).cloned()
+        crate::lock::read(&self.prefs).get(&user_id).cloned()
     }
 
     /// Set (replace) the full preferences for a user.
     pub fn set(&self, user_id: Uuid, prefs: UserPreferences) {
-        self.prefs.write().unwrap().insert(user_id, prefs);
+        crate::lock::write(&self.prefs).insert(user_id, prefs);
     }
 
     /// Merge a partial JSON value into the existing preferences for a user.
@@ -67,7 +67,7 @@ impl PreferencesStore {
     /// unchanged.  If the user has no stored preferences yet, the defaults
     /// are used as the base.
     pub fn merge(&self, user_id: Uuid, partial: serde_json::Value) {
-        let mut store = self.prefs.write().unwrap();
+        let mut store = crate::lock::write(&self.prefs);
         let current = store.get(&user_id).cloned().unwrap_or_default();
 
         // Serialize current to JSON, merge, then deserialize back.

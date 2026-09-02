@@ -38,7 +38,7 @@ impl GrayBitmap {
         let pixel_count = (width as usize) * (height as usize);
         let mut pixels = Vec::with_capacity(pixel_count);
 
-        for chunk in data.chunks_exact(4) {
+        for chunk in data.as_chunks::<4>().0 {
             let r = chunk[0] as f64;
             let g = chunk[1] as f64;
             let b = chunk[2] as f64;

@@ -4,5 +4,4 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-sivgo-math = { workspace = true }
 log = { workspace = true }

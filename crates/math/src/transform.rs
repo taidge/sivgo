@@ -343,8 +343,10 @@ pub fn parse_transform(s: &str) -> Result<Transform2D, MathError> {
             }
         };
 
-        // Compose: result = result then t (left-to-right composition)
-        result = result.then(&t);
+        // `transform="f1 f2"` is the matrix product `f1 * f2`: coordinates go
+        // through the rightmost function first. Building left to right, each
+        // new function is applied *before* everything accumulated so far.
+        result = t.then(&result);
     }
 
     Ok(result)
@@ -556,10 +558,38 @@ mod tests {
 
     #[test]
     fn test_parse_multiple_transforms() {
+        // Per SVG, `transform="translate(10,20) scale(2)"` is the matrix
+        // product T * S, so a point is scaled first and translated second.
         let t = parse_transform("translate(10, 20) scale(2)").unwrap();
         let p = Point::new(5.0, 5.0);
-        // translate first: (15, 25), then scale: (30, 50)
-        assert_point_near(t.transform_point(p), Point::new(30.0, 50.0));
+        // scale first: (10, 10), then translate: (20, 30)
+        assert_point_near(t.transform_point(p), Point::new(20.0, 30.0));
+    }
+
+    #[test]
+    fn test_parse_transform_list_order_matters() {
+        // The same two functions in the other order place the point elsewhere.
+        let p = Point::new(5.0, 5.0);
+        let a = parse_transform("translate(10, 20) scale(2)").unwrap();
+        let b = parse_transform("scale(2) translate(10, 20)").unwrap();
+        assert_point_near(a.transform_point(p), Point::new(20.0, 30.0));
+        assert_point_near(b.transform_point(p), Point::new(30.0, 50.0));
+    }
+
+    #[test]
+    fn test_parse_transform_matches_manual_composition() {
+        let parsed = parse_transform("translate(4, 6) rotate(30) scale(2, 3)").unwrap();
+        let manual = Transform2D::scale_xy(2.0, 3.0)
+            .then(&Transform2D::rotate(30.0_f64.to_radians()))
+            .then(&Transform2D::translate(4.0, 6.0));
+        for p in [
+            Point::new(0.0, 0.0),
+            Point::new(1.0, 0.0),
+            Point::new(0.0, 1.0),
+            Point::new(-3.5, 7.25),
+        ] {
+            assert_point_near(parsed.transform_point(p), manual.transform_point(p));
+        }
     }
 
     #[test]

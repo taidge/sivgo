@@ -77,7 +77,7 @@ impl AuditLog {
             occurred_at: Utc::now(),
         };
 
-        let mut events = self.events.write().unwrap();
+        let mut events = crate::lock::write(&self.events);
         while events.len() >= self.max_events {
             events.pop_front();
         }
@@ -89,7 +89,7 @@ impl AuditLog {
     }
 
     pub fn list(&self) -> Vec<AuditEvent> {
-        self.events.read().unwrap().iter().cloned().collect()
+        crate::lock::read(&self.events).iter().cloned().collect()
     }
 }
 

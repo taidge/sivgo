@@ -136,7 +136,10 @@ pub fn is_action_wired(action: &str) -> bool {
             | "file.save"
             | "file.save_as"
             | "file.save_copy"
+            | "file.import"
+            | "file.import_traced"
             | "file.export_png"
+            | "file.export_plain_svg"
             | "file.export_svg"
             | "file.export_pages_svg"
             | "file.export_pages_pdf"
@@ -166,6 +169,7 @@ pub fn is_action_wired(action: &str) -> bool {
             | "view.zoom_100"
             | "view.zoom_50"
             | "view.zoom_fit"
+            | "view.zoom_fit_page"
             | "view.zoom_selection"
             | "view.toggle_grid"
             | "view.toggle_guides"
@@ -261,8 +265,10 @@ pub fn default_menu_bar_with_state(
                 item("Save a Copy...", "file.save_copy", "Ctrl+Alt+S"),
                 sep(),
                 item("Import...", "file.import", "Ctrl+I"),
+                item("Trace Bitmap...", "file.import_traced", ""),
                 item("Export PNG Image...", "file.export_png", "Ctrl+Shift+E"),
-                item("Export Plain SVG...", "file.export_svg", ""),
+                item("Export SVG...", "file.export_svg", ""),
+                item("Export Plain SVG...", "file.export_plain_svg", ""),
                 item("Export Pages as SVG...", "file.export_pages_svg", ""),
                 item("Export Pages as PDF...", "file.export_pages_pdf", ""),
                 sep(),

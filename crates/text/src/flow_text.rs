@@ -55,7 +55,9 @@ impl FlowRegion {
                 // (even-odd rule); pick the widest interior span so text flows
                 // in the largest available section at this height.
                 x_crossings
-                    .chunks_exact(2)
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
                     .map(|pair| (pair[0], pair[1]))
                     .max_by(|a, b| {
                         (a.1 - a.0)

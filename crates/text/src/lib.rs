@@ -1,6 +1,6 @@
 ﻿//! `sivgo-text` -- Text shaping, layout, and text-to-path conversion for Sivgo.
 //!
-//! This crate wraps [`cosmic-text`] to provide:
+//! This crate wraps `cosmic-text` to provide:
 //!
 //! - **Text shaping** (`engine` module): load system fonts, shape strings into
 //!   positioned glyphs.

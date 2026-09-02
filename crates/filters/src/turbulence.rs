@@ -2,6 +2,13 @@
 
 use crate::buffer::FilterBuffer;
 
+/// Upper bound on `numOctaves` for [`turbulence`].
+///
+/// The attribute is unbounded in the SVG grammar, so untrusted input can ask
+/// for billions of octaves. Past roughly this many the added frequencies are
+/// below one pixel and contribute nothing.
+const MAX_OCTAVES: u32 = 24;
+
 /// Turbulence type: classic turbulence or fractal noise.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TurbulenceType {
@@ -124,6 +131,10 @@ fn lerp(t: f64, a: f64, b: f64) -> f64 {
 /// Generate a turbulence or fractal noise pattern.
 ///
 /// Parameters mirror the SVG `<feTurbulence>` element attributes.
+///
+/// `num_octaves` is capped internally: past a couple of dozen octaves the
+/// added frequencies fall below one pixel and contribute nothing, and the
+/// attribute is unbounded in the SVG grammar.
 #[allow(clippy::too_many_arguments)]
 pub fn turbulence(
     width: u32,
@@ -135,6 +146,12 @@ pub fn turbulence(
     turb_type: TurbulenceType,
     _stitch: bool,
 ) -> FilterBuffer {
+    // Each octave doubles the frequency, so beyond a couple of dozen the
+    // sampling period is far below one pixel and the extra octaves change
+    // nothing visible. Capping keeps `numOctaves="2000000000"` from turning
+    // into billions of noise evaluations per pixel.
+    let num_octaves = num_octaves.min(MAX_OCTAVES);
+
     let pn = PerlinNoise::new(seed);
     let mut output = FilterBuffer::new(width, height);
 

@@ -349,6 +349,14 @@ impl Tool for TweakTool {
     fn cursor(&self) -> &str {
         "move"
     }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 #[cfg(test)]

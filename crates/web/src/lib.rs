@@ -28,6 +28,7 @@ pub mod auth;
 pub mod config;
 pub mod errors;
 pub mod handlers;
+pub mod lock;
 pub mod models;
 pub mod oauth;
 pub mod openapi;

@@ -1,4 +1,4 @@
-﻿//! SVG node, element variants, and presentation attributes.
+//! SVG node, element variants, and presentation attributes.
 
 use std::collections::HashMap;
 
@@ -10,7 +10,7 @@ use crate::types::*;
 // NodeId
 // ---------------------------------------------------------------------------
 
-/// Unique identifier for a node within an [`SvgDocument`].
+/// Unique identifier for a node within an [`crate::SvgDocument`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NodeId(pub uuid::Uuid);
 
@@ -140,6 +140,132 @@ pub struct PresentationAttrs {
     pub vector_effect: Option<String>,
 }
 
+impl PresentationAttrs {
+    /// Fill in unset inheritable properties from `parent`.
+    ///
+    /// SVG paint and text properties inherit down the tree, so a shape with no
+    /// `fill` of its own takes the one set on an ancestor group. Properties
+    /// that do not inherit — `opacity`, `transform`, `display`, `clip-path`,
+    /// `mask`, `filter`, `mix-blend-mode`, `isolation`, the marker references
+    /// and `vector-effect` — keep this element's own value, which is `None`
+    /// when unset so each element starts from the initial value.
+    ///
+    /// Overlay `stronger` on top of this set.
+    ///
+    /// Every property `stronger` sets replaces this one's; properties it
+    /// leaves unset keep the value here. Used to fold `<style>` element rules
+    /// over plain presentation attributes, which they outrank.
+    #[must_use]
+    pub fn overridden_by(&self, stronger: &PresentationAttrs) -> PresentationAttrs {
+        PresentationAttrs {
+            color: stronger.color.or(self.color),
+            fill: stronger.fill.clone().or_else(|| self.fill.clone()),
+            stroke: stronger.stroke.clone().or_else(|| self.stroke.clone()),
+            stroke_width: stronger.stroke_width.or(self.stroke_width),
+            opacity: stronger.opacity.or(self.opacity),
+            transform: stronger.transform.or(self.transform),
+            display: stronger.display.or(self.display),
+            visibility: stronger.visibility.or(self.visibility),
+            fill_opacity: stronger.fill_opacity.or(self.fill_opacity),
+            stroke_opacity: stronger.stroke_opacity.or(self.stroke_opacity),
+            stroke_linecap: stronger.stroke_linecap.or(self.stroke_linecap),
+            stroke_linejoin: stronger.stroke_linejoin.or(self.stroke_linejoin),
+            stroke_miterlimit: stronger.stroke_miterlimit.or(self.stroke_miterlimit),
+            stroke_dasharray: stronger
+                .stroke_dasharray
+                .clone()
+                .or_else(|| self.stroke_dasharray.clone()),
+            stroke_dashoffset: stronger.stroke_dashoffset.or(self.stroke_dashoffset),
+            fill_rule: stronger.fill_rule.or(self.fill_rule),
+            clip_rule: stronger.clip_rule.or(self.clip_rule),
+            clip_path: stronger
+                .clip_path
+                .clone()
+                .or_else(|| self.clip_path.clone()),
+            mask: stronger.mask.clone().or_else(|| self.mask.clone()),
+            filter: stronger.filter.clone().or_else(|| self.filter.clone()),
+            marker_start: stronger
+                .marker_start
+                .clone()
+                .or_else(|| self.marker_start.clone()),
+            marker_mid: stronger
+                .marker_mid
+                .clone()
+                .or_else(|| self.marker_mid.clone()),
+            marker_end: stronger
+                .marker_end
+                .clone()
+                .or_else(|| self.marker_end.clone()),
+            mix_blend_mode: stronger.mix_blend_mode.or(self.mix_blend_mode),
+            isolation: stronger.isolation.or(self.isolation),
+            font_family: stronger
+                .font_family
+                .clone()
+                .or_else(|| self.font_family.clone()),
+            font_size: stronger.font_size.or(self.font_size),
+            font_weight: stronger.font_weight.or(self.font_weight),
+            font_style: stronger.font_style.or(self.font_style),
+            text_anchor: stronger.text_anchor.or(self.text_anchor),
+            letter_spacing: stronger.letter_spacing.or(self.letter_spacing),
+            word_spacing: stronger.word_spacing.or(self.word_spacing),
+            text_decoration: stronger.text_decoration.or(self.text_decoration),
+            vector_effect: stronger
+                .vector_effect
+                .clone()
+                .or_else(|| self.vector_effect.clone()),
+        }
+    }
+
+    /// The inherited set matches `sivgo_style::is_inherited`.
+    #[must_use]
+    pub fn inheriting_from(&self, parent: &PresentationAttrs) -> PresentationAttrs {
+        PresentationAttrs {
+            color: self.color.or(parent.color),
+            fill: self.fill.clone().or_else(|| parent.fill.clone()),
+            stroke: self.stroke.clone().or_else(|| parent.stroke.clone()),
+            stroke_width: self.stroke_width.or(parent.stroke_width),
+            fill_opacity: self.fill_opacity.or(parent.fill_opacity),
+            stroke_opacity: self.stroke_opacity.or(parent.stroke_opacity),
+            stroke_linecap: self.stroke_linecap.or(parent.stroke_linecap),
+            stroke_linejoin: self.stroke_linejoin.or(parent.stroke_linejoin),
+            stroke_miterlimit: self.stroke_miterlimit.or(parent.stroke_miterlimit),
+            stroke_dasharray: self
+                .stroke_dasharray
+                .clone()
+                .or_else(|| parent.stroke_dasharray.clone()),
+            stroke_dashoffset: self.stroke_dashoffset.or(parent.stroke_dashoffset),
+            fill_rule: self.fill_rule.or(parent.fill_rule),
+            clip_rule: self.clip_rule.or(parent.clip_rule),
+            visibility: self.visibility.or(parent.visibility),
+            font_family: self
+                .font_family
+                .clone()
+                .or_else(|| parent.font_family.clone()),
+            font_size: self.font_size.or(parent.font_size),
+            font_weight: self.font_weight.or(parent.font_weight),
+            font_style: self.font_style.or(parent.font_style),
+            text_anchor: self.text_anchor.or(parent.text_anchor),
+            letter_spacing: self.letter_spacing.or(parent.letter_spacing),
+            word_spacing: self.word_spacing.or(parent.word_spacing),
+
+            // Not inherited: taken from this element only.
+            opacity: self.opacity,
+            transform: self.transform,
+            display: self.display,
+            clip_path: self.clip_path.clone(),
+            mask: self.mask.clone(),
+            filter: self.filter.clone(),
+            marker_start: self.marker_start.clone(),
+            marker_mid: self.marker_mid.clone(),
+            marker_end: self.marker_end.clone(),
+            mix_blend_mode: self.mix_blend_mode,
+            isolation: self.isolation,
+            text_decoration: self.text_decoration,
+            vector_effect: self.vector_effect.clone(),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // SvgElement
 // ---------------------------------------------------------------------------
@@ -255,6 +381,23 @@ pub enum SvgElement {
 
     // 3D Box (Inkscape SPBox3D)
     Box3d(Box3dAttrs),
+
+    /// An element the parser does not model.
+    ///
+    /// Kept verbatim so a document survives a round trip. Mapping these onto
+    /// `Group` destroyed anything the editor did not understand: `<metadata>`
+    /// contents, `<inkscape:path-effect>` definitions and `<foreignObject>`
+    /// bodies all came back as `<g>`.
+    Unknown(UnknownAttrs),
+}
+
+/// An element whose tag the parser does not recognize.
+#[derive(Debug, Clone, Default)]
+pub struct UnknownAttrs {
+    /// The element's name exactly as it appeared, prefix included.
+    pub qualified_name: String,
+    /// Any text directly inside the element, kept so it survives a round trip.
+    pub text_content: String,
 }
 
 impl SvgElement {
@@ -373,7 +516,7 @@ impl SvgElement {
     }
 
     /// SVG tag name for this element.
-    pub fn tag_name(&self) -> &'static str {
+    pub fn tag_name(&self) -> &str {
         match self {
             SvgElement::Svg(_) => "svg",
             SvgElement::Rect(_) => "rect",
@@ -446,6 +589,7 @@ impl SvgElement {
             SvgElement::HKern(_) => "hkern",
             SvgElement::VKern(_) => "vkern",
             SvgElement::Box3d(_) => "SPBox3D",
+            SvgElement::Unknown(a) => a.qualified_name.as_str(),
         }
     }
 }

@@ -77,6 +77,22 @@ pub trait Tool: std::fmt::Debug {
     fn cursor(&self) -> &str {
         "default"
     }
+
+    /// Downcast handle for reaching a tool's own settings.
+    ///
+    /// Tools are stored behind `dyn Tool`, so without this a caller cannot get
+    /// at the concrete type to change, say, the number of points on the star
+    /// tool. Every implementation is one line:
+    ///
+    /// ```ignore
+    /// fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+    ///     self
+    /// }
+    /// ```
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
+
+    /// Shared counterpart of [`Tool::as_any_mut`], for reading settings.
+    fn as_any(&self) -> &dyn std::any::Any;
 }
 
 /// Identifier for each tool type.
@@ -171,6 +187,21 @@ impl ToolManager {
             .get_mut(&self.active)
             .expect("active tool not registered")
             .as_mut()
+    }
+
+    /// Borrow a registered tool as its concrete type.
+    ///
+    /// Returns `None` when the tool is not registered or is a different type.
+    /// This is how a settings panel reaches a tool's own options — the manager
+    /// stores them behind `dyn Tool`, so there is otherwise no way to call, for
+    /// example, `StarTool::set_points`.
+    pub fn get<T: Tool + 'static>(&self, id: ToolId) -> Option<&T> {
+        self.tools.get(&id)?.as_any().downcast_ref::<T>()
+    }
+
+    /// Mutable counterpart of [`ToolManager::get`].
+    pub fn get_mut<T: Tool + 'static>(&mut self, id: ToolId) -> Option<&mut T> {
+        self.tools.get_mut(&id)?.as_any_mut().downcast_mut::<T>()
     }
 
     /// The currently active tool id.

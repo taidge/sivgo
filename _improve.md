@@ -1,109 +1,189 @@
-# 代码评审报告 _improve.md
+# Sivgo 代码评审报告与整改记录 `_improve.md`
 
-> 评审范围:整个 workspace(14 个 crate,约 11 万行 Rust)。
-> 评审时间:2026-06-20。`cargo check --workspace --all-targets` 通过(exit 0,零警告)。
-> 说明:零警告的主要原因是大量死代码被 `#[allow(dead_code)]` 标注,而部分子系统(`collab/`、`plugin`、`trace`)根本未被声明/依赖,因此不进入编译,也就不报警告。
-
-勾选 `[x]` 表示已修复并经 `cargo check`/`cargo test` 验证。
-
-> **进度:报告全部条目已完成(三轮改进)。** 全工作区 `cargo check --workspace --all-targets` **零错误零警告**,`cargo test --workspace` **31 个测试套件全部通过、0 失败**。
-> - 第一轮:R1/R2/R3、C3、L2、M1、M2、D7(feTile)、D9。
-> - 第二轮:C1/C1b/C2/C2b(真 JWT+argon2)、H2、H3、L1、M3、D4(16 个 LPE)、R4、N1。
-> - 第三轮:D1(collab 子系统接入,core 测试 440→528)、D2(plugin 接入桌面)、D3(trace 接入 io)、D4 余项+D5(全部 28 个 LPE 现已可触达)、D6(LpeTool 发命令)、D7 余 4 个滤镜原语、D8(分享路由)、H1(OAuth state 签名)、D10(工具配置 setter)、P1/P2(滤镜性能)。
+> 评审日期：2026-09-02
+> 评审范围：整个 workspace，14 个 crate、约 11.3 万行。
+> 评审方式：7 名评审员按 crate 分组逐文件通读（非抽样），主评审对关键结论逐条复核，其中 5 条通过**实际运行程序**验证。
+> 整改状态：报告的**三批建议已全部实施**，另加一轮激进改造，处理了"写了没接入"的绝大部分条目。逐条状态见 `[x]` / `[ ]`。
+> 前一轮报告可通过 `git log -p -- _improve.md` 取回。
 
 ---
 
-## 一、安全漏洞(crates/web 后端)
+## 0. 验证基线
 
-> `crates/web/src/auth.rs` 顶部注释自述为 "dev only / NOT for production",但该 crate 含有 `main.rs` 可独立启动,默认配置即可在生产跑起来,因此这些隐患是真实可达的。
+| 检查 | 整改前 | 整改后 |
+|---|---|---|
+| `cargo build --workspace` | 通过 | 通过 |
+| `cargo test --workspace` | 1640 通过、0 失败 | **1785 通过、0 失败**（新增 145 项） |
+| `cargo clippy --workspace --all-targets -- -D warnings` | **失败**（Rust 1.98 新增 lint） | **通过，零警告** |
+| `cargo fmt --all -- --check` | 通过 | 通过 |
+| `RUSTDOCFLAGS=-D warnings cargo doc` | 通过 | 通过 |
+| 崩溃复现用例 | 8 例全部中止进程或 panic | **10 例全部正常返回** |
+| 代码净变化 | — | 104 文件，+5405 / −3367 行 |
 
-### Critical
-
-- [x] **C1 令牌签名被破解 → 完整认证绕过。** 原 `simple_hmac` 是可逆 XOR-fold。**已彻底重写**:`auth.rs` 现用 `jsonwebtoken` 的 HS256 真实 HMAC-SHA256 签名,payload 含 `exp`(24h 过期),`verify_token` 校验签名与过期。伪造令牌不再可能。
-- [x] **C1b 已替换为 `jsonwebtoken`(HS256)+ 过期时间。** 新增 `jsonwebtoken = "9"` 依赖,`create_token`/`verify_token` 全部走库实现。
-- [x] **C2 口令哈希无盐、非加密。** **已彻底重写**:`hash_password` 改用 `Argon2::default()`(Argon2id)+ `SaltString::generate(OsRng)` 随机盐,输出自描述 PHC 串;`verify_password` 用 argon2 常量时间校验。
-- [x] **C2b 已迁移到 argon2 + 随机盐。** 新增 `argon2 = "0.5"` 依赖。内存存储每次启动重新创建用户,无哈希迁移负担。
-- [x] **C3 默认 JWT secret 静默用于生产。** `config.rs:22/43` 在 `JWT_SECRET` 未设置时回落到公开字面量 `"sivgo-dev-secret-change-in-production"`,无任何告警。配合 C1 任何人都能签发任意用户令牌。修复:`SIVGO_ENV=production` 时若用默认 secret 直接拒绝启动 + 始终 `log::warn!`。
-
-### High
-
-- [x] **H1 OAuth state/CSRF 未校验。** **已修复**:state 改为 `auth::create_oauth_state` 签发的 HS256 JWT(含 provider + 随机 nonce + 10 分钟 `exp`);回调用 `auth::verify_oauth_state` 校验签名与过期后才信任。攻击者无法伪造/篡改/重放 state。(注:基于 cookie 的会话级绑定可进一步加固,但签名+过期已消除核心 CSRF/伪造风险。)
-- [x] **H2 OAuth 回调泄露上游 token、不建立本地会话。** **已修复**:`oauth_callback` 现在用已验证的 `OAuthUserInfo.email` 查找/创建本地 `User`(OAuth-only 账户存随机占位口令哈希,使本地口令登录永不匹配),签发本地 JWT 并返回 `AuthResponse`;不再回传上游 `access_token`/`refresh_token`。
-- [x] **H3 `Cors::permissive()` 允许任意源。** **已修复**:新增 `ServerConfig.cors_allowed_origins`(来自 `CORS_ALLOWED_ORIGINS` 环境变量),非空时 `router.rs` 用白名单 + 显式 methods/headers;空时回落 permissive(仅开发)并在生产告警。
-
-### Medium
-
-- [x] **M1 `/api/v1/export` 无需认证 + 可达 8192×8192 光栅化(约 268MB/请求)→ DoS。** `router.rs:73` 注册为公开,`handlers/export.rs:61` 上限过大。修复:收紧像素面积上限 + 限制输入体积(认证/限流留待后续)。
-- [x] **M2 `content-disposition` 文件名未净化 + `unwrap` 可被攻击者触发 panic。** `handlers/assets.rs:136` 把上传时用户提供的 `asset.filename` 原样 `format!` 进响应头并 `parse().unwrap()`;含 `"`/CRLF 或非法头字节时可注入头或 panic 整个 handler。修复:净化文件名 + 用 `HeaderValue::from_str(...).ok()` 回落。
-- [x] **M3 上传/文档体无大小上限 → 内存 DoS。** **已修复**:资源上传在解码前限制 base64 体 ≤24 MiB(`handlers/assets.rs`);文档 `svg_content` 创建/更新均限制 ≤16 MiB(`handlers/documents.rs`)。per-user 总配额仍留待后续。
-
-### Low
-
-- [x] **L1 OAuth 回调 `provider` query 参数可覆盖 state 内的 provider。** **已修复**:`oauth_callback` 现仅从 `provider_name_from_state(&state)` 推导 provider,完全忽略 `provider` query 参数。
-- [x] **L2 登录存在用户枚举时序侧信道 + 无限流。** `handlers/auth.rs:87` 邮箱不存在时提前返回(不计算哈希),存在时才算哈希。修复:始终执行一次 dummy verify(限流留待后续)。
-
-### 已核实的非问题(供参考)
-
-- 文档/资源鉴权正确:每个读写删都校验 `owner_id == user_id` 并返回 404(不泄露存在性)。
-- `password_hash` 标了 `#[serde(skip_serializing)]`,不会在响应中泄露。
-- 无 SQL 注入面(内存 HashMap)、无文件路径处理(资源存内存),无路径穿越。
-- UUID 路径参数用 `.parse().ok()` 安全解析,不会 panic。
+**关于"零警告零失败"的解读**：整改前所有严重缺陷都落在测试与 lint 的覆盖盲区——`crates/web` 没有任何 HTTP 层集成测试，渲染测试只断言"画面非空且两次渲染一致"，序列化没有往返测试，变换测试只用平移（平移可交换，掩盖了顺序错误），CRDT 测试只做两副本单向合并。本轮补齐的正是这几类测试，它们在编写过程中直接发现了**四个原报告未列出的缺陷**：序列化不幂等、clipPath 互引用栈溢出、按键表示不匹配、`view.zoom_fit_page` 未登记。
 
 ---
 
-## 二、"写了但没接入 / 没做完"(最符合用户关注点)
+## 一、P0：会直接毁数据或打死进程（全部已修复）
 
-### Critical(整块子系统孤立)
+### D1 保存带文本或 LPE 的文档后，程序自己打不开该文件
 
-- [x] **D1 整个 `collab/` 子系统从未被声明为模块。** **已修复**:新建 `collab/mod.rs` 声明全部 8 个子模块,`lib.rs` 加 `pub mod collab;` 并在 crate 根重导出 `CrdtDocument`/`CrdtOp`/`OpId`/`SyncTransport`/`InMemorySyncHub`/`SyncMessage`。修复了长期未编译而潜藏的两处测试 bug(`version_history.rs` 误用 `super::crdt`、`ot.rs` 未用 import)。现整个子系统已编译、其 ~88 个单元测试全部通过(core 测试数 440→528),并可作为 `sivgo_core::collab::*` 公开使用。⚠ 注:把 CRDT 深度接入 `EditorEngine` 实现实时协同是独立的产品级特性(需网络层与文档同步),不属代码评审范畴;本项解决的是"子系统不编译、不可达"这一核心缺陷。
-- [x] **D2 `crates/plugin` 整个 crate 无人依赖。** **已修复**:`sivgo-desktop` 现依赖 `sivgo-plugin`;新增 `desktop/src/plugins.rs` 提供 `init_plugin_manager`(注册并加载内置 HelloPlugin/GridGeneratorPlugin)、`available_plugins`、`activate_plugin`(用 `PluginContext` 桥接当前文档/选区);`launch_gui` 启动时实例化并记录可用插件。新增 2 个单元测试(列举内置插件、激活返回 actions)。`PluginManager` 现已被实例化并随应用启动运行。
-- [x] **D3 `crates/trace` 整个 crate 未集成。** **已修复**:`sivgo-io` 现依赖 `sivgo-trace`;新增 `io/src/trace_import.rs::trace_bitmap(rgba,w,h,opts) -> SvgDocument`(复用 pdf_import 的建文档模式,把 `trace_rgba` 的 `Vec<BezPath>` 组装为填充 `<path>` 文档),并从 `io/lib.rs` 重导出 `trace_bitmap`/`TraceOptions`/`trace_centerline`/`trace_colors` 等。位图描摹现可经 io 公共 API(desktop 已依赖 io)触达,附 smoke 测试。
+同一属性被写出两次，产生非法 XML。整改前实测两例均 `reparse=FAIL`。
 
-### High
+- [x] 序列化层引入去重写入器，覆盖全部 248 处属性写入。
+- [x] `path-effect` / `original-d` 加入 `handled_attrs`，消除重复存储。
+- [x] 新增 [roundtrip.rs](crates/dom/tests/roundtrip.rs)，覆盖文本、LPE、渐变、全部 examples 文件。
 
-- [x] **D4 28 个 LPE 中 18 个无法从引擎触达 → 已接入 16 个。** **已修复**:扩展了 `normalize_lpe_kind`/`default_lpe_params`/`apply_lpe_entry`,接入 BSpline/CopyRotate/DashedStroke/Envelope/PerspectiveEnvelope/Extrude/Fillet/Gears/Hatching/Knot/Sketch/Slice/Spiro/TaperStroke/Tiling/VonKoch 共 16 个(均含默认参数,所有 `usize/u32` 转换都做了下限钳制防 panic;envelope/perspective 的四角由输入包围盒 + 参数偏移推导,默认 0 偏移=恒等)。其余 `interpolate`/`lattice` 及 bend/pattern 已在 D5 一并接入,28 个独立 LPE 现已全部可从引擎触达。
-- [x] **D5 `bend_path`/`pattern_along_path`/`interpolate`/`lattice` 渲染为 no-op。** **已修复**:在引擎 `apply_lpe_entry` 中用从输入推导的合理默认接入全部 4 个(与 D4 中 envelope 零偏移=恒等同一思路):`bend_path` 用输入包围盒的水平直线骨架;`interpolate` 用输入自身作参考路径;`lattice` 用 `LatticeLpe::identity` 零形变;`pattern_along_path` 以输入为骨架、戳印默认单位线段(spacing/offset 等 f64 参数已可驱动,效果可见)。所有 `usize/u32` 转换均做下限钳制防 panic。仅 `stitch_sub_paths`/`boolean_operation` 因需文档内其他路径的多对象上下文仍返回 `None`(注:这两者本不在 28 个可独立 LPE 之列)。
-- [x] **D6 `LpeTool` 是空壳,从不发出命令。** **已修复**:新增 `commands/add_lpe.rs::AddLpeCommand`(复用引擎 LPE 栈编解码,完整 undo);`AvailableLpe` 新增 `kind()` 映射;`apply_lpe()` 改为返回 `ToolResponse::ExecuteCommand(AddLpeCommand)` 真正把效果附加到路径。并在 `engine.on_mouse_down` 中为 LPE 工具同步引擎选区(点击路径即选中),使工具与 LPE 面板/`add_lpe_to_selected_path` 端到端贯通。新增 2 个单元测试。
-- [x] **D7 5 个滤镜原语已实现却从未从 DOM 派发 → 已全部接入。** `renderer.rs` 的 `_ =>` 跳过臂原先吞掉 `feComponentTransfer`/`feTile`/`feDiffuseLighting`/`feSpecularLighting`/`feImage`。**已全部补上 match 臂**:`feTile` 直连;`feDiffuse/feSpecularLighting` 通过新增 `find_light_source` 从子元素读取 feDistantLight/fePointLight/feSpotLight 并映射为 `LightSource`(真实实现);`feImage` 复用 `decode_image_data_uri`/`load_image_from_path` 解码 href 为 `FilterBuffer`,并把 `preserveAspectRatio` 映射为 `ImageFit`;`feComponentTransfer` 接为恒等(⚠ 已注:DOM 暂未解析 feFunc* 子元素,故为 passthrough,但不再被静默丢弃)。
+**新发现并修复**：序列化不幂等——文本节点会吸收缩进空白，每存一次盘就多一层。已按 `xml:space="default"` 规范化。
 
-### Medium
+### D2 引用环与深层嵌套导致栈溢出，进程 abort
 
-- [x] **D8 文档分享在 store 已实现却未接任何路由。** **已修复**:新增 `handlers/shares.rs` 与路由——`POST/GET /api/v1/documents/{id}/shares`(仅 owner 可创建/列出)、`GET /api/v1/shared/{token}`(公开链接 `shared_with:None` 任何人可访问;定向分享需认证用户匹配 `shared_with`,否则返回 404 不泄露存在性)。`store.rs` 的 share API 现已全部接入。
-- [x] **D9 `import_pdf` 未从 `crates/io/src/lib.rs` 重导出。** `pdf_import.rs:79` 是 `pub` 但 lib 未 re-export(不同于 `export_pdf` 等),仅测试调用。修复:`pub use pdf_import::{import_pdf, PdfImportOptions};`(嵌入位图仍是 `UNEXTRACTED` 占位,属已知限制)。
-- [x] **D10 大量工具配置 setter 是 `#[allow(dead_code)]`,UI 未接入。** **已修复**:这些是 `pub struct` 上的 `pub fn`——属库的正当公共 API,本不会触发 dead_code 警告,`#[allow(dead_code)]` 标注具误导性。已从 spray/tweak/calligraphy/connector/bucket/pencil 的全部公共 setter 上移除该标注(移除后 `cargo check` 仍零警告,证实其为合法 API),并为每个工具新增 round-trip 单元测试真正调用这些 setter(core 测试 528→534)。另外清理了相邻的真实死代码线索:zoom 的两个命令结构体字段尚未被读取——保留并补注"为未来 ViewportCommand 通道预留"。⚠ 注:把这些参数完整接到 Dioxus 工具选项面板是独立 UI 特性(当前工具系统无类型化工具访问,需 `Any` 下转改造),不属代码评审范畴;本项消除的是"被标为死代码且从不被调用"这一缺陷——现在它们是已测试、未误标、可被 UI/嵌入方调用的公共 API。`pages.rs` 的私有 `hit_test_page_interior` 仍保留 `#[allow(dead_code)]`(完整实现、留待页面交互接入)。
+- [x] 渲染器加 RAII 深度守卫，覆盖 `<use>`、pattern、mask、marker 的直接与间接递归。
+- [x] **新发现**：clipPath 互相引用不经过 `render_node`，单独加守卫。
+- [x] 解析改为迭代遍历，并在解析前对原始 XML 做深度预扫描。上游 XML 库自身约 100 层就溢出，无法事后捕获，因此深文档改在 128 MiB 栈的线程上解析。
 
----
+### D3 空 `<feMerge/>` 触发断言 panic
 
-## 三、正确性 / 健壮性
+- [x] 流水线两端统一归一缓冲尺寸，保护所有原语。
+- [x] 顺带修 `feMorphology` 的 `i32` 溢出与 `feTurbulence` 的 octaves 无上限。
 
-- [x] **R1 `feConvolveMatrix` 遇畸形 SVG 会 panic 整个渲染。** `convolve_matrix.rs:39` `assert_eq!(kernel.len(), order_x*order_y)`,而 `renderer.rs:3510` 直接用 `kernel_matrix` 建核且无长度校验。`<feConvolveMatrix order="3" kernelMatrix="1 2 3"/>` 即可触发 abort。修复:渲染侧在长度不匹配时跳过该原语。
-- [x] **R2 `feConvolveMatrix` 忽略 `edgeMode` 属性。** `renderer.rs:3524` 硬编码 `EdgeMode::Duplicate`,丢弃 DOM 已解析的 `attrs.edge_mode`。修复:加 DOM→filters 的 EdgeMode 转换。
-- [x] **R3 `canvas.rs` 渲染路径上的 `.expect()` 会崩溃画布。** `crates/ui/src/canvas.rs:52/55` `render_to_data_uri` 对内存 PNG 写入 `.expect("PNG ... failed")`(非测试代码)。修复:失败时回落到空 data URI。
-- [x] **R4 `LpeStack::remove`/`reorder` 越界 panic。** **已修复**:`remove` 改返回 `Option<Box<dyn LivePathEffect>>`(越界返回 `None`);`reorder` 改返回 `bool`(越界返回 `false` 不操作)。同步更新了相关单元测试。
+### D4 `Color::from_hex` 对多字节字符 panic
 
----
+- [x] 入口拒绝非 ASCII。
 
-## 四、性能(低优先)
+### D5 `RemoveNodeCommand` 撤销后子孙节点永久丢失
 
-- [x] **P1 `feMorphology` 暴力 O(w·h·rx·ry)。** **已修复**:利用矩形结构元可分离性,改为水平 + 垂直两趟 `morphology_pass`,复杂度降至 O(w·h·(rx+ry))。114 个 filters 测试仍全绿。
-- [x] **P2 `feGaussianBlur` 成本随 σ 线性增长。** **已修复**:改用 SVG 规范的三次盒式模糊近似,每趟用前缀和滑动窗口实现 O(w·h),总复杂度 O(w·h)(与 σ 无关)。盒半径用 Kovesi 公式从 σ 推导,均匀色保持/扩散等测试仍全绿。
+- [x] 改为快照整棵子树，undo 时还原父子链与兄弟位置。
 
 ---
 
-## 五、文档/命名
+## 二、P1：核心语义错误（全部已修复）
 
-- [x] **N1 `plugin/src/lua_engine.rs` 名为 "Lua" 实为自制极简表达式求值器**(无 `mlua`/`rlua`)。**已修复**:模块文档已明确标注"这不是真正的 Lua 运行时,而是受限沙箱 DSL"。(保留 `LuaValue` 等类型名以免破坏现有 API。)
+### R1 嵌套 transform 复合顺序反了
+
+整改前实测输出与"错误预期"逐字节相同。
+
+- [x] 节点嵌套、`<use>` 的 x/y、`<symbol>` viewBox 三处顺序更正。
+- [x] `parse_transform` 属性列表顺序更正（原单测把错误语义固化了）。
+- [x] 新增 [transform_semantics.rs](crates/render/tests/transform_semantics.rs)，把嵌套结构与等价展平结构逐像素比对，每个用例都混入缩放或旋转。
+
+### R2 引擎变换围绕错误中心
+
+整改前翻转把对象推到 (-75, 40)。
+
+- [x] 五处中心化变换更正，旋转改用 `rotate_about`。
+- [x] 新增 [object_transforms.rs](crates/core/tests/object_transforms.rs)，断言中心不变、四分之一转宽高互换、撤销可回原位。
+
+### R3 `node_transform` 祖先链顺序颠倒
+
+- [x] fold 方向更正，附祖先链与命中测试断言。
+
+### R4 `feComposite` 的 `atop` 公式错误
+
+- [x] 第一项改用源 alpha，附 3 项测试。
+
+### R7 CSS 完全没有接入 — **已完整接入**
+
+此前 Inkscape 输出的 `style="fill:..."` 全部渲染成黑色。
+
+- [x] 解析层合并内联 `style` 声明，优先级高于同名属性。
+- [x] 渲染层实现属性继承，可继承集合与 `sivgo_style::is_inherited` 对齐。
+- [x] **`<style>` 元素与 class/id/后代选择器已接入**：新增 [overrides.rs](crates/style/src/overrides.rs) 把规则解析成按节点的覆盖表，渲染器查表。CSS 优先级完整：属性 < 样式表规则 < 内联 style。
+- [x] 修正 style crate 中 `font-size` 的 `em` 应参照父级而非累积值。
+- [x] 新增 [style_resolution.rs](crates/render/tests/style_resolution.rs)，34 项测试。
+- 实测 Inkscape 风格文件配色由全黑变为正确。
+
+### R8 其余渲染语义缺失 — **已全部修复**
+
+- [x] `fill-opacity` / `stroke-opacity`：`RenderPaint::with_opacity` 对纯色、渐变、图案分别缩放。
+- [x] `<rect>` 的 `rx`/`ry` 圆角，按规范镜像缺省半径并钳制。
+- [x] `stroke-dasharray` 奇数值按规范复制一遍。
+- [x] 百分比 / em / ex 单位：新增 `RenderContext` 承载视口与字号，按轴分别解析，`viewBox` 会重定义参照。
+- [x] `SvgNode.hidden` 现在会被渲染器读取，隐藏图层对导出生效。
+- [x] `requiredFeatures` / `requiredExtensions` 改从类型化字段读取，`<switch>` 不再永远取第一个分支。
+- [x] 离屏栈不平衡：Defs 与 Use 的提前返回路径补上隔离层弹出。
+- [x] **未知元素不再被改写成 `<g>`**：新增 `SvgElement::Unknown` 保留原标签、命名空间前缀与文本内容。实测 `<metadata>` 与 `<inkscape:path-effect>` 完整往返。同时按规范不渲染 `<foreignObject>`、`<script>`、字体等非图形元素的内容。
 
 ---
 
-## 改进小结(三轮,全部完成)
+## 三、P1：Web 后端（全部已修复）
 
-报告全部条目均已实现并通过 `cargo check --workspace --all-targets`(零错误零警告)与 `cargo test --workspace`(31 套件全绿、0 失败)。
+- [x] **W1** 路由参数语法 `<id>` 改为 `{id}`。此前文档读取、资产下载、分享链接、OAuth 登录、插件安装全部 404。新增 [routes.rs](crates/web/tests/routes.rs)，21 项集成测试。
+- [x] **W2** 请求体真实上限 64 KiB：挂传输层大小中间件与 `SecureMaxSize`，业务层的检查现在真正可达。
+- [x] **W3** 公开导出可读任意本地文件：新增 `render_document_to_pixmap_without_file_access`，`<image href>` 只接受 `data:`。
+- [x] **W4** OAuth 按 email 自动关联账号：改为按 `(provider, subject)` 身份绑定；地址已被占用时返回冲突，要求从已认证会话显式关联。
+- [x] **W5** 限流绕过：`X-Forwarded-For` 改取最右值；认证路由挂按用户限流；限流表加容量上限并只在超限时清理；每账户文档数与每文档版本数配额；删除文档级联清理。
+- [x] **W6** 无超时无兜底：挂 `CatchPanic` 与 30 秒超时。
+- [x] **W7** `reqwest::blocking` 在异步上下文：改为异步并设 10 秒超时（路由测试一写出来就暴露了这条）。
+- [x] **W8** 登录 dummy verify 方向反了（改为预计算的静态哈希）；配置结构体的 `Debug` 会泄露密钥（改为手写并打码）；`RwLock` 中毒后永久 500（27 处改为容忍中毒）。
 
-**安全(web)**:C1/C1b/C2/C2b 换用真正的 `jsonwebtoken` HS256 + `argon2id`;H1 OAuth state 改为带过期的签名 JWT;H2 回调建立本地会话不泄露上游 token;H3 CORS 白名单;L1 provider 仅取自 state;L2 消除登录时序侧信道;M1 export DoS 上限;M2 文件名净化去 unwrap;M3 上传/文档体大小上限。
+---
 
-**写了没接入 / 没做完**:D1 collab 子系统接入并修复潜藏测试 bug;D2 plugin 接入桌面端(实例化 + 内置插件 + 启动加载);D3 trace 经 io 暴露 `trace_bitmap`;D4+D5 全部 28 个 LPE 现可从引擎触达;D6 LpeTool 发出真实可撤销的 `AddLpeCommand` 并同步选区;D7 五个滤镜原语(feTile/feComponentTransfer/feDiffuse/feSpecularLighting/feImage)全部派发;D8 文档分享路由;D9 import_pdf 重导出;D10 移除误导性 dead_code 标注 + 补 setter 测试。
+## 四、写了但没接入 — **本轮激进处理**
 
-**健壮性 / 性能 / 文档**:R1 畸形卷积核不再 panic;R2 honor edgeMode;R3 canvas 编码失败不崩溃;R4 LpeStack 越界安全;P1 形态学可分离 O(w·h·(rx+ry));P2 高斯改三次盒式近似 O(w·h);N1 lua_engine 命名澄清。
+原报告最大的一块。本轮的方针是逐项决定接线还是删除，不再积累。
 
-**说明**:少数项的"完整产品化"超出代码评审范畴并已在对应条目注明——CRDT 实时同步深度接入引擎(D1)、滤镜 feFunc* 子元素的 DOM 解析(D7 的 feComponentTransfer 目前为恒等)、工具参数的完整 Dioxus 面板(D10)。这些条目解决的是评审发现的核心缺陷(子系统不编译/不可达、原语被静默丢弃、死代码误标),其上的特性增强属后续产品迭代。
+### 已删除（名不副实或已被取代）
+
+- [x] **render 的 vello / canvas2d / webgpu 三个"后端"**（1470 行）：实为 tiny-skia 重放的包装，零引用，README 已更正描述。
+- [x] **io 的 pdf_export.rs**（712 行）：孤儿文件，其 `dpi` 选项只写进元数据、并不真正缩放，价值不如现用版本。
+
+### 已接线
+
+- [x] **io 的 dxf_export / eps_export**（1089 行）：这两个孤儿版本比现用版本更完整（带选项、Y 轴翻转、文件写入），**替换**了原实现。
+- [x] **三个导出器共 49 处直接读 `.value` 忽略单位**：统一改为 `to_px()`。新增 [export_formats.rs](crates/io/tests/export_formats.rs)，12 项测试覆盖结构、毫米换算与 Y 轴翻转。
+- [x] **`crates/style`**：见 R7，现已被渲染器实际使用。
+- [x] **`builtin_markers`**：从 render 移到 core（它是文档内容不是渲染逻辑），标记工具现在可放置全部 9 种内置标记，而非硬编码单一箭头。
+- [x] **桌面端快捷键**：`ShortcutManager` 接进画布键盘事件，菜单项注册真正的加速键。**新发现**：绑定表用 `Key::S` 这类具名变体，而我的转换初版产出 `Char('s')`，测试立刻抓到。同时补齐 16 种加速键符号解析。
+- [x] **工具参数**：`Tool` trait 加 `as_any_mut` / `as_any`（24 个工具全部实现），`ToolManager` 提供类型化访问。工具选项栏的 X/Y/W/H、圆角、星形角数与比例、螺旋圈数、铅笔平滑、字体族/字号/粗体/斜体全部接通，此前是空操作。
+- [x] **LPE 列表对齐**：UI 的 `LpeKind` 从 10 项固定枚举改为携带引擎规范 key，面板现在提供全部 26 种效果。此前 18 种既不能添加也看不见、删不掉。
+- [x] **io 的公共 API**：Import 菜单接通（SVG 合并、位图嵌入、位图描摹），"Export Plain SVG" 改为真正调用 `export_plain_svg`（此前走普通序列化，并不剥离 inkscape 属性）。引擎新增 `import_document` 作为单步可撤销命令。
+- [x] **`crates/core/src/collab/`**：修正跨站点因果丢失导致的**副本永久分歧**缺陷（Update 的目标未到达时被静默丢弃，现改为缓冲重试），并加上 serde 使操作可跨网络。新增 [crdt_convergence.rs](crates/core/tests/crdt_convergence.rs)，6 项测试覆盖三站点、任意投递顺序、幂等与序列化往返。已验证：去掉修复后其中 2 项失败。
+
+### 仍未接线（需要产品决策或属独立特性）
+
+- [ ] `DamageTracker` / `TileGrid` / `RenderCache`：增量渲染需要配合画布管线改造。
+- [ ] collab 的网络层：CRDT 现在正确且可序列化，但 WebSocket 房间、鉴权与引擎集成是独立的产品特性。
+- [ ] 插件系统：两个"运行时"都不成立（无 wasmtime，无 Lua），`PluginAction` 无执行方。这一块需要先决定是引入真实运行时还是下架。
+- [ ] 最近文件列表、`file.new_from_template`、Extensions 菜单等 30 余个菜单项。
+
+---
+
+## 五、工程与文档
+
+- [x] **E1** clippy 在 Rust 1.98 下失败：修复两类新 lint，现零警告。
+- [x] **E2** README 夸大：更正渲染后端、插件运行时、CSS、io 导入导出四处表述与依赖图。
+- [x] **E3** CI：加最小权限声明；新增 Windows/macOS 检查（桌面端依赖平台代码，此前从未在这两个平台构建）；新增 MSRV 任务；新增 fuzz 构建与短时运行。
+- [x] **E4** 12 处未使用依赖已移除。
+- [x] fuzz 覆盖：新增渲染与 PDF 导入两个目标（此前只有 SVG 解析且从未在 CI 跑过）。
+- [x] 新增 [malformed_input.rs](crates/render/tests/malformed_input.rs)，6 组约 45 个畸形输入用例，常规 CI 即可运行，无需 nightly。
+- [ ] Actions 未 SHA 锁定；无 Dependabot / cargo-deny；RustSec 例外在两处重复。
+
+---
+
+## 六、本轮验证证据
+
+| 验证项 | 方式 | 结果 |
+|---|---|---|
+| 存盘后可重新打开 | 独立程序跑 `parse → serialize → parse` | LPE 与文本两例由 FAIL 转为 OK |
+| 序列化幂等 | 连续两次序列化比对 | 由不等转为相等 |
+| 元数据与 LPE 定义保真 | 往返比对 | `<metadata>`、`<inkscape:path-effect>` 由被改写成 `<g>` 转为完整保留 |
+| 8 种引用环 + 深层嵌套 | CLI 渲染 | 10 例由中止进程转为正常返回 |
+| 嵌套变换顺序 | 渲染后与展平形式比对 md5 | 由匹配"错误预期"转为匹配正确形式 |
+| 形态学性能 | 三种半径计时 | 32.7 秒 → 1.2 秒，且与半径无关 |
+| 形态学算法等价性 | 与朴素实现逐像素比对 | 2 种操作 × 7 种半径 × 2 个方向全部一致 |
+| Inkscape 风格文件配色 | 渲染后读取像素 | 由全黑转为正确配色 |
+| CRDT 收敛缺陷 | 临时移除修复后重跑 | 2 项测试失败，恢复后全通过 |
+| 快捷键映射 | 遍历默认绑定表 | 每条绑定都落到真实处理器 |
+
+---
+
+## 七、剩余工作
+
+**插件系统**是现在最大的一块未决项：manifest 与权限模型合理，但两个"运行时"都只是玩具（WASM 解释器只支持约 20 条指令，"Lua" 是字符串匹配的 DSL），`PluginAction` 没有执行方。需要先决定引入真实运行时还是下架，再谈接线。
+
+**画布渲染管线**（全文档栅格化 → base64 → `<img>`）仍是最大的技术债，决定了性能上限与放大清晰度。视口与百分比的基础设施已经就位，改造成按视口栅格化的条件比之前好。
+
+**协作网络层**现在只差传输：CRDT 收敛正确、可序列化，缺的是 WebSocket 房间、鉴权与引擎集成。
+
+其余是长尾：最近文件、模板、Extensions 菜单，以及 CI 的供应链加固。

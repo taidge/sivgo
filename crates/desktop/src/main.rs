@@ -16,7 +16,10 @@ use std::sync::OnceLock;
 use dioxus::html::geometry::WheelDelta;
 use dioxus::prelude::*;
 use dioxus_desktop::{
-    muda::{CheckMenuItem, Menu, MenuItem as NativeMenuItem, PredefinedMenuItem, Submenu},
+    muda::{
+        accelerator::{Accelerator, Code, Modifiers as AcceleratorModifiers},
+        CheckMenuItem, Menu, MenuItem as NativeMenuItem, PredefinedMenuItem, Submenu,
+    },
     tao::event::{Event as WryEvent, WindowEvent},
     use_muda_event_handler, use_window, use_wry_event_handler, Config, DesktopContext,
     WindowBuilder,
@@ -2276,6 +2279,122 @@ input[type="number"].prop-input:focus::-webkit-inner-spin-button {
 "#;
 
 #[cfg(test)]
+mod shortcut_tests {
+    use super::*;
+
+    /// Every shortcut in the default binding table has to reach something.
+    ///
+    /// Before the bindings were wired up, the menu displayed shortcut text
+    /// that no key press ever triggered.
+    #[test]
+    fn every_default_shortcut_resolves_to_a_wired_action() {
+        let manager = sivgo_core::ShortcutManager::new();
+        let mut unresolved = Vec::new();
+
+        for (shortcut, action) in manager.bindings() {
+            // Tool switching is handled directly, not through the menu.
+            if matches!(action, sivgo_core::Action::SwitchTool(_)) {
+                continue;
+            }
+            match menu_action_for_shortcut(action) {
+                Some(menu_action) => assert!(
+                    sivgo_ui::menu_model::is_action_wired(menu_action),
+                    "{shortcut:?} maps to {menu_action}, which has no handler"
+                ),
+                None => unresolved.push(format!("{action:?}")),
+            }
+        }
+
+        // A binding with no menu equivalent is acceptable, but the list should
+        // stay short and deliberate rather than growing silently.
+        assert!(
+            unresolved.len() <= 12,
+            "too many shortcuts lead nowhere: {unresolved:?}"
+        );
+    }
+
+    #[test]
+    fn common_editing_shortcuts_are_bound() {
+        use sivgo_core::{Key as EditorKey, Modifiers};
+        let manager = sivgo_core::ShortcutManager::new();
+        let ctrl = Modifiers {
+            ctrl: true,
+            shift: false,
+            alt: false,
+        };
+
+        for (key, expected) in [
+            (EditorKey::S, "file.save"),
+            (EditorKey::Z, "edit.undo"),
+            (EditorKey::C, "edit.copy"),
+            (EditorKey::V, "edit.paste"),
+            (EditorKey::A, "edit.select_all"),
+            (EditorKey::G, "object.group"),
+        ] {
+            let action = manager
+                .lookup(key, ctrl)
+                .unwrap_or_else(|| panic!("{key:?} should be bound"));
+            assert_eq!(
+                menu_action_for_shortcut(action),
+                Some(expected),
+                "{key:?} should trigger {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn menu_shortcut_hints_parse_into_accelerators() {
+        // Anything the menu shows as a shortcut must be registrable, or the
+        // label promises a key that does nothing.
+        let mut unparsed = Vec::new();
+        for node in sivgo_ui::menu_model::default_menu_bar() {
+            collect_unparsed_shortcuts(&node, &mut unparsed);
+        }
+        assert!(
+            unparsed.is_empty(),
+            "menu shortcut hints that no accelerator matches: {unparsed:?}"
+        );
+    }
+
+    fn collect_unparsed_shortcuts(node: &MenuNode, out: &mut Vec<String>) {
+        if let Some(hint) = node.shortcut.as_deref() {
+            if !hint.is_empty() && parse_accelerator(hint).is_none() {
+                out.push(hint.to_string());
+            }
+        }
+        for child in &node.children {
+            collect_unparsed_shortcuts(child, out);
+        }
+    }
+
+    #[test]
+    fn key_translation_covers_letters_and_named_keys() {
+        assert_eq!(
+            to_editor_key(&Key::Character("a".into())),
+            Some(sivgo_core::Key::A)
+        );
+        // Case is normalised so Shift+S and s reach the same binding.
+        assert_eq!(
+            to_editor_key(&Key::Character("S".into())),
+            Some(sivgo_core::Key::S)
+        );
+        assert_eq!(
+            to_editor_key(&Key::Character("3".into())),
+            Some(sivgo_core::Key::Digit3)
+        );
+        // Punctuation has no named variant and falls back to `Char`.
+        assert_eq!(
+            to_editor_key(&Key::Character("+".into())),
+            Some(sivgo_core::Key::Char('+'))
+        );
+        assert_eq!(to_editor_key(&Key::Delete), Some(sivgo_core::Key::Delete));
+        assert_eq!(to_editor_key(&Key::Escape), Some(sivgo_core::Key::Escape));
+        // Multi-character input is not a single key press.
+        assert_eq!(to_editor_key(&Key::Character("ab".into())), None);
+    }
+}
+
+#[cfg(test)]
 mod frontend_layout_tests {
     use super::*;
 
@@ -4427,6 +4546,122 @@ fn tool_label(tool: ToolId) -> &'static str {
     }
 }
 
+/// Parse a menu item's shortcut hint into a real accelerator.
+///
+/// The hint is what the menu displays, e.g. `"Ctrl+Shift+S"`. Passing `None`
+/// to the menu item leaves the text showing a shortcut the window never
+/// actually listens for.
+fn parse_accelerator(hint: &str) -> Option<Accelerator> {
+    let mut modifiers = AcceleratorModifiers::empty();
+    let mut key: Option<Code> = None;
+
+    // `+` is both the separator and a key name, so a hint ending in `+` names
+    // the plus key: "Ctrl++" is Ctrl plus `+`, not a trailing empty segment.
+    let (hint, trailing_plus) = match hint.strip_suffix('+') {
+        Some(rest) => (rest.trim_end_matches('+'), true),
+        None => (hint, false),
+    };
+    if trailing_plus {
+        key = Some(Code::Equal);
+    }
+
+    for part in hint.split('+') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        match part.to_ascii_lowercase().as_str() {
+            "ctrl" | "control" | "cmd" | "command" => {
+                // muda maps CONTROL to Command on macOS.
+                modifiers |= AcceleratorModifiers::CONTROL;
+            }
+            "shift" => modifiers |= AcceleratorModifiers::SHIFT,
+            "alt" | "option" => modifiers |= AcceleratorModifiers::ALT,
+            "super" | "meta" | "win" => modifiers |= AcceleratorModifiers::SUPER,
+            other => key = code_for(other),
+        }
+    }
+
+    key.map(|code| Accelerator::new(Some(modifiers).filter(|m| !m.is_empty()), code))
+}
+
+/// Map the key part of a shortcut hint onto a physical key code.
+fn code_for(name: &str) -> Option<Code> {
+    Some(match name {
+        "a" => Code::KeyA,
+        "b" => Code::KeyB,
+        "c" => Code::KeyC,
+        "d" => Code::KeyD,
+        "e" => Code::KeyE,
+        "f" => Code::KeyF,
+        "g" => Code::KeyG,
+        "h" => Code::KeyH,
+        "i" => Code::KeyI,
+        "j" => Code::KeyJ,
+        "k" => Code::KeyK,
+        "l" => Code::KeyL,
+        "m" => Code::KeyM,
+        "n" => Code::KeyN,
+        "o" => Code::KeyO,
+        "p" => Code::KeyP,
+        "q" => Code::KeyQ,
+        "r" => Code::KeyR,
+        "s" => Code::KeyS,
+        "t" => Code::KeyT,
+        "u" => Code::KeyU,
+        "v" => Code::KeyV,
+        "w" => Code::KeyW,
+        "x" => Code::KeyX,
+        "y" => Code::KeyY,
+        "z" => Code::KeyZ,
+        "0" => Code::Digit0,
+        "1" => Code::Digit1,
+        "2" => Code::Digit2,
+        "3" => Code::Digit3,
+        "4" => Code::Digit4,
+        "5" => Code::Digit5,
+        "delete" | "del" => Code::Delete,
+        "backspace" => Code::Backspace,
+        "escape" | "esc" => Code::Escape,
+        "enter" | "return" => Code::Enter,
+        "tab" => Code::Tab,
+        "space" => Code::Space,
+        "6" => Code::Digit6,
+        "7" => Code::Digit7,
+        "8" => Code::Digit8,
+        "9" => Code::Digit9,
+        "pgup" | "pageup" => Code::PageUp,
+        "pgdn" | "pagedown" => Code::PageDown,
+        "home" => Code::Home,
+        "end" => Code::End,
+        "f11" => Code::F11,
+        // Shifted punctuation is reported by its physical key, so these map to
+        // the digit or symbol key the character sits on.
+        "+" | "plus" | "=" => Code::Equal,
+        "-" | "minus" | "_" => Code::Minus,
+        "!" => Code::Digit1,
+        "@" => Code::Digit2,
+        "#" => Code::Digit3,
+        "$" => Code::Digit4,
+        "%" => Code::Digit5,
+        "^" => Code::Digit6,
+        "&" => Code::Digit7,
+        "*" => Code::Digit8,
+        "(" => Code::Digit9,
+        ")" => Code::Digit0,
+        "/" | "?" => Code::Slash,
+        "\\" | "|" => Code::Backslash,
+        "," | "<" => Code::Comma,
+        "." | ">" => Code::Period,
+        "[" | "{" => Code::BracketLeft,
+        "]" | "}" => Code::BracketRight,
+        ";" | ":" => Code::Semicolon,
+        "'" | "\"" => Code::Quote,
+        "`" | "~" => Code::Backquote,
+        _ => return None,
+    })
+}
+
 fn action_text(item: &MenuNode) -> String {
     match item.shortcut.as_deref() {
         Some(shortcut) if !shortcut.is_empty() => format!("{}\t{}", item.label, shortcut),
@@ -4454,11 +4689,19 @@ fn append_menu_items(submenu: &Submenu, items: &[MenuNode]) {
         };
 
         let text = action_text(item);
+        // Register the shortcut the label advertises, so the key actually
+        // triggers the item instead of the label being decorative.
+        let accelerator = item
+            .shortcut
+            .as_deref()
+            .filter(|hint| !hint.is_empty())
+            .and_then(parse_accelerator);
         if let Some(checked) = item.checked {
-            let native_item = CheckMenuItem::with_id(action, text, item.enabled, checked, None);
+            let native_item =
+                CheckMenuItem::with_id(action, text, item.enabled, checked, accelerator);
             let _ = submenu.append(&native_item);
         } else {
-            let native_item = NativeMenuItem::with_id(action, text, item.enabled, None);
+            let native_item = NativeMenuItem::with_id(action, text, item.enabled, accelerator);
             let _ = submenu.append(&native_item);
         }
     }
@@ -4760,18 +5003,56 @@ fn modify_primary_presentation(
 }
 
 /// Serialize the current document and write it to `path`.
-fn save_svg_document(engine: Signal<EditorEngine>, path: &std::path::Path) -> bool {
+fn save_svg_document(mut engine: Signal<EditorEngine>, path: &std::path::Path) -> bool {
     let xml = {
         let eng = engine.read();
         sivgo_dom::serialize_svg(&eng.document)
     };
     match fs::write(path, xml.as_bytes()) {
-        Ok(()) => true,
+        Ok(()) => {
+            engine.write().mark_saved();
+            true
+        }
         Err(e) => {
-            log::error!("Failed to save {}: {}", path.display(), e);
+            report_error(
+                "Could not save the file",
+                &format!("{}: {e}", path.display()),
+            );
             false
         }
     }
+}
+
+/// Show a failure to the user instead of only writing it to the log.
+///
+/// A dialog that never appears is indistinguishable from the operation having
+/// worked: opening a corrupt file, saving to a read-only path and a failed
+/// export all used to leave the interface completely unchanged.
+fn report_error(title: &str, detail: &str) {
+    log::error!("{title}: {detail}");
+    rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Error)
+        .set_title(title)
+        .set_description(detail)
+        .set_buttons(rfd::MessageButtons::Ok)
+        .show();
+}
+
+/// Ask whether to discard unsaved changes.
+///
+/// Returns `true` when it is safe to continue. A document with no unsaved
+/// changes never prompts.
+fn confirm_discard_changes(engine: Signal<EditorEngine>, what: &str) -> bool {
+    if !engine.read().is_dirty() {
+        return true;
+    }
+    rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Warning)
+        .set_title("Unsaved changes")
+        .set_description(format!("This drawing has unsaved changes. {what} anyway?"))
+        .set_buttons(rfd::MessageButtons::YesNo)
+        .show()
+        == rfd::MessageDialogResult::Yes
 }
 
 /// Empty or whitespace-only marker references clear the marker.
@@ -4848,6 +5129,187 @@ fn current_layer_id(engine: &EditorEngine) -> Option<NodeId> {
         .or_else(|| engine.get_layers().last().map(|(id, _)| *id))
 }
 
+/// Translate a Dioxus key press into the editor's key type.
+///
+/// Returns `None` for keys the editor has no binding vocabulary for, which the
+/// caller passes through to the active tool instead.
+fn to_editor_key(key: &Key) -> Option<sivgo_core::Key> {
+    use sivgo_core::Key as EditorKey;
+    Some(match key {
+        Key::Enter => EditorKey::Enter,
+        Key::Escape => EditorKey::Escape,
+        Key::Tab => EditorKey::Tab,
+        Key::Delete => EditorKey::Delete,
+        Key::Backspace => EditorKey::Backspace,
+        Key::Character(text) => {
+            let mut chars = text.chars();
+            let ch = chars.next()?;
+            if chars.next().is_some() {
+                return None;
+            }
+            // The binding table uses the named letter and digit variants, so a
+            // character has to be translated into one of those to match.
+            // `Char` is the fallback for punctuation.
+            match ch.to_ascii_lowercase() {
+                'a' => EditorKey::A,
+                'b' => EditorKey::B,
+                'c' => EditorKey::C,
+                'd' => EditorKey::D,
+                'e' => EditorKey::E,
+                'f' => EditorKey::F,
+                'g' => EditorKey::G,
+                'h' => EditorKey::H,
+                'i' => EditorKey::I,
+                'j' => EditorKey::J,
+                'k' => EditorKey::K,
+                'l' => EditorKey::L,
+                'm' => EditorKey::M,
+                'n' => EditorKey::N,
+                'o' => EditorKey::O,
+                'p' => EditorKey::P,
+                'q' => EditorKey::Q,
+                'r' => EditorKey::R,
+                's' => EditorKey::S,
+                't' => EditorKey::T,
+                'u' => EditorKey::U,
+                'v' => EditorKey::V,
+                'w' => EditorKey::W,
+                'x' => EditorKey::X,
+                'y' => EditorKey::Y,
+                'z' => EditorKey::Z,
+                '0' => EditorKey::Digit0,
+                '1' => EditorKey::Digit1,
+                '2' => EditorKey::Digit2,
+                '3' => EditorKey::Digit3,
+                '4' => EditorKey::Digit4,
+                '5' => EditorKey::Digit5,
+                '6' => EditorKey::Digit6,
+                '7' => EditorKey::Digit7,
+                '8' => EditorKey::Digit8,
+                '9' => EditorKey::Digit9,
+                other => EditorKey::Char(other),
+            }
+        }
+        _ => return None,
+    })
+}
+
+/// The menu action a keyboard shortcut maps onto.
+///
+/// Shortcuts and menu items trigger the same work, so the binding table is
+/// resolved to the menu's action id and dispatched through the one handler
+/// rather than duplicating the logic. `None` means the action has no menu
+/// equivalent yet.
+fn menu_action_for_shortcut(action: &sivgo_core::Action) -> Option<&'static str> {
+    use sivgo_core::Action as A;
+    Some(match action {
+        A::NewDocument => "file.new",
+        A::Open => "file.open",
+        A::Save => "file.save",
+        A::SaveAs => "file.save_as",
+        A::Export => "file.export_png",
+        A::Quit => "file.quit",
+
+        A::Undo => "edit.undo",
+        A::Redo => "edit.redo",
+        A::Cut => "edit.cut",
+        A::Copy => "edit.copy",
+        A::Paste => "edit.paste",
+        A::PasteInPlace => "edit.paste_in_place",
+        A::PasteStyle => "edit.paste_style",
+        A::Duplicate => "edit.duplicate",
+        A::Clone => "edit.clone",
+        A::Delete => "edit.delete",
+        A::SelectAll => "edit.select_all",
+        A::SelectNone => "edit.select_none",
+
+        A::ZoomIn => "view.zoom_in",
+        A::ZoomOut => "view.zoom_out",
+        A::Zoom100 => "view.zoom_100",
+        A::ZoomFitPage => "view.zoom_fit_page",
+        A::ZoomFitSelection => "view.zoom_selection",
+        A::ZoomFitDrawing => "view.zoom_fit",
+        A::ToggleGrid => "view.toggle_grid",
+        A::ToggleGuides => "view.toggle_guides",
+        A::ToggleFullscreen => "view.fullscreen",
+
+        A::Group => "object.group",
+        A::Ungroup => "object.ungroup",
+        A::Raise => "object.raise",
+        A::Lower => "object.lower",
+        A::RaiseToTop => "object.to_front",
+        A::LowerToBottom => "object.to_back",
+        A::FlipHorizontal => "object.flip_h",
+        A::FlipVertical => "object.flip_v",
+
+        A::ObjectToPath => "path.object_to_path",
+        A::SimplifyPath => "path.simplify",
+        A::BoolUnion => "path.union",
+        A::BoolDifference => "path.difference",
+        A::BoolIntersection => "path.intersection",
+        A::BoolExclusion => "path.exclusion",
+
+        // Handled elsewhere or not wired to a menu entry.
+        _ => return None,
+    })
+}
+
+/// Insert the contents of `path` into the open document.
+///
+/// SVG files are merged element by element. A bitmap is either embedded as an
+/// `<image>` or, when `trace` is set, converted to paths first. None of this
+/// was reachable before: the Import menu item had no handler, so the bitmap
+/// tracer and the bitmap importer had no way in at all.
+fn import_file_into_document(mut engine: Signal<EditorEngine>, path: &Path, trace: bool) {
+    let Ok(bytes) = std::fs::read(path) else {
+        log::error!("Failed to read {}", path.display());
+        return;
+    };
+
+    let extension = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
+    if extension == "svg" {
+        match String::from_utf8(bytes)
+            .ok()
+            .and_then(|text| sivgo_dom::parse_svg(&text).ok())
+        {
+            Some(imported) => {
+                let count = engine.write().import_document(&imported);
+                info!("Imported {count} elements from {}", path.display());
+            }
+            None => log::error!("Failed to parse {}", path.display()),
+        }
+        return;
+    }
+
+    if trace {
+        match sivgo_io::trace_bitmap_file(&bytes, &sivgo_io::TraceOptions::default()) {
+            Ok(traced) => {
+                let count = engine.write().import_document(&traced);
+                info!("Traced {} into {count} paths", path.display());
+            }
+            Err(e) => log::error!("Failed to trace {}: {e}", path.display()),
+        }
+        return;
+    }
+
+    let mime = match extension.as_str() {
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "bmp" => "image/bmp",
+        _ => "image/png",
+    };
+    let mut eng = engine.write();
+    match sivgo_io::import_bitmap(&mut eng.document, &bytes, mime) {
+        Ok(_) => info!("Imported bitmap {}", path.display()),
+        Err(e) => log::error!("Failed to import bitmap: {e}"),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn handle_editor_action(
     action: &str,
@@ -4862,18 +5324,25 @@ fn handle_editor_action(
 ) {
     match action {
         "file.new" => {
+            if !confirm_discard_changes(engine, "Start a new drawing") {
+                return;
+            }
             let defaults = document_defaults.read().clone();
             let preferences = preferences_state.read().clone();
             let mut eng = engine.write();
             eng.new_document(defaults.width_px, defaults.height_px);
             apply_document_defaults_to_engine(&mut eng, &defaults);
             apply_preferences_to_engine(&mut eng, &preferences);
+            eng.mark_saved();
             drop(eng);
             file_path.set(None);
             set_window_title(&desktop, None);
             bump_render(render_version);
         }
         "file.open" => {
+            if !confirm_discard_changes(engine, "Open another file") {
+                return;
+            }
             if let Some(path) = rfd::FileDialog::new()
                 .add_filter("SVG files", &["svg"])
                 .pick_file()
@@ -4885,13 +5354,22 @@ fn handle_editor_action(
                             let mut eng = engine.write();
                             eng.load_document(doc);
                             apply_preferences_to_engine(&mut eng, &preferences);
+                            // A freshly loaded document has no unsaved edits.
+                            eng.mark_saved();
+                            drop(eng);
                             file_path.set(Some(path.clone()));
                             set_window_title(&desktop, Some(&path));
                             bump_render(render_version);
                         }
-                        Err(e) => log::error!("Failed to parse SVG: {}", e),
+                        Err(e) => report_error(
+                            "Could not open the file",
+                            &format!("{} is not valid SVG: {e}", path.display()),
+                        ),
                     },
-                    Err(e) => log::error!("Failed to read file: {}", e),
+                    Err(e) => report_error(
+                        "Could not read the file",
+                        &format!("{}: {e}", path.display()),
+                    ),
                 }
             }
         }
@@ -4924,6 +5402,43 @@ fn handle_editor_action(
                     file_path.set(Some(path.clone()));
                     set_window_title(&desktop, Some(&path));
                     info!("Saved as {}", path.display());
+                }
+            }
+        }
+        "file.import" => {
+            let Some(path) = rfd::FileDialog::new()
+                .add_filter(
+                    "Images and drawings",
+                    &["svg", "png", "jpg", "jpeg", "gif", "bmp"],
+                )
+                .pick_file()
+            else {
+                return;
+            };
+            import_file_into_document(engine, &path, false);
+            bump_render(render_version);
+        }
+        "file.import_traced" => {
+            let Some(path) = rfd::FileDialog::new()
+                .add_filter("Bitmap images", &["png", "jpg", "jpeg", "gif", "bmp"])
+                .pick_file()
+            else {
+                return;
+            };
+            import_file_into_document(engine, &path, true);
+            bump_render(render_version);
+        }
+        "file.export_plain_svg" => {
+            if let Some(path) = rfd::FileDialog::new()
+                .add_filter("SVG files", &["svg"])
+                .save_file()
+            {
+                // Unlike a normal save, this strips the editor-specific
+                // `inkscape:` and `sodipodi:` markup.
+                let plain = sivgo_io::export_plain_svg(&engine.read().document);
+                match std::fs::write(&path, plain) {
+                    Ok(()) => info!("Wrote plain SVG to {}", path.display()),
+                    Err(e) => log::error!("Failed to write plain SVG: {e}"),
                 }
             }
         }
@@ -4979,7 +5494,11 @@ fn handle_editor_action(
             }
         }
         "file.print" => desktop.print(),
-        "file.close" | "file.quit" => desktop.close(),
+        "file.close" | "file.quit" => {
+            if confirm_discard_changes(engine, "Close") {
+                desktop.close();
+            }
+        }
         "file.document_properties" => inspector_panel.set(InspectorPanel::Document),
         "edit.undo" => {
             engine.write().undo();
@@ -5591,6 +6110,9 @@ fn App() -> Element {
     let mut inspector_panel = use_signal(|| InspectorPanel::Style);
     let mut document_defaults = use_signal(move || document_defaults_initial.clone());
     let mut preferences_state = use_signal(move || preferences_initial.clone());
+    // Keyboard bindings. Held as state so a preferences screen can rebind them
+    // later without touching the event handler.
+    let shortcuts = use_signal(sivgo_core::ShortcutManager::new);
     let mut layout_settings = use_signal(move || layout_initial.clone());
     let mut inspector_resize_drag = use_signal(|| None::<InspectorResizeDrag>);
     let desktop_for_window_size = desktop.clone();
@@ -6145,7 +6667,10 @@ fn App() -> Element {
                         snap_guides: snap_guides,
                         snap_objects: snap_objects,
                         snap_paths: snap_paths,
-                        on_action: move |action: ToolControlAction| {
+                        on_action: {
+                            let tool_control_font_weight = text_font_weight_value.clone();
+                            let tool_control_font_style = text_font_style_value.clone();
+                            move |action: ToolControlAction| {
                             match action {
                                 ToolControlAction::ToggleSnapToGrid => {
                                     let next = {
@@ -6190,12 +6715,113 @@ fn App() -> Element {
                                     prefs.snap_to_paths = next;
                                     prefs.snap_to_nodes = next;
                                 }
+                                // -- Selection geometry --
+                                // Expressed as a move or scale so the change
+                                // goes through the command stack and can be
+                                // undone like any other edit.
+                                ToolControlAction::SetX(x) => {
+                                    if sel_w > 0.0 || sel_h > 0.0 {
+                                        engine.write().translate_selected(x - sel_x, 0.0);
+                                    }
+                                }
+                                ToolControlAction::SetY(y) => {
+                                    if sel_w > 0.0 || sel_h > 0.0 {
+                                        engine.write().translate_selected(0.0, y - sel_y);
+                                    }
+                                }
+                                ToolControlAction::SetWidth(w) => {
+                                    if sel_w > f64::EPSILON && w > 0.0 {
+                                        engine.write().scale_selected(w / sel_w, 1.0);
+                                    }
+                                }
+                                ToolControlAction::SetHeight(h) => {
+                                    if sel_h > f64::EPSILON && h > 0.0 {
+                                        engine.write().scale_selected(1.0, h / sel_h);
+                                    }
+                                }
+                                ToolControlAction::SetShapeWidth(w) => {
+                                    if sel_w > f64::EPSILON && w > 0.0 {
+                                        engine.write().scale_selected(w / sel_w, 1.0);
+                                    }
+                                }
+                                ToolControlAction::SetShapeHeight(h) => {
+                                    if sel_h > f64::EPSILON && h > 0.0 {
+                                        engine.write().scale_selected(1.0, h / sel_h);
+                                    }
+                                }
+                                ToolControlAction::SetCornerRadius(radius) => {
+                                    engine.write().set_selected_corner_radius(radius);
+                                }
+
+                                // -- Shape tool settings --
+                                // These configure the tool itself, so the next
+                                // shape drawn uses them.
+                                ToolControlAction::SetStarCorners(points) => {
+                                    if let Some(tool) = engine
+                                        .write()
+                                        .tools
+                                        .get_mut::<sivgo_core::tools::star::StarTool>(ToolId::Star)
+                                    {
+                                        tool.num_points = points.max(3);
+                                    }
+                                }
+                                ToolControlAction::SetStarRatio(ratio) => {
+                                    if let Some(tool) = engine
+                                        .write()
+                                        .tools
+                                        .get_mut::<sivgo_core::tools::star::StarTool>(ToolId::Star)
+                                    {
+                                        tool.inner_ratio = ratio.clamp(0.01, 1.0);
+                                    }
+                                }
+                                ToolControlAction::SetSpiralTurns(turns) => {
+                                    if let Some(tool) = engine
+                                        .write()
+                                        .tools
+                                        .get_mut::<sivgo_core::tools::spiral::SpiralTool>(
+                                            ToolId::Spiral,
+                                        )
+                                    {
+                                        tool.turns = turns.clamp(0.1, 100.0);
+                                    }
+                                }
+                                ToolControlAction::SetSmoothing(amount) => {
+                                    if let Some(tool) = engine
+                                        .write()
+                                        .tools
+                                        .get_mut::<sivgo_core::tools::pencil::PencilTool>(
+                                            ToolId::Pencil,
+                                        )
+                                    {
+                                        tool.set_smoothing(amount);
+                                    }
+                                }
+
+                                // -- Text --
+                                ToolControlAction::SetFontFamily(family) => {
+                                    engine.write().set_selected_text_font_family(family);
+                                }
+                                ToolControlAction::SetFontSize(size) => {
+                                    engine.write().set_selected_text_font_size(size);
+                                }
+                                ToolControlAction::ToggleBold => {
+                                    let bold = tool_control_font_weight == "Bold";
+                                    let next = if bold { "Normal" } else { "Bold" };
+                                    engine.write().set_selected_text_font_weight(next);
+                                }
+                                ToolControlAction::ToggleItalic => {
+                                    let italic = tool_control_font_style == "Italic";
+                                    let next = if italic { "Normal" } else { "Italic" };
+                                    engine.write().set_selected_text_font_style(next);
+                                }
+
                                 other => log::info!("Tool control action is not wired yet: {:?}", other),
                             }
                             let prefs_snapshot = preferences_state.read().clone();
                             let defaults_snapshot = document_defaults.read().clone();
                             persist_desktop_settings(&prefs_snapshot, &defaults_snapshot);
                             bump_render(render_version);
+                            }
                         },
                     }
                     div { class: "canvas-workbench",
@@ -6233,23 +6859,57 @@ fn App() -> Element {
                             class: "canvas-viewport",
                             style: "cursor: {canvas_cursor};",
                             tabindex: "0",
-                            onkeydown: move |evt: Event<dioxus::events::KeyboardData>| {
-                                let key = match evt.key() {
-                                    Key::Enter => Some(sivgo_core::Key::Enter),
-                                    Key::Escape => Some(sivgo_core::Key::Escape),
-                                    _ => None,
-                                };
-                                if let Some(key) = key {
+                            onkeydown: {
+                                let desktop = desktop.clone();
+                                move |evt: Event<dioxus::events::KeyboardData>| {
+                                    let Some(key) = to_editor_key(&evt.key()) else {
+                                        return;
+                                    };
+                                    let raw = evt.data().modifiers();
+                                    let modifiers = sivgo_core::Modifiers {
+                                        ctrl: raw.contains(keyboard_types::Modifiers::CONTROL)
+                                            || raw.contains(keyboard_types::Modifiers::META),
+                                        shift: raw.contains(keyboard_types::Modifiers::SHIFT),
+                                        alt: raw.contains(keyboard_types::Modifiers::ALT),
+                                    };
+
+                                    // A bound shortcut runs the same work as the
+                                    // matching menu item; anything else goes to
+                                    // the active tool.
+                                    let bound = shortcuts
+                                        .read()
+                                        .lookup(key, modifiers)
+                                        .cloned();
+                                    if let Some(action) = bound {
+                                        evt.stop_propagation();
+                                        evt.prevent_default();
+                                        if let sivgo_core::Action::SwitchTool(tool) = action {
+                                            engine.write().tools.switch_to(tool);
+                                            bump_render(render_version);
+                                            return;
+                                        }
+                                        if let Some(menu_action) =
+                                            menu_action_for_shortcut(&action)
+                                        {
+                                            handle_editor_action(
+                                                menu_action,
+                                                engine,
+                                                render_version,
+                                                file_path,
+                                                is_fullscreen,
+                                                inspector_panel,
+                                                document_defaults,
+                                                preferences_state,
+                                                desktop.clone(),
+                                            );
+                                            return;
+                                        }
+                                    }
+
                                     evt.stop_propagation();
-                                    let mods = evt.data().modifiers();
-                                    engine.write().on_key_down(sivgo_core::KeyEvent {
-                                        key,
-                                        modifiers: sivgo_core::Modifiers {
-                                            ctrl: mods.contains(keyboard_types::Modifiers::CONTROL),
-                                            shift: mods.contains(keyboard_types::Modifiers::SHIFT),
-                                            alt: mods.contains(keyboard_types::Modifiers::ALT),
-                                        },
-                                    });
+                                    engine
+                                        .write()
+                                        .on_key_down(sivgo_core::KeyEvent { key, modifiers });
                                     canvas_pointer_down.set(false);
                                     canvas_drag_preview.set(None);
                                     canvas_path_preview.set(None);

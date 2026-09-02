@@ -77,6 +77,15 @@ pub async fn create_document(req: &mut Request, depot: &mut Depot, res: &mut Res
         }
     }
 
+    if !store.can_create_document(user_id) {
+        ApiError::bad_request(format!(
+            "document limit reached ({} per account)",
+            crate::store::Store::MAX_DOCUMENTS_PER_USER
+        ))
+        .write_to(res);
+        return;
+    }
+
     let default_svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600"></svg>"#;
     let svg_content = body.svg_content.as_deref().unwrap_or(default_svg);
 

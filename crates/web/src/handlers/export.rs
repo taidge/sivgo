@@ -93,11 +93,16 @@ pub async fn export_document(req: &mut Request, depot: &mut Depot, res: &mut Res
             }
 
             // Render to premultiplied RGBA.
-            let premultiplied = sivgo_render::render_document_to_pixmap(&doc, width, height);
+            //
+            // The document came from an unauthenticated request, so file-system
+            // image references are refused: an `<image href>` is attacker
+            // controlled and would otherwise read server-local files.
+            let premultiplied =
+                sivgo_render::render_document_to_pixmap_without_file_access(&doc, width, height);
 
             // Un-premultiply alpha for PNG.
             let mut pixels = premultiplied;
-            for chunk in pixels.chunks_exact_mut(4) {
+            for chunk in pixels.as_chunks_mut::<4>().0 {
                 let a = chunk[3] as u16;
                 if a == 0 {
                     chunk[0] = 0;

@@ -4,126 +4,70 @@
 use dioxus::prelude::*;
 
 /// Kind of Live Path Effect.
+///
+/// Holds the engine's canonical key rather than a fixed enum. The panel used
+/// to model only a subset, and any effect outside that subset was dropped from
+/// the list the panel was given — invisible to the user and impossible to
+/// remove once applied. Taking the key straight from the engine keeps the two
+/// lists from drifting apart.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LpeKind {
-    BendPath,
-    PatternAlongPath,
-    StitchSubPaths,
-    Offset,
-    Simplify,
-    PowerStroke,
-    Roughen,
-    Mirror,
-    BooleanOperation,
-    Measure,
+pub struct LpeKind {
+    key: String,
 }
 
 impl LpeKind {
     /// Stable key shared with the core engine.
-    pub fn key(&self) -> &'static str {
-        match self {
-            Self::BendPath => "bend_path",
-            Self::PatternAlongPath => "pattern_along_path",
-            Self::StitchSubPaths => "stitch_sub_paths",
-            Self::Offset => "offset",
-            Self::Simplify => "simplify",
-            Self::PowerStroke => "power_stroke",
-            Self::Roughen => "roughen",
-            Self::Mirror => "mirror",
-            Self::BooleanOperation => "boolean_operation",
-            Self::Measure => "measure",
-        }
+    pub fn key(&self) -> &str {
+        &self.key
     }
 
-    /// Create a UI kind from the stable core key.
+    /// Wrap a key the engine recognises.
+    ///
+    /// Returns `None` for an unknown key so a malformed document cannot put an
+    /// unusable row in the panel.
     pub fn from_key(key: &str) -> Option<Self> {
-        match key {
-            "bend_path" => Some(Self::BendPath),
-            "pattern_along_path" => Some(Self::PatternAlongPath),
-            "stitch_sub_paths" => Some(Self::StitchSubPaths),
-            "offset" => Some(Self::Offset),
-            "simplify" => Some(Self::Simplify),
-            "power_stroke" => Some(Self::PowerStroke),
-            "roughen" => Some(Self::Roughen),
-            "mirror" => Some(Self::Mirror),
-            "boolean_operation" => Some(Self::BooleanOperation),
-            "measure" => Some(Self::Measure),
-            _ => None,
-        }
+        // Aliases such as "dash" resolve to the canonical "dashed_stroke", so
+        // two spellings of the same effect compare equal.
+        let label = sivgo_core::EditorEngine::lpe_kind_label(key)?;
+        let canonical = sivgo_core::EditorEngine::available_lpe_kinds()
+            .iter()
+            .find(|(_, l)| *l == label)
+            .map(|(k, _)| *k)?;
+        Some(Self {
+            key: canonical.to_string(),
+        })
     }
 
     /// Human-readable label.
     pub fn label(&self) -> &'static str {
-        match self {
-            Self::BendPath => "Bend Path",
-            Self::PatternAlongPath => "Pattern Along Path",
-            Self::StitchSubPaths => "Stitch Sub-Paths",
-            Self::Offset => "Offset",
-            Self::Simplify => "Simplify",
-            Self::PowerStroke => "Power Stroke",
-            Self::Roughen => "Roughen",
-            Self::Mirror => "Mirror",
-            Self::BooleanOperation => "Boolean Operation",
-            Self::Measure => "Measure",
-        }
+        sivgo_core::EditorEngine::lpe_kind_label(&self.key).unwrap_or("Unknown Effect")
     }
 
-    /// All available LPE kinds.
-    pub fn all() -> &'static [LpeKind] {
-        &[
-            Self::BendPath,
-            Self::PatternAlongPath,
-            Self::StitchSubPaths,
-            Self::Offset,
-            Self::Simplify,
-            Self::PowerStroke,
-            Self::Roughen,
-            Self::Mirror,
-            Self::BooleanOperation,
-            Self::Measure,
-        ]
+    /// Every effect the engine can apply.
+    pub fn all() -> Vec<LpeKind> {
+        sivgo_core::EditorEngine::available_lpe_kinds()
+            .iter()
+            .map(|(key, _)| LpeKind {
+                key: (*key).to_string(),
+            })
+            .collect()
     }
 
     /// Default editable parameter rows for this effect kind.
     pub fn default_params(&self) -> Vec<LpeParam> {
-        fn param(name: &str, value: &str) -> LpeParam {
-            LpeParam {
-                name: name.to_string(),
-                value: value.to_string(),
-            }
-        }
-
-        match self {
-            Self::BendPath => vec![param("bend_amount", "1")],
-            Self::PatternAlongPath => vec![
-                param("spacing", "10"),
-                param("normal_offset", "0"),
-                param("tangential_offset", "0"),
-            ],
-            Self::StitchSubPaths => vec![param("gap", "5")],
-            Self::Offset => vec![param("offset", "5")],
-            Self::Simplify => vec![param("threshold", "2")],
-            Self::PowerStroke => vec![param("width", "5")],
-            Self::Roughen => vec![
-                param("max_displacement", "2"),
-                param("segment_length", "10"),
-                param("seed", "42"),
-            ],
-            Self::Mirror => vec![
-                param("axis_origin_x", "0"),
-                param("axis_origin_y", "0"),
-                param("axis_angle", "0"),
-            ],
-            Self::BooleanOperation => vec![param("operation", "0")],
-            Self::Measure => vec![param("font_size", "12"), param("measure_offset", "10")],
-        }
+        sivgo_core::EditorEngine::lpe_kind_default_params(&self.key)
+            .into_iter()
+            .map(|(name, value)| LpeParam { name, value })
+            .collect()
     }
 }
 
-/// A key-value parameter for an LPE.
-#[derive(Debug, Clone, PartialEq)]
+/// A single editable parameter of an effect.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LpeParam {
+    /// Parameter name as the engine knows it.
     pub name: String,
+    /// Current value, formatted for display and editing.
     pub value: String,
 }
 
@@ -327,28 +271,72 @@ pub fn LpePanel(
 mod tests {
     use super::*;
 
+    fn kind(key: &str) -> LpeKind {
+        LpeKind::from_key(key).unwrap_or_else(|| panic!("{key} should be a known effect"))
+    }
+
     #[test]
     fn lpe_entry_new() {
-        let lpe = LpeEntry::new("lpe1", LpeKind::BendPath);
+        let lpe = LpeEntry::new("lpe1", kind("bend_path"));
         assert_eq!(lpe.id, "lpe1");
-        assert_eq!(lpe.kind, LpeKind::BendPath);
-        assert_eq!(lpe.params[0].name, "bend_amount");
+        assert_eq!(lpe.kind.key(), "bend_path");
         assert!(lpe.enabled);
+        assert!(
+            !lpe.params.is_empty(),
+            "an effect should start with its default parameters"
+        );
     }
 
     #[test]
-    fn lpe_kind_labels_and_count() {
-        assert_eq!(LpeKind::BendPath.label(), "Bend Path");
-        assert_eq!(LpeKind::PowerStroke.label(), "Power Stroke");
-        assert_eq!(LpeKind::BooleanOperation.label(), "Boolean Operation");
-        assert_eq!(LpeKind::all().len(), 10);
+    fn labels_come_from_the_engine() {
+        assert_eq!(kind("bend_path").label(), "Bend Path");
+        assert_eq!(kind("power_stroke").label(), "Power Stroke");
+        assert_eq!(kind("von_koch").label(), "Von Koch Fractal");
     }
 
     #[test]
-    fn lpe_kind_keys_and_default_params() {
-        assert_eq!(LpeKind::Offset.key(), "offset");
-        assert_eq!(LpeKind::from_key("roughen"), Some(LpeKind::Roughen));
-        assert_eq!(LpeKind::Offset.default_params()[0].name, "offset");
-        assert_eq!(LpeKind::Roughen.default_params().len(), 3);
+    fn the_panel_offers_every_effect_the_engine_supports() {
+        // The panel used to model only ten of them and silently drop the rest.
+        let offered = LpeKind::all();
+        assert_eq!(
+            offered.len(),
+            sivgo_core::EditorEngine::available_lpe_kinds().len()
+        );
+        assert!(offered.len() >= 20, "expected the full effect list");
+
+        for k in &offered {
+            assert_eq!(
+                LpeKind::from_key(k.key()).as_ref(),
+                Some(k),
+                "{} should round-trip through its key",
+                k.key()
+            );
+            assert_ne!(k.label(), "Unknown Effect", "{} needs a label", k.key());
+        }
+    }
+
+    #[test]
+    fn aliases_resolve_to_the_canonical_key() {
+        assert_eq!(kind("dash").key(), "dashed_stroke");
+        assert_eq!(kind("Mirror Symmetry").key(), "mirror");
+        assert_eq!(kind("chamfer").key(), "fillet");
+    }
+
+    #[test]
+    fn an_unknown_key_is_refused() {
+        assert!(LpeKind::from_key("not-an-effect").is_none());
+    }
+
+    #[test]
+    fn default_params_match_what_the_engine_will_store() {
+        for k in LpeKind::all() {
+            let from_panel: Vec<String> = k.default_params().into_iter().map(|p| p.name).collect();
+            let from_engine: Vec<String> =
+                sivgo_core::EditorEngine::lpe_kind_default_params(k.key())
+                    .into_iter()
+                    .map(|(name, _)| name)
+                    .collect();
+            assert_eq!(from_panel, from_engine, "parameters differ for {}", k.key());
+        }
     }
 }

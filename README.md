@@ -10,30 +10,36 @@ Sivgo is organized as a Cargo workspace with 14 crates:
 |-------|-------------|
 | `sivgo-math` | 2D geometry primitives, transforms, bezier curves, hit testing |
 | `sivgo-dom` | SVG document model with arena-based tree and all SVG elements |
-| `sivgo-style` | CSS cascade, specificity, computed values, inheritance |
-| `sivgo-render` | `RenderBackend` trait + backends (tiny-skia, vello, canvas2d) |
+| `sivgo-style` | CSS cascade, specificity, computed values, inheritance (`<style>` rules are resolved here; the renderer applies inline `style` and inheritance directly) |
+| `sivgo-render` | `RenderBackend` trait and the tiny-skia CPU backend. The Vello, Canvas2D and WebGPU types record a command stream and replay it through tiny-skia; there is no GPU or browser execution path |
 | `sivgo-path-ops` | Boolean path operations (union, intersect, diff, xor), offset, simplify |
 | `sivgo-text` | Text shaping via cosmic-text, SVG text layout, text-to-path |
 | `sivgo-filters` | All SVG filter primitives (blur, blend, lighting, etc.) |
 | `sivgo-trace` | Bitmap-to-vector tracing (potrace algorithm) |
-| `sivgo-io` | Import/export: SVG, PNG, JPEG, PDF, EPS, DXF |
+| `sivgo-io` | Export: SVG, PNG, JPEG, WebP, PDF, EPS, DXF. Import: SVG, bitmaps, and a partial PDF reader |
 | `sivgo-core` | Editor engine: tools, commands, undo/redo, snapping, selection |
-| `sivgo-plugin` | Plugin system with WASM sandbox and Lua scripting |
+| `sivgo-plugin` | Plugin manifests and a permission model. Modules are validated with `wasmparser` and run on a small built-in interpreter that covers numeric functions only; the scripting layer is a restricted expression DSL, not a Lua runtime |
 | `sivgo-ui` | Dioxus UI components used by the desktop app |
 | `sivgo-desktop` | Desktop application binary (Dioxus desktop) |
 | `sivgo-web` | Salvo REST API backend for documents, assets, export, preferences, and plugins |
 
+Each crate depends only on what it actually uses:
+
 ```
-sivgo-math (foundation)
-  -> sivgo-dom -> sivgo-style -> sivgo-render
-  -> sivgo-path-ops
-  -> sivgo-text, sivgo-filters, sivgo-trace
-  -> sivgo-io (dom + render + style)
-  -> sivgo-core (all above)
-  -> sivgo-plugin (core + dom)
-  -> sivgo-ui (core + dom + render)
-    -> sivgo-desktop
-  -> sivgo-web (core + dom + render + io)
+sivgo-math    (foundation, no internal dependencies)
+sivgo-dom     math
+sivgo-style   dom                          (not yet used by other crates)
+sivgo-path-ops
+sivgo-text    math
+sivgo-filters
+sivgo-trace   math
+sivgo-render  math + dom + text + filters
+sivgo-io      math + dom + render + trace
+sivgo-core    math + dom + path-ops + text
+sivgo-plugin  math + dom
+sivgo-ui      core + dom + render
+sivgo-desktop math + dom + render + io + core + plugin + ui
+sivgo-web     dom + render
 ```
 
 ## Prerequisites
@@ -69,10 +75,15 @@ CORS defaults. Production runs must set a non-default `JWT_SECRET`, set
 
 ```sh
 SIVGO_ENV=production \
-JWT_SECRET=<strong-random-secret> \
+JWT_SECRET=<strong-random-secret-at-least-32-bytes> \
 CORS_ALLOWED_ORIGINS=https://app.example.com \
 just serve
 ```
+
+When the server is reachable only through a trusted reverse proxy that
+sanitizes client-IP headers, set `TRUST_PROXY_HEADERS=true`. Leave it unset for
+direct deployments so forged `X-Forwarded-For` values cannot bypass rate
+limiting.
 
 ## Project Layout
 
@@ -83,7 +94,9 @@ sivgo/
   crates/                  # All 14 library and binary crates
   docs/                    # Architecture docs
   examples/                # Sample SVG files
-  tests/visual/            # Visual test helpers and corpus
+  tests/visual/            # Comparison helpers and SVG corpus for the render smoke tests
+                           # (no committed reference images yet, so these check
+                           #  that rendering is non-empty and deterministic)
   crates/dom/benches/      # Workspace performance benchmarks
   fuzz/                    # Fuzz testing targets
   .github/workflows/       # CI pipeline

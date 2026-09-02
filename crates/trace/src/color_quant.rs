@@ -1,4 +1,4 @@
-﻿//! Color quantization tracing for multi-color bitmap-to-vector conversion.
+//! Color quantization tracing for multi-color bitmap-to-vector conversion.
 //!
 //! Pipeline:
 //! 1. Quantize the RGBA image to N colors (median-cut algorithm).
@@ -145,7 +145,9 @@ pub fn median_cut(data: &[u8], n: usize) -> Vec<RgbColor> {
     }
 
     let pixels: Vec<Pixel> = data
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|c| Pixel {
             r: c[0],
             g: c[1],
@@ -220,7 +222,7 @@ pub fn trace_colors(
 
     // Classify each pixel
     let mut assignments = vec![0usize; pixel_count];
-    for (i, chunk) in data.chunks_exact(4).enumerate() {
+    for (i, chunk) in data.as_chunks::<4>().0.iter().enumerate() {
         assignments[i] = nearest_color(chunk[0], chunk[1], chunk[2], &palette);
     }
 

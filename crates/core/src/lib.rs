@@ -18,6 +18,7 @@ pub mod engine;
 pub mod event;
 pub mod input;
 pub mod lpe;
+pub mod markers;
 pub mod selection;
 pub mod shortcuts;
 pub mod snap;

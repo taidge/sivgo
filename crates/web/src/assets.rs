@@ -104,13 +104,13 @@ impl AssetStore {
             created_at: Utc::now(),
         };
         let info = AssetInfo::from_asset(&asset);
-        self.assets.write().unwrap().insert(asset.id, asset);
+        crate::lock::write(&self.assets).insert(asset.id, asset);
         info
     }
 
     /// Download (retrieve) an asset by id.
     pub fn download_asset(&self, id: Uuid) -> Option<AssetDownload> {
-        let assets = self.assets.read().unwrap();
+        let assets = crate::lock::read(&self.assets);
         let asset = assets.get(&id)?;
         Some(AssetDownload {
             owner_id: asset.owner_id,
@@ -134,7 +134,7 @@ impl AssetStore {
     /// Delete an asset by id. Returns `Ok(())` if it existed, or an error
     /// message if it was not found.
     pub fn delete_asset(&self, id: Uuid) -> Result<(), String> {
-        if self.assets.write().unwrap().remove(&id).is_some() {
+        if crate::lock::write(&self.assets).remove(&id).is_some() {
             Ok(())
         } else {
             Err(format!("asset {} not found", id))

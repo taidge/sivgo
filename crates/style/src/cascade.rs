@@ -1,4 +1,4 @@
-﻿//! CSS cascade resolution: walk the SVG tree and resolve computed styles.
+//! CSS cascade resolution: walk the SVG tree and resolve computed styles.
 //!
 //! The cascade considers (in increasing priority):
 //! 1. Inherited values from parent
@@ -10,7 +10,7 @@ use std::collections::HashMap;
 
 use sivgo_dom::{
     BlendMode, Color, Display, FillRule, FontStyle, FontWeight, LineCap, LineJoin, NodeId, Paint,
-    PresentationAttrs, SvgDocument, SvgElement, SvgLength, TextAnchor, Visibility,
+    PresentationAttrs, SvgDocument, SvgElement, SvgLength, TextAnchor, TextDecoration, Visibility,
 };
 use sivgo_math::parse_transform;
 
@@ -309,11 +309,19 @@ fn apply_keyword_or_property(
         }
         return;
     }
-    apply_single_property(computed, property, value);
+    apply_single_property(computed, property, value, parent_style);
 }
 
 /// Apply a single CSS property name/value pair to a computed style.
-fn apply_single_property(computed: &mut ComputedStyle, property: &str, value: &str) {
+///
+/// `parent_style` is needed for `font-size`, whose relative units reference the
+/// parent's font size rather than the value being computed.
+fn apply_single_property(
+    computed: &mut ComputedStyle,
+    property: &str,
+    value: &str,
+    parent_style: Option<&ComputedStyle>,
+) {
     let value = value.trim();
 
     match property {
@@ -434,10 +442,15 @@ fn apply_single_property(computed: &mut ComputedStyle, property: &str, value: &s
         }
         "font-size" => {
             if let Ok(len) = value.parse::<SvgLength>() {
-                // For font-size, em/% reference the PARENT's font-size.
-                // At this point, computed.font_size still holds the inherited parent value
-                // (it gets updated by this assignment).
-                computed.font_size = len.resolve_px(computed.font_size, computed.font_size);
+                // `em` and `%` on font-size reference the *parent's* font-size,
+                // not the value being computed. Reading it from `computed`
+                // would compound whenever font-size has already been set on
+                // this element from a lower-priority source, such as the
+                // presentation attribute folded in from `style`.
+                let reference = parent_style
+                    .map(|parent| parent.font_size)
+                    .unwrap_or(computed.font_size);
+                computed.font_size = len.resolve_px(reference, reference);
             }
         }
         "font-weight" => {
@@ -654,6 +667,102 @@ pub fn resolve_single(
     resolve_current_color(&mut computed);
 
     computed
+}
+
+/// Write one CSS declaration onto a [`PresentationAttrs`].
+///
+/// Returns `true` when the property was recognized and stored. This is the
+/// bridge used to fold `<style>` element rules into the attributes the
+/// renderer reads; the fuller [`ComputedStyle`] path is not used there because
+/// the renderer works from presentation attributes plus its own inheritance.
+///
+/// Values that need context the caller does not have — `inherit`, `initial`
+/// and `unset` — are skipped, leaving the underlying attribute in place.
+pub fn apply_declaration_to_presentation(
+    attrs: &mut PresentationAttrs,
+    property: &str,
+    value: &str,
+) -> bool {
+    let value = value.trim();
+    if value.is_empty()
+        || value.eq_ignore_ascii_case("inherit")
+        || value.eq_ignore_ascii_case("initial")
+        || value.eq_ignore_ascii_case("unset")
+    {
+        return false;
+    }
+
+    match property {
+        "color" => set(&mut attrs.color, Color::parse(value)),
+        "fill" => set(&mut attrs.fill, Paint::parse(value)),
+        "stroke" => set(&mut attrs.stroke, Paint::parse(value)),
+        "stroke-width" => set(&mut attrs.stroke_width, value.parse().ok()),
+        "opacity" => set(&mut attrs.opacity, value.parse().ok()),
+        "fill-opacity" => set(&mut attrs.fill_opacity, value.parse().ok()),
+        "stroke-opacity" => set(&mut attrs.stroke_opacity, value.parse().ok()),
+        "fill-rule" => set(&mut attrs.fill_rule, FillRule::parse(value)),
+        "clip-rule" => set(&mut attrs.clip_rule, FillRule::parse(value)),
+        "stroke-linecap" => set(&mut attrs.stroke_linecap, LineCap::parse(value)),
+        "stroke-linejoin" => set(&mut attrs.stroke_linejoin, LineJoin::parse(value)),
+        "stroke-miterlimit" => set(&mut attrs.stroke_miterlimit, value.parse().ok()),
+        "stroke-dashoffset" => set(&mut attrs.stroke_dashoffset, value.parse().ok()),
+        "stroke-dasharray" => {
+            if value.eq_ignore_ascii_case("none") {
+                return false;
+            }
+            let values: Vec<f64> = value
+                .split(|c: char| c == ',' || c.is_ascii_whitespace())
+                .filter(|t| !t.is_empty())
+                .filter_map(|t| t.parse().ok())
+                .collect();
+            set(
+                &mut attrs.stroke_dasharray,
+                (!values.is_empty()).then_some(values),
+            )
+        }
+        "display" => set(&mut attrs.display, Display::parse(value)),
+        "visibility" => set(&mut attrs.visibility, Visibility::parse(value)),
+        "mix-blend-mode" => set(&mut attrs.mix_blend_mode, BlendMode::parse(value)),
+        "isolation" => set(&mut attrs.isolation, Some(value == "isolate")),
+        "clip-path" => set(&mut attrs.clip_path, url_value(value)),
+        "mask" => set(&mut attrs.mask, url_value(value)),
+        "filter" => set(&mut attrs.filter, url_value(value)),
+        "marker-start" => set(&mut attrs.marker_start, url_value(value)),
+        "marker-mid" => set(&mut attrs.marker_mid, url_value(value)),
+        "marker-end" => set(&mut attrs.marker_end, url_value(value)),
+        "font-family" => set(
+            &mut attrs.font_family,
+            Some(value.trim_matches(['\'', '"']).to_string()),
+        ),
+        "font-size" => set(&mut attrs.font_size, value.parse().ok()),
+        "font-weight" => set(&mut attrs.font_weight, FontWeight::parse(value)),
+        "font-style" => set(&mut attrs.font_style, FontStyle::parse(value)),
+        "text-anchor" => set(&mut attrs.text_anchor, TextAnchor::parse(value)),
+        "letter-spacing" => set(&mut attrs.letter_spacing, value.parse().ok()),
+        "word-spacing" => set(&mut attrs.word_spacing, value.parse().ok()),
+        "text-decoration" => set(&mut attrs.text_decoration, TextDecoration::parse(value)),
+        "vector-effect" => set(&mut attrs.vector_effect, Some(value.to_string())),
+        _ => false,
+    }
+}
+
+/// Store `parsed` into `slot`, reporting whether anything was stored.
+fn set<T>(slot: &mut Option<T>, parsed: Option<T>) -> bool {
+    match parsed {
+        Some(v) => {
+            *slot = Some(v);
+            true
+        }
+        None => false,
+    }
+}
+
+/// Extract the id from a `url(#id)` reference, treating `none` as unset.
+fn url_value(value: &str) -> Option<String> {
+    if value.eq_ignore_ascii_case("none") {
+        return None;
+    }
+    Some(value.to_string())
 }
 
 #[cfg(test)]

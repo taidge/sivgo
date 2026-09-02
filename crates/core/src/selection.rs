@@ -198,6 +198,11 @@ pub fn node_transform(doc: &SvgDocument, id: NodeId) -> Transform2D {
         current = doc.parent(node_id);
     }
 
+    // Walking root to leaf, each transform maps into the space established by
+    // everything above it, so it composes *inside* what has accumulated:
+    // `local` applies first, the ancestors' transform second. Folding the
+    // other way yields leaf-first order, which misplaces any element sitting
+    // under a rotated or scaled group.
     chain
         .into_iter()
         .rev()
@@ -205,7 +210,7 @@ pub fn node_transform(doc: &SvgDocument, id: NodeId) -> Transform2D {
             doc.get_node(node_id)
                 .and_then(|node| node.presentation.transform)
         })
-        .fold(Transform2D::IDENTITY, |acc, local| acc.then(&local))
+        .fold(Transform2D::IDENTITY, |acc, local| local.then(&acc))
 }
 
 /// Simple bounding box computation for individual elements.

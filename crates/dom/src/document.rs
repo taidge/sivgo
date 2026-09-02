@@ -42,7 +42,7 @@ impl SvgDocument {
     ///
     /// This is called automatically by the document's mutation methods, but
     /// can also be called manually when performing external mutations (e.g.
-    /// directly modifying a node obtained via [`get_node_mut`]).
+    /// directly modifying a node obtained via [`Self::get_node_mut`]).
     pub fn push_event(&mut self, event: DomEvent) {
         self.events.push(event);
     }
@@ -114,7 +114,7 @@ impl SvgDocument {
     ///
     /// Both nodes must already exist in the document.  If the child was
     /// previously attached to a different parent it is **not** automatically
-    /// detached – call [`remove_node`] first if needed.
+    /// detached – call [`Self::remove_node`] first if needed.
     pub fn append_child(&mut self, parent: NodeId, child: NodeId) {
         // Record child's parent.
         if let Some(child_node) = self.nodes.get_mut(&child) {

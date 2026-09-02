@@ -98,7 +98,7 @@ pub trait RenderBackend {
     // -- clipping / masking --------------------------------------------------
 
     /// Set a clip mask from a path. All subsequent drawing operations are
-    /// restricted to the interior of this path until [`clear_clip`] is called.
+    /// restricted to the interior of this path until [`Self::clear_clip`] is called.
     fn set_clip_path(&mut self, path: &BezPath, fill_rule: FillRule, transform: &Transform2D);
 
     /// Remove the current clip mask.
@@ -130,19 +130,19 @@ pub trait RenderBackend {
     /// Begin rendering into an offscreen buffer of the same dimensions.
     ///
     /// All subsequent drawing operations target the offscreen buffer until
-    /// [`pop_offscreen_with_opacity`] is called.
+    /// [`Self::pop_offscreen_with_opacity`] is called.
     fn push_offscreen(&mut self);
 
     /// Finish offscreen rendering and composite the offscreen buffer onto
     /// the previous surface with the given opacity.
     ///
-    /// This must be paired with a preceding [`push_offscreen`] call.
+    /// This must be paired with a preceding [`Self::push_offscreen`] call.
     fn pop_offscreen_with_opacity(&mut self, opacity: f64);
 
     /// Finish offscreen rendering and composite the offscreen buffer onto
     /// the previous surface using the given SVG blend mode at full opacity.
     ///
-    /// This must be paired with a preceding [`push_offscreen`] call.
+    /// This must be paired with a preceding [`Self::push_offscreen`] call.
     fn pop_offscreen_with_blend(&mut self, blend_mode: BlendMode);
 
     /// Pop the current offscreen buffer and return its raw **premultiplied RGBA**

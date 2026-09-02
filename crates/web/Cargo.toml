@@ -12,11 +12,8 @@ name = "sivgo_web"
 path = "src/lib.rs"
 
 [dependencies]
-sivgo-core = { workspace = true }
 sivgo-dom = { workspace = true }
 sivgo-render = { workspace = true }
-sivgo-io = { workspace = true }
-sivgo-math = { workspace = true }
 salvo = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -27,7 +24,11 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }
-thiserror = { workspace = true }
 png = { workspace = true }
 jsonwebtoken = "9"
 argon2 = "0.5"
+
+[dev-dependencies]
+# `test` brings in salvo's TestClient, used by the route tests.
+salvo = { workspace = true, features = ["test"] }
+tokio = { workspace = true }

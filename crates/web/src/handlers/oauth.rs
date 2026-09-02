@@ -119,7 +119,7 @@ pub async fn oauth_callback(req: &mut Request, depot: &mut Depot, res: &mut Resp
         }
     };
 
-    let token = match oauth_client.exchange_code(provider, &code) {
+    let token = match oauth_client.exchange_code(provider, &code).await {
         Ok(token) => token,
         Err(e) => {
             ApiError::bad_request(format!("Token exchange failed: {e}")).write_to(res);
@@ -127,7 +127,7 @@ pub async fn oauth_callback(req: &mut Request, depot: &mut Depot, res: &mut Resp
         }
     };
 
-    let info = match oauth_client.get_user_info(provider, &token) {
+    let info = match oauth_client.get_user_info(provider, &token).await {
         Ok(info) => info,
         Err(e) => {
             ApiError::bad_request(format!("Userinfo request failed: {e}")).write_to(res);
@@ -151,9 +151,30 @@ pub async fn oauth_callback(req: &mut Request, depot: &mut Depot, res: &mut Resp
         return;
     }
 
-    let user = match store.find_user_by_email(&info.email) {
+    if info.provider_user_id.is_empty() {
+        ApiError::bad_request("OAuth provider did not supply a subject id").write_to(res);
+        return;
+    }
+
+    // Resolve by the provider's own identifier, never by email address. An
+    // address is not proof of ownership: linking on it would let a token for
+    // any matching address take over an existing local account, in either
+    // direction.
+    let provider_name = provider.name();
+    let user = match store.find_user_by_oauth_identity(provider_name, &info.provider_user_id) {
         Some(user) => user,
         None => {
+            if store.find_user_by_email(&info.email).is_some() {
+                // The address already belongs to an account this identity is
+                // not bound to. Linking the two is a deliberate act that has
+                // to be done from an authenticated session, not inferred here.
+                ApiError::conflict(
+                    "an account already exists for this email; sign in and link the provider",
+                )
+                .write_to(res);
+                return;
+            }
+
             // OAuth-only account: store a hash of a random secret as the
             // password so the local password login path can never match.
             let placeholder = hash_password(&uuid::Uuid::new_v4().to_string());
@@ -162,7 +183,9 @@ pub async fn oauth_callback(req: &mut Request, depot: &mut Depot, res: &mut Resp
             } else {
                 info.name.clone()
             };
-            store.create_user(&info.email, &username, &placeholder)
+            let created = store.create_user(&info.email, &username, &placeholder);
+            store.link_oauth_identity(provider_name, &info.provider_user_id, created.id);
+            created
         }
     };
 
@@ -173,7 +196,7 @@ pub async fn oauth_callback(req: &mut Request, depot: &mut Depot, res: &mut Resp
         Some(user.id),
         Some("user"),
         Some(user.id.to_string()),
-        serde_json::json!({ "provider": provider.name() }),
+        serde_json::json!({ "provider": provider_name }),
     );
     res.render(Json(AuthResponse {
         token: session_token,

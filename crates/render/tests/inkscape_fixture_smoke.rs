@@ -31,7 +31,9 @@ fn render_fixture(svg: &str) -> Vec<u8> {
 
 fn non_white_count(pixels: &[u8]) -> usize {
     pixels
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|px| px[0] != 255 || px[1] != 255 || px[2] != 255)
         .count()
 }

@@ -16,6 +16,21 @@ pub use sivgo_trace::{
 
 /// Trace an RGBA8 bitmap into an [`SvgDocument`] of black filled paths
 /// (monochrome / single-layer trace).
+/// Decode an encoded bitmap and trace it into vector paths.
+///
+/// Takes the file bytes rather than raw pixels so callers do not need an
+/// image-decoding dependency of their own.
+pub fn trace_bitmap_file(
+    data: &[u8],
+    options: &TraceOptions,
+) -> Result<SvgDocument, crate::IoError> {
+    let image = image::load_from_memory(data)
+        .map_err(|e| crate::IoError::Render(format!("Failed to decode image: {e}")))?;
+    let rgba = image.to_rgba8();
+    let (width, height) = rgba.dimensions();
+    Ok(trace_bitmap(rgba.as_raw(), width, height, options))
+}
+
 pub fn trace_bitmap(rgba: &[u8], width: u32, height: u32, options: &TraceOptions) -> SvgDocument {
     let paths = sivgo_trace::trace_rgba(rgba, width, height, options);
 

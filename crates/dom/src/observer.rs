@@ -1,7 +1,7 @@
 ﻿//! DOM observer/event system for the SVG document.
 //!
 //! Provides a [`DomEvent`] enum describing mutations to the document tree and
-//! a simple event-bus pattern on [`SvgDocument`] that accumulates events which
+//! a simple event-bus pattern on [`crate::SvgDocument`] that accumulates events which
 //! can be drained by consumers.  This avoids borrow-checker issues that arise
 //! with trait-object observers while still supporting all the same use cases
 //! (style invalidation, bounding-box cache invalidation, UI updates, etc.).

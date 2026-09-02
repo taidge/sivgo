@@ -1664,6 +1664,63 @@ impl EditorEngine {
         }
     }
 
+    /// Whether the document has unsaved changes.
+    pub fn is_dirty(&self) -> bool {
+        self.history.is_dirty()
+    }
+
+    /// Record that the document has just been saved or loaded from disk.
+    pub fn mark_saved(&mut self) {
+        self.history.mark_saved();
+    }
+
+    /// Insert every top-level element of `source` into this document.
+    ///
+    /// Used by the Import command to merge another SVG file, or the output of
+    /// the bitmap tracer, into the open drawing. Returns how many elements
+    /// were added; the whole import is one undoable step.
+    pub fn import_document(&mut self, source: &SvgDocument) -> usize {
+        let Some(source_root) = source.root() else {
+            return 0;
+        };
+        let Some(parent) = self.insertion_parent() else {
+            return 0;
+        };
+
+        let mut commands: Vec<Box<dyn Command>> = Vec::new();
+        for child_id in source.children(source_root).to_vec() {
+            let Some(child) = source.get_node(child_id) else {
+                continue;
+            };
+            // `<defs>` and other non-rendering containers come along with the
+            // elements that reference them.
+            let presentation = child.presentation.clone();
+            if source.children(child_id).is_empty() {
+                commands.push(Box::new(AddNodeCommand::new(
+                    parent,
+                    child.element.clone(),
+                    presentation,
+                    None,
+                )));
+            } else {
+                commands.push(Box::new(PasteSubtreeCommand::from_parsed(
+                    source,
+                    child_id,
+                    parent,
+                    presentation,
+                )));
+            }
+        }
+
+        let count = commands.len();
+        if count > 0 {
+            self.selection.clear();
+            self.execute(Box::new(CompoundCommand::new("Import", commands)));
+            self.events.emit(EditorEvent::SelectionChanged);
+        }
+        count
+    }
+
     /// Copy presentation attributes (fill, stroke, opacity, etc.) from the
     /// clipboard's first element to all currently selected elements.
     pub fn paste_style(&mut self) {
@@ -2999,6 +3056,46 @@ impl EditorEngine {
         true
     }
 
+    /// Set the corner radius on every selected rectangle.
+    ///
+    /// Returns the number of rectangles changed. Both `rx` and `ry` are set so
+    /// the corners stay circular; a radius of zero restores square corners.
+    pub fn set_selected_corner_radius(&mut self, radius: f64) -> usize {
+        let radius = radius.max(0.0);
+        let ids: Vec<NodeId> = self.selection.selected().to_vec();
+
+        let mut commands: Vec<Box<dyn Command>> = Vec::new();
+        for id in ids {
+            let Some(node) = self.document.get_node(id) else {
+                continue;
+            };
+            let SvgElement::Rect(attrs) = &node.element else {
+                continue;
+            };
+            let old_element = node.element.clone();
+            let mut new_attrs = attrs.clone();
+            new_attrs.rx = SvgLength::px(radius);
+            new_attrs.ry = SvgLength::px(radius);
+            let presentation = node.presentation.clone();
+            commands.push(Box::new(ModifyElementCommand::new(
+                id,
+                old_element,
+                SvgElement::Rect(new_attrs),
+                presentation.clone(),
+                presentation,
+            )));
+        }
+
+        let changed = commands.len();
+        if changed > 0 {
+            self.execute(Box::new(CompoundCommand::new(
+                "Set Corner Radius",
+                commands,
+            )));
+        }
+        changed
+    }
+
     pub fn set_selected_text_font_family(&mut self, family: String) -> bool {
         let family = if family.trim().is_empty() {
             "sans-serif".to_string()
@@ -3530,6 +3627,77 @@ impl EditorEngine {
             Some(source) => format!("sivgo:{kind}(amount={amount};source={source})"),
             None => format!("sivgo:{kind}(amount={amount})"),
         }
+    }
+
+    /// Format a parameter value the way the panel shows it: trimmed of
+    /// trailing zeros so `5.0` reads as `5`.
+    fn format_lpe_value(value: f64) -> String {
+        let text = format!("{value}");
+        if text.contains('.') {
+            text.trim_end_matches('0').trim_end_matches('.').to_string()
+        } else {
+            text
+        }
+    }
+
+    /// Every live path effect the engine can apply, with a display label.
+    ///
+    /// This is the single source of truth for the effect list. The panel used
+    /// to keep its own shorter enum and silently drop any stack entry whose
+    /// kind it did not recognise, which hid most of the effects from the user
+    /// entirely and made them impossible to remove once applied.
+    pub fn available_lpe_kinds() -> &'static [(&'static str, &'static str)] {
+        &[
+            ("bend_path", "Bend Path"),
+            ("bspline", "B-Spline"),
+            ("copy_rotate", "Copy Rotate"),
+            ("dashed_stroke", "Dashed Stroke"),
+            ("envelope", "Envelope Deformation"),
+            ("extrude", "Extrude"),
+            ("fillet", "Fillet / Chamfer"),
+            ("gears", "Gears"),
+            ("hatching", "Hatching"),
+            ("interpolate", "Interpolate"),
+            ("knot", "Knot"),
+            ("lattice", "Lattice Deformation"),
+            ("measure", "Measure Segments"),
+            ("mirror", "Mirror Symmetry"),
+            ("offset", "Offset"),
+            ("pattern_along_path", "Pattern Along Path"),
+            ("perspective_envelope", "Perspective Envelope"),
+            ("power_stroke", "Power Stroke"),
+            ("roughen", "Roughen"),
+            ("simplify", "Simplify"),
+            ("sketch", "Sketch"),
+            ("slice", "Slice"),
+            ("spiro", "Spiro Spline"),
+            ("taper_stroke", "Taper Stroke"),
+            ("tiling", "Tiling"),
+            ("von_koch", "Von Koch Fractal"),
+        ]
+    }
+
+    /// Display label for a canonical effect kind.
+    pub fn lpe_kind_label(kind: &str) -> Option<&'static str> {
+        let canonical = Self::normalize_lpe_kind(kind)?;
+        Self::available_lpe_kinds()
+            .iter()
+            .find(|(key, _)| *key == canonical)
+            .map(|(_, label)| *label)
+    }
+
+    /// Default parameters for a kind, as name/value string pairs.
+    ///
+    /// Mirrors what the engine will store, so a panel can show the same rows
+    /// the effect will actually use.
+    pub fn lpe_kind_default_params(kind: &str) -> Vec<(String, String)> {
+        let Some(canonical) = Self::normalize_lpe_kind(kind) else {
+            return Vec::new();
+        };
+        Self::default_lpe_params(canonical)
+            .into_iter()
+            .map(|param| (param.name, Self::format_lpe_value(param.value)))
+            .collect()
     }
 
     pub(crate) fn normalize_lpe_kind(kind: &str) -> Option<&'static str> {
@@ -4658,9 +4826,11 @@ impl EditorEngine {
     pub fn flip_horizontal(&mut self) {
         self.apply_transform_to_selected("Flip Horizontal", |bb| {
             let cx = (bb.x0 + bb.x1) / 2.0;
-            sivgo_math::Transform2D::translate(cx, 0.0)
+            // `then` applies the receiver first: move the centre to the
+            // origin, mirror there, then move it back.
+            sivgo_math::Transform2D::translate(-cx, 0.0)
                 .then(&sivgo_math::Transform2D::scale_xy(-1.0, 1.0))
-                .then(&sivgo_math::Transform2D::translate(-cx, 0.0))
+                .then(&sivgo_math::Transform2D::translate(cx, 0.0))
         });
     }
 
@@ -4668,9 +4838,9 @@ impl EditorEngine {
     pub fn flip_vertical(&mut self) {
         self.apply_transform_to_selected("Flip Vertical", |bb| {
             let cy = (bb.y0 + bb.y1) / 2.0;
-            sivgo_math::Transform2D::translate(0.0, cy)
+            sivgo_math::Transform2D::translate(0.0, -cy)
                 .then(&sivgo_math::Transform2D::scale_xy(1.0, -1.0))
-                .then(&sivgo_math::Transform2D::translate(0.0, -cy))
+                .then(&sivgo_math::Transform2D::translate(0.0, cy))
         });
     }
 
@@ -4680,9 +4850,7 @@ impl EditorEngine {
             let cx = (bb.x0 + bb.x1) / 2.0;
             let cy = (bb.y0 + bb.y1) / 2.0;
             let radians = degrees.to_radians();
-            sivgo_math::Transform2D::translate(cx, cy)
-                .then(&sivgo_math::Transform2D::rotate(radians))
-                .then(&sivgo_math::Transform2D::translate(-cx, -cy))
+            sivgo_math::Transform2D::rotate_about(radians, sivgo_math::Point::new(cx, cy))
         });
     }
 
@@ -4700,9 +4868,9 @@ impl EditorEngine {
         self.apply_transform_to_selected("Scale", |bb| {
             let cx = (bb.x0 + bb.x1) / 2.0;
             let cy = (bb.y0 + bb.y1) / 2.0;
-            sivgo_math::Transform2D::translate(cx, cy)
+            sivgo_math::Transform2D::translate(-cx, -cy)
                 .then(&sivgo_math::Transform2D::scale_xy(sx, sy))
-                .then(&sivgo_math::Transform2D::translate(-cx, -cy))
+                .then(&sivgo_math::Transform2D::translate(cx, cy))
         });
     }
 
@@ -4722,14 +4890,14 @@ impl EditorEngine {
         self.apply_transform_to_selected("Skew", |bb| {
             let cx = (bb.x0 + bb.x1) / 2.0;
             let cy = (bb.y0 + bb.y1) / 2.0;
-            sivgo_math::Transform2D::translate(cx, cy)
+            sivgo_math::Transform2D::translate(-cx, -cy)
                 .then(&sivgo_math::Transform2D::skew_x(
                     skew_x_degrees.to_radians(),
                 ))
                 .then(&sivgo_math::Transform2D::skew_y(
                     skew_y_degrees.to_radians(),
                 ))
-                .then(&sivgo_math::Transform2D::translate(-cx, -cy))
+                .then(&sivgo_math::Transform2D::translate(cx, cy))
         });
     }
 

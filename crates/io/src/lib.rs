@@ -22,12 +22,12 @@ pub mod recent_files;
 pub mod trace_import;
 
 // Re-export the main types/functions from the new export modules.
-pub use dxf::export_dxf;
-pub use eps::export_eps;
+pub use dxf::{export_dxf, render_dxf, DxfExportOptions};
+pub use eps::{export_eps, render_eps, EpsExportOptions};
 pub use multi_page_pdf::{MultiPagePdfExporter, PdfMetadata, PdfPage};
 pub use pdf::{export_pdf, export_pdf_multipage, PdfExportOptions};
 pub use pdf_import::{import_pdf, PdfImportOptions};
-pub use trace_import::{trace_bitmap, TraceOptions};
+pub use trace_import::{trace_bitmap, trace_bitmap_file, TraceOptions};
 
 use std::fs;
 use std::io::BufWriter;
@@ -329,7 +329,7 @@ pub fn export_png(
     //    PNG stores straight (non-premultiplied) alpha, but the renderer
     //    produces premultiplied RGBA.  We must undo the premultiplication.
     let mut pixels = premultiplied;
-    for chunk in pixels.chunks_exact_mut(4) {
+    for chunk in pixels.as_chunks_mut::<4>().0 {
         let a = chunk[3] as u16;
         if a == 0 {
             chunk[0] = 0;
@@ -399,7 +399,7 @@ pub fn export_jpeg(
     //    JPEG does not support transparency, so we composite against white.
     let pixel_count = (width as usize) * (height as usize);
     let mut rgb = Vec::with_capacity(pixel_count * 3);
-    for chunk in premultiplied.chunks_exact(4) {
+    for chunk in premultiplied.as_chunks::<4>().0 {
         let a = chunk[3] as f64 / 255.0;
         // Premultiplied values: divide by alpha to get straight, then composite on white.
         // composite = src_straight * alpha + white * (1 - alpha)
@@ -456,7 +456,7 @@ pub fn export_webp(
     // 2. Convert premultiplied RGBA to straight RGBA.
     let pixel_count = (width as usize) * (height as usize);
     let mut rgba = Vec::with_capacity(pixel_count * 4);
-    for chunk in premultiplied.chunks_exact(4) {
+    for chunk in premultiplied.as_chunks::<4>().0 {
         let a = chunk[3];
         if a == 0 {
             rgba.extend_from_slice(&[255, 255, 255, 255]);
@@ -859,7 +859,7 @@ fn composite_background(premultiplied: &[u8], bg: [u8; 4]) -> Vec<u8> {
     let bg_b = bg[2] as f64 / 255.0;
     let bg_a = bg[3] as f64 / 255.0;
 
-    for chunk in premultiplied.chunks_exact(4) {
+    for chunk in premultiplied.as_chunks::<4>().0 {
         // Source is premultiplied.
         let sr = chunk[0] as f64 / 255.0;
         let sg = chunk[1] as f64 / 255.0;
@@ -893,7 +893,7 @@ fn composite_background(premultiplied: &[u8], bg: [u8; 4]) -> Vec<u8> {
 /// Convert premultiplied RGBA to straight RGBA (for PNG/WebP).
 fn premultiplied_to_straight_rgba(premultiplied: &[u8]) -> Vec<u8> {
     let mut pixels = premultiplied.to_vec();
-    for chunk in pixels.chunks_exact_mut(4) {
+    for chunk in pixels.as_chunks_mut::<4>().0 {
         let a = chunk[3] as u16;
         if a == 0 {
             chunk[0] = 0;
@@ -912,7 +912,7 @@ fn premultiplied_to_straight_rgba(premultiplied: &[u8]) -> Vec<u8> {
 fn premultiplied_to_rgb_on_white(premultiplied: &[u8]) -> Vec<u8> {
     let pixel_count = premultiplied.len() / 4;
     let mut rgb = Vec::with_capacity(pixel_count * 3);
-    for chunk in premultiplied.chunks_exact(4) {
+    for chunk in premultiplied.as_chunks::<4>().0 {
         let a = chunk[3] as f64 / 255.0;
         let r = (chunk[0] as f64 + 255.0 * (1.0 - a)).round().min(255.0) as u8;
         let g = (chunk[1] as f64 + 255.0 * (1.0 - a)).round().min(255.0) as u8;
@@ -1038,13 +1038,19 @@ fn batch_export_one(doc: &sivgo_dom::SvgDocument, item: &BatchExportItem) -> Res
         ExportFormat::Eps => {
             let mut doc_clone = doc.clone();
             apply_area_to_svg(&mut doc_clone, &item.area)?;
-            let (_, _, width, height) = page_area(&doc_clone)?;
-            fs::write(path, export_eps(&doc_clone, width, height).as_bytes())?;
+            // The exporter derives the page box from the document itself.
+            fs::write(
+                path,
+                render_eps(&doc_clone, &EpsExportOptions::default()).as_bytes(),
+            )?;
         }
         ExportFormat::Dxf => {
             let mut doc_clone = doc.clone();
             apply_area_to_svg(&mut doc_clone, &item.area)?;
-            fs::write(path, export_dxf(&doc_clone).as_bytes())?;
+            fs::write(
+                path,
+                render_dxf(&doc_clone, &DxfExportOptions::default()).as_bytes(),
+            )?;
         }
         ExportFormat::Png => {
             let config = ExportConfig {
@@ -1080,7 +1086,7 @@ fn batch_export_one(doc: &sivgo_dom::SvgDocument, item: &BatchExportItem) -> Res
 
             // Composite on white (WebP lossy has no transparency).
             let mut rgba_white = Vec::with_capacity(straight.len());
-            for chunk in straight.chunks_exact(4) {
+            for chunk in straight.as_chunks::<4>().0 {
                 let a = chunk[3] as f64 / 255.0;
                 let r = (chunk[0] as f64 * a + 255.0 * (1.0 - a)).round() as u8;
                 let g = (chunk[1] as f64 * a + 255.0 * (1.0 - a)).round() as u8;

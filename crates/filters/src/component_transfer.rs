@@ -8,16 +8,16 @@ pub enum TransferFunction {
     /// Output = Input (no change).
     Identity,
     /// Linear interpolation between table values.
-    /// The input range [0,1] is divided into `n` equal segments where `n = table.len() - 1`.
+    /// The input range \[0,1\] is divided into `n` equal segments where `n = table.len() - 1`.
     /// For an input value `v`, find the segment it falls in and linearly interpolate.
     Table { table: Vec<f32> },
     /// Step function from table values.
-    /// The input range [0,1] is divided into `n` equal segments where `n = table.len()`.
+    /// The input range \[0,1\] is divided into `n` equal segments where `n = table.len()`.
     /// For an input value `v`, select the table entry for the segment it falls in.
     Discrete { table: Vec<f32> },
-    /// Output = slope * input + intercept, clamped to [0,1].
+    /// Output = slope * input + intercept, clamped to \[0,1\].
     Linear { slope: f32, intercept: f32 },
-    /// Output = amplitude * input^exponent + offset, clamped to [0,1].
+    /// Output = amplitude * input^exponent + offset, clamped to \[0,1\].
     Gamma {
         amplitude: f32,
         exponent: f32,
@@ -26,7 +26,7 @@ pub enum TransferFunction {
 }
 
 impl TransferFunction {
-    /// Apply the transfer function to a single channel value in [0,1].
+    /// Apply the transfer function to a single channel value in \[0,1\].
     pub fn apply(&self, v: f32) -> f32 {
         let v = v.clamp(0.0, 1.0);
         let result = match self {

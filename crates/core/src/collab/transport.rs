@@ -3,6 +3,7 @@
 //! Provides protocol messages and an in-memory room hub that behaves like a
 //! deterministic WebSocket broker in tests and local collaboration sessions.
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use super::crdt::CrdtOp;
@@ -12,7 +13,7 @@ use super::crdt::CrdtOp;
 // ---------------------------------------------------------------------------
 
 /// Messages exchanged between collaborating peers over the sync transport.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum SyncMessage {
     /// Request to join a collaboration room.
     Join { room_id: String, user_id: String },

@@ -7,7 +7,11 @@ edition.workspace = true
 sivgo-math = { workspace = true }
 sivgo-dom = { workspace = true }
 sivgo-path-ops = { workspace = true }
-sivgo-render = { workspace = true }
-sivgo-style = { workspace = true }
 sivgo-text = { workspace = true }
+# Collaboration operations have to cross a network to be useful.
+serde = { workspace = true }
 log = { workspace = true }
+
+[dev-dependencies]
+# Used by the collaboration tests to check operations are wire-ready.
+serde_json = { workspace = true }

@@ -55,7 +55,7 @@ impl SvgLength {
     /// Resolve to user-space pixels (96 dpi baseline).
     ///
     /// For `em`, `ex`, and `%` units, this returns the raw value since no
-    /// context is available. Use [`resolve_px`] for context-aware resolution.
+    /// context is available. Use [`Self::resolve_px`] for context-aware resolution.
     pub fn to_px(&self) -> f64 {
         match self.unit {
             LengthUnit::None | LengthUnit::Px => self.value,
@@ -222,6 +222,12 @@ impl Color {
     /// Parse from hex: `#rrggbb`, `#rgb`, `#rrggbbaa`, `#rgba`.
     pub fn from_hex(s: &str) -> Option<Self> {
         let s = s.strip_prefix('#')?;
+        // The arms below dispatch on the byte length and then slice by byte
+        // offsets, which would panic on a multi-byte character boundary.
+        // Hex digits are ASCII by definition, so reject anything else early.
+        if !s.is_ascii() {
+            return None;
+        }
         match s.len() {
             3 => {
                 let r = u8::from_str_radix(&s[0..1], 16).ok()?;

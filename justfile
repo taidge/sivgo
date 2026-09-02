@@ -41,7 +41,7 @@ test-verbose:
 
 # Run clippy on the whole workspace
 clippy:
-    cargo clippy --workspace -- -D warnings
+    cargo clippy --workspace --all-targets -- -D warnings
 
 # Check formatting
 fmt-check:
@@ -53,6 +53,10 @@ fmt:
 
 # Full lint pass (clippy + format check)
 lint: clippy fmt-check
+
+# Check Cargo.lock against the RustSec advisory database
+audit:
+    cargo audit
 
 # ─── Run ──────────────────────────────────────────────────────────────
 

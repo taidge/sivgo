@@ -1,28 +1,72 @@
-﻿//! EPS (Encapsulated PostScript) export for SVG documents.
+//! EPS (Encapsulated PostScript) export for SVG documents (10.9).
 //!
 //! Generates EPS level 3 files with proper headers, bounding box, and
 //! PostScript path operators for SVG shapes.
 
+use std::path::Path;
+
 use sivgo_dom::{Color, NodeId, Paint, PresentationAttrs, SvgDocument, SvgElement};
 use sivgo_math::PathSegment;
 
+use crate::IoError;
+
 // ---------------------------------------------------------------------------
-// Public API
+// Public API types
 // ---------------------------------------------------------------------------
 
-/// Export an SVG document to Encapsulated PostScript (EPS) format.
+/// Options controlling EPS export.
+#[derive(Debug, Clone)]
+pub struct EpsExportOptions {
+    /// Resolution in dots per inch (used for coordinate scaling).
+    pub dpi: f64,
+    /// Whether to include a TIFF/EPSI preview image (reserved for future use).
+    pub include_preview: bool,
+}
+
+impl Default for EpsExportOptions {
+    fn default() -> Self {
+        Self {
+            dpi: 96.0,
+            include_preview: false,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Public export function
+// ---------------------------------------------------------------------------
+
+/// Export an SVG document to Encapsulated PostScript (EPS) format and write
+/// to `path`.
 ///
 /// The output conforms to EPSF-3.0 with a `%%BoundingBox` comment.
 /// Shapes are rendered using PostScript path operators with support for
-/// solid fills (`setrgbcolor`, `fill`), strokes (`setlinewidth`, `stroke`),
-/// and affine transforms (`concat`).
+/// solid fills, strokes, and affine transforms.
 ///
 /// # Arguments
 ///
-/// * `doc`    - The SVG document to export.
-/// * `width`  - Bounding box width in PostScript points.
-/// * `height` - Bounding box height in PostScript points.
-pub fn export_eps(doc: &SvgDocument, width: f64, height: f64) -> String {
+/// * `doc`     - The SVG document to export.
+/// * `path`    - Output file path.
+/// * `options` - Export options (DPI, preview).
+///
+/// # Errors
+///
+/// Returns [`IoError::Io`] if the file cannot be written.
+pub fn export_eps(
+    doc: &SvgDocument,
+    path: &Path,
+    options: &EpsExportOptions,
+) -> Result<(), IoError> {
+    let eps = render_eps(doc, options);
+    std::fs::write(path, eps.as_bytes())?;
+    Ok(())
+}
+
+/// Render an SVG document to an EPS string (without writing to disk).
+pub fn render_eps(doc: &SvgDocument, options: &EpsExportOptions) -> String {
+    // Determine bounding box from the SVG root element.
+    let (width, height) = get_svg_dimensions(doc, options.dpi);
+
     let mut out = String::new();
 
     // EPS header.
@@ -32,8 +76,18 @@ pub fn export_eps(doc: &SvgDocument, width: f64, height: f64) -> String {
         width.ceil() as i64,
         height.ceil() as i64
     ));
+    out.push_str(&format!(
+        "%%HiResBoundingBox: 0 0 {:.4} {:.4}\n",
+        width, height
+    ));
     out.push_str("%%Creator: sivgo-io\n");
+    out.push_str("%%DocumentData: Clean7Bit\n");
     out.push_str("%%EndComments\n\n");
+
+    if options.include_preview {
+        out.push_str("%%BeginPreview: (preview not yet implemented)\n");
+        out.push_str("%%EndPreview\n\n");
+    }
 
     // Flip coordinate system: SVG origin is top-left, PS is bottom-left.
     out.push_str(&format!("0 {} translate\n", fmt_f64(height)));
@@ -48,6 +102,20 @@ pub fn export_eps(doc: &SvgDocument, width: f64, height: f64) -> String {
     out.push_str("%%EOF\n");
 
     out
+}
+
+/// Get the SVG document dimensions in points, falling back to defaults.
+fn get_svg_dimensions(doc: &SvgDocument, _dpi: f64) -> (f64, f64) {
+    if let Some(root_id) = doc.root() {
+        if let Some(root) = doc.get_node(root_id) {
+            if let SvgElement::Svg(a) = &root.element {
+                let w = a.width.map(|l| l.to_px()).unwrap_or(100.0);
+                let h = a.height.map(|l| l.to_px()).unwrap_or(100.0);
+                return (w, h);
+            }
+        }
+    }
+    (100.0, 100.0)
 }
 
 // ---------------------------------------------------------------------------
@@ -83,10 +151,10 @@ fn render_node(doc: &SvgDocument, id: NodeId, out: &mut String) {
 
     match &node.element {
         SvgElement::Rect(a) => {
-            let x = a.x.value;
-            let y = a.y.value;
-            let w = a.width.value;
-            let h = a.height.value;
+            let x = a.x.to_px();
+            let y = a.y.to_px();
+            let w = a.width.to_px();
+            let h = a.height.to_px();
             if w > 0.0 && h > 0.0 {
                 out.push_str("newpath\n");
                 out.push_str(&format!("{} {} moveto\n", fmt_f64(x), fmt_f64(y)));
@@ -98,9 +166,9 @@ fn render_node(doc: &SvgDocument, id: NodeId, out: &mut String) {
             }
         }
         SvgElement::Circle(a) => {
-            let cx = a.cx.value;
-            let cy = a.cy.value;
-            let r = a.r.value;
+            let cx = a.cx.to_px();
+            let cy = a.cy.to_px();
+            let r = a.r.to_px();
             if r > 0.0 {
                 out.push_str("newpath\n");
                 emit_ellipse_path(cx, cy, r, r, out);
@@ -108,10 +176,10 @@ fn render_node(doc: &SvgDocument, id: NodeId, out: &mut String) {
             }
         }
         SvgElement::Ellipse(a) => {
-            let cx = a.cx.value;
-            let cy = a.cy.value;
-            let rx = a.rx.value;
-            let ry = a.ry.value;
+            let cx = a.cx.to_px();
+            let cy = a.cy.to_px();
+            let rx = a.rx.to_px();
+            let ry = a.ry.to_px();
             if rx > 0.0 && ry > 0.0 {
                 out.push_str("newpath\n");
                 emit_ellipse_path(cx, cy, rx, ry, out);
@@ -122,13 +190,13 @@ fn render_node(doc: &SvgDocument, id: NodeId, out: &mut String) {
             out.push_str("newpath\n");
             out.push_str(&format!(
                 "{} {} moveto\n",
-                fmt_f64(a.x1.value),
-                fmt_f64(a.y1.value)
+                fmt_f64(a.x1.to_px()),
+                fmt_f64(a.y1.to_px())
             ));
             out.push_str(&format!(
                 "{} {} lineto\n",
-                fmt_f64(a.x2.value),
-                fmt_f64(a.y2.value)
+                fmt_f64(a.x2.to_px()),
+                fmt_f64(a.y2.to_px())
             ));
             apply_stroke_only(pres, out);
         }
@@ -285,7 +353,6 @@ fn apply_fill_stroke(pres: &PresentationAttrs, out: &mut String) {
     let has_stroke = matches!(&pres.stroke, Some(Paint::Color(_)));
 
     if has_fill && has_stroke {
-        // Fill, then re-establish path for stroke.
         out.push_str("gsave fill grestore\n");
         apply_stroke_only(pres, out);
     } else if has_fill {
@@ -293,7 +360,6 @@ fn apply_fill_stroke(pres: &PresentationAttrs, out: &mut String) {
     } else if has_stroke {
         apply_stroke_only(pres, out);
     }
-    // else: no paint; path is discarded.
 }
 
 /// Set stroke state and stroke the current path.
@@ -302,7 +368,7 @@ fn apply_stroke_only(pres: &PresentationAttrs, out: &mut String) {
         set_color(c, out);
     }
     if let Some(ref sw) = pres.stroke_width {
-        out.push_str(&format!("{} setlinewidth\n", fmt_f64(sw.value)));
+        out.push_str(&format!("{} setlinewidth\n", fmt_f64(sw.to_px())));
     }
     out.push_str("stroke\n");
 }
@@ -364,7 +430,7 @@ mod tests {
     #[test]
     fn eps_header_and_bounding_box() {
         let doc = test_doc();
-        let eps = export_eps(&doc, 100.0, 100.0);
+        let eps = render_eps(&doc, &EpsExportOptions::default());
 
         assert!(
             eps.starts_with("%!PS-Adobe-3.0 EPSF-3.0"),
@@ -380,7 +446,7 @@ mod tests {
     #[test]
     fn eps_contains_rect_operators() {
         let doc = test_doc();
-        let eps = export_eps(&doc, 100.0, 100.0);
+        let eps = render_eps(&doc, &EpsExportOptions::default());
 
         assert!(eps.contains("moveto"), "EPS should contain moveto");
         assert!(eps.contains("lineto"), "EPS should contain lineto");
@@ -391,9 +457,8 @@ mod tests {
     #[test]
     fn eps_contains_color() {
         let doc = test_doc();
-        let eps = export_eps(&doc, 100.0, 100.0);
+        let eps = render_eps(&doc, &EpsExportOptions::default());
 
-        // Red fill: 1 0 0 setrgbcolor
         assert!(
             eps.contains("1 0 0 setrgbcolor"),
             "EPS should set red color, got:\n{}",
@@ -419,8 +484,62 @@ mod tests {
         }
         doc.append_child(svg_id, line_id);
 
-        let eps = export_eps(&doc, 200.0, 200.0);
+        let eps = render_eps(&doc, &EpsExportOptions::default());
         assert!(eps.contains("setlinewidth"), "EPS should set line width");
         assert!(eps.contains("stroke"), "EPS should contain stroke operator");
+    }
+
+    #[test]
+    fn eps_write_to_file() {
+        let doc = test_doc();
+        let dir = std::env::temp_dir().join("sivgo_eps_export_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("test.eps");
+
+        export_eps(&doc, &file, &EpsExportOptions::default()).unwrap();
+        let data = std::fs::read_to_string(&file).unwrap();
+        assert!(data.starts_with("%!PS-Adobe-3.0 EPSF-3.0"));
+
+        let _ = std::fs::remove_file(&file);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn eps_path_operators() {
+        let mut doc = SvgDocument::new();
+        let svg_id = doc.add_node(SvgElement::Svg(SvgSvgAttrs::default()));
+        doc.set_root(svg_id);
+
+        let path_data =
+            sivgo_math::BezPath::from_svg_path("M 10 20 L 30 40 C 50 60 70 80 90 100 Z").unwrap();
+        let path_id = doc.add_node(SvgElement::Path(PathAttrs {
+            d: path_data,
+            ..PathAttrs::default()
+        }));
+        doc.append_child(svg_id, path_id);
+
+        let eps = render_eps(&doc, &EpsExportOptions::default());
+
+        assert!(eps.contains("moveto"), "EPS should contain moveto for path");
+        assert!(eps.contains("lineto"), "EPS should contain lineto for path");
+        assert!(
+            eps.contains("curveto"),
+            "EPS should contain curveto for path"
+        );
+        assert!(
+            eps.contains("closepath"),
+            "EPS should contain closepath for path"
+        );
+    }
+
+    #[test]
+    fn eps_hi_res_bounding_box() {
+        let doc = test_doc();
+        let eps = render_eps(&doc, &EpsExportOptions::default());
+
+        assert!(
+            eps.contains("%%HiResBoundingBox:"),
+            "EPS should contain HiResBoundingBox"
+        );
     }
 }

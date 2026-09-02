@@ -1,0 +1,11 @@
+# quick-xml is only pulled in by wayland-scanner as a build dependency. The
+# proc macro parses the Wayland protocol XML shipped by the dependency, not
+# application or network input. wayland-scanner 0.31.10 still constrains
+# quick-xml to 0.39, so no compatible patched release is currently available.
+# Remove these exceptions as soon as wayland-scanner accepts quick-xml >=0.41.
+[advisories]
+ignore = [
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
+]
+

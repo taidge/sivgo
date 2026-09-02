@@ -1,4 +1,4 @@
-﻿//! Parse SVG XML into an [`SvgDocument`].
+//! Parse SVG XML into an [`SvgDocument`].
 
 use std::collections::HashMap;
 
@@ -10,8 +10,64 @@ use crate::error::DomError;
 use crate::node::*;
 use crate::types::*;
 
+/// Maximum element nesting depth accepted by the parser.
+///
+/// Nesting depth is attacker controlled, and the underlying XML parser
+/// recurses once per level: a few hundred levels of `<g>` are enough to
+/// exhaust the thread's stack, which aborts the process instead of returning
+/// an error. Real documents stay far below this limit.
+pub const MAX_PARSE_DEPTH: u32 = 256;
+
+/// Nesting depth that is safe to parse on whatever stack the caller happens to
+/// have. Anything deeper is parsed on a thread with a stack we control.
+///
+/// The XML parser's frame size varies a lot with the build profile — an
+/// unoptimized build uses well over ten times the stack of an optimized one —
+/// so this is deliberately far below the depth an optimized build could
+/// manage. Almost every real document is shallower than this and never leaves
+/// the caller's thread.
+const STACK_SAFE_PARSE_DEPTH: u32 = 48;
+
+/// Stack given to the parsing thread for documents deeper than
+/// [`STACK_SAFE_PARSE_DEPTH`]. Enough for [`MAX_PARSE_DEPTH`] levels even in
+/// an unoptimized build.
+const DEEP_PARSE_STACK_BYTES: usize = 128 * 1024 * 1024;
+
 /// Parse an SVG XML string into an [`SvgDocument`].
+///
+/// Returns an error rather than aborting for deeply nested input; see
+/// [`MAX_PARSE_DEPTH`].
 pub fn parse_svg(xml: &str) -> Result<SvgDocument, DomError> {
+    // Measured on the raw text before handing it to the XML parser, because a
+    // stack overflow inside that parser aborts the process and cannot be
+    // caught afterwards.
+    let depth = max_element_depth(xml);
+    if depth > MAX_PARSE_DEPTH {
+        return Err(DomError::InvalidDocument(format!(
+            "element nesting is {depth} levels deep, limit is {MAX_PARSE_DEPTH}"
+        )));
+    }
+
+    if depth <= STACK_SAFE_PARSE_DEPTH {
+        return parse_svg_on_current_stack(xml);
+    }
+
+    // Deep but within the limit: give the parse a stack big enough that the
+    // caller's own stack size stops mattering.
+    std::thread::scope(|scope| {
+        let handle = std::thread::Builder::new()
+            .stack_size(DEEP_PARSE_STACK_BYTES)
+            .spawn_scoped(scope, || parse_svg_on_current_stack(xml))
+            .map_err(|e| {
+                DomError::InvalidDocument(format!("could not start parsing thread: {e}"))
+            })?;
+        handle
+            .join()
+            .map_err(|_| DomError::InvalidDocument("parsing thread panicked".to_string()))?
+    })
+}
+
+fn parse_svg_on_current_stack(xml: &str) -> Result<SvgDocument, DomError> {
     let xml_doc = XmlDocument::parse(xml)?;
     let mut doc = SvgDocument::new();
 
@@ -22,8 +78,136 @@ pub fn parse_svg(xml: &str) -> Result<SvgDocument, DomError> {
     Ok(doc)
 }
 
-/// Recursively parse an XML element into the document.
-fn parse_element(xml_node: &XmlNode, doc: &mut SvgDocument) -> Result<NodeId, DomError> {
+/// Scan raw XML text and return the deepest element nesting it reaches.
+///
+/// This is a lexical pre-pass, not a parse: it only needs an upper bound that
+/// is cheap to compute and never underestimates. Comments, CDATA sections,
+/// processing instructions and doctype declarations are skipped, and `<`/`>`
+/// inside attribute values are ignored so they cannot inflate the count.
+fn max_element_depth(xml: &str) -> u32 {
+    let bytes = xml.as_bytes();
+    let mut i = 0usize;
+    let mut depth: u32 = 0;
+    let mut max_depth: u32 = 0;
+
+    while i < bytes.len() {
+        if bytes[i] != b'<' {
+            i += 1;
+            continue;
+        }
+
+        let rest = &bytes[i..];
+        if rest.starts_with(b"<!--") {
+            i += find_after(rest, b"-->").unwrap_or(rest.len());
+            continue;
+        }
+        if rest.starts_with(b"<![CDATA[") {
+            i += find_after(rest, b"]]>").unwrap_or(rest.len());
+            continue;
+        }
+        if rest.starts_with(b"<?") {
+            i += find_after(rest, b"?>").unwrap_or(rest.len());
+            continue;
+        }
+        if rest.starts_with(b"<!") {
+            // Doctype or other declaration; the XML layer rejects DTDs anyway.
+            i += find_after(rest, b">").unwrap_or(rest.len());
+            continue;
+        }
+
+        let is_closing = rest.starts_with(b"</");
+
+        // Walk to the tag's `>`, skipping anything inside quoted values.
+        let mut j = i + 1;
+        let mut quote: Option<u8> = None;
+        let mut self_closing = false;
+        while j < bytes.len() {
+            let c = bytes[j];
+            match quote {
+                Some(q) => {
+                    if c == q {
+                        quote = None;
+                    }
+                }
+                None => match c {
+                    b'"' | b'\'' => quote = Some(c),
+                    b'>' => break,
+                    _ => {}
+                },
+            }
+            j += 1;
+        }
+        if j < bytes.len() && j > i {
+            // `/` immediately before `>` marks an empty element.
+            let mut k = j;
+            while k > i + 1 && bytes[k - 1].is_ascii_whitespace() {
+                k -= 1;
+            }
+            self_closing = bytes[k - 1] == b'/';
+        }
+
+        if is_closing {
+            depth = depth.saturating_sub(1);
+        } else if !self_closing {
+            depth = depth.saturating_add(1);
+            max_depth = max_depth.max(depth);
+        }
+
+        i = if j < bytes.len() { j + 1 } else { bytes.len() };
+    }
+
+    max_depth
+}
+
+/// Byte offset just past the first occurrence of `needle` in `haystack`.
+fn find_after(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|w| w == needle)
+        .map(|p| p + needle.len())
+}
+
+/// Parse an XML element and its descendants into the document.
+///
+/// The walk is iterative rather than recursive: element nesting is attacker
+/// controlled, and one stack frame per level would let a deeply nested
+/// document exhaust the stack and abort the process before any error could be
+/// returned. An explicit work stack keeps the frame usage constant, so the
+/// only bound left is [`MAX_PARSE_DEPTH`], which is enforced as a policy limit
+/// rather than as protection against a crash.
+fn parse_element(root_xml: &XmlNode, doc: &mut SvgDocument) -> Result<NodeId, DomError> {
+    let root_id = parse_element_shallow(root_xml, doc);
+
+    // (xml node, id of the already-created node it belongs to, its depth)
+    let mut stack: Vec<(XmlNode, NodeId, u32)> = vec![(*root_xml, root_id, 0)];
+
+    while let Some((xml_node, node_id, depth)) = stack.pop() {
+        if depth >= MAX_PARSE_DEPTH {
+            return Err(DomError::InvalidDocument(format!(
+                "element nesting deeper than {MAX_PARSE_DEPTH} levels"
+            )));
+        }
+
+        // Create each child and attach it, remembering the pairing so the
+        // child's own descendants can be walked later.
+        let mut children: Vec<(XmlNode, NodeId)> = Vec::new();
+        for child_xml in xml_node.children().filter(|c| c.is_element()) {
+            let child_id = parse_element_shallow(&child_xml, doc);
+            doc.append_child(node_id, child_id);
+            children.push((child_xml, child_id));
+        }
+
+        // Pushed in reverse so they pop in document order.
+        for (child_xml, child_id) in children.into_iter().rev() {
+            stack.push((child_xml, child_id, depth + 1));
+        }
+    }
+
+    Ok(root_id)
+}
+
+/// Create a single node from an XML element, without touching its children.
+fn parse_element_shallow(xml_node: &XmlNode, doc: &mut SvgDocument) -> NodeId {
     let tag = xml_node.tag_name().name();
 
     let element = match tag {
@@ -112,10 +296,10 @@ fn parse_element(xml_node: &XmlNode, doc: &mut SvgDocument) -> Result<NodeId, Do
         "flowRoot" => SvgElement::FlowRoot(parse_flow_root_attrs(xml_node)),
         "flowRegion" => SvgElement::FlowRegion(FlowRegionAttrs {}),
         "flowPara" => SvgElement::FlowPara(FlowParaAttrs {
-            text_content: collect_text_content(xml_node),
+            text_content: collect_text_content_normalized(xml_node),
         }),
         "flowSpan" => SvgElement::FlowSpan(FlowSpanAttrs {
-            text_content: collect_text_content(xml_node),
+            text_content: collect_text_content_normalized(xml_node),
         }),
         // SVG 2 mesh gradients
         "meshGradient" | "meshgradient" => {
@@ -133,8 +317,27 @@ fn parse_element(xml_node: &XmlNode, doc: &mut SvgDocument) -> Result<NodeId, Do
         // 3D Box (Inkscape SPBox3D)
         "SPBox3D" => SvgElement::Box3d(parse_box3d_attrs(xml_node)),
         _ => {
-            // Unknown element -- treat as a group so children are still parsed.
-            SvgElement::Group(GroupAttrs::default())
+            // Preserve the element verbatim. Rewriting it as a group used to
+            // destroy `<metadata>` contents, Inkscape's `<inkscape:path-effect>`
+            // definitions and `<foreignObject>` bodies on every save.
+            let name = xml_node.tag_name();
+            let qualified_name = match name.namespace() {
+                Some(ns) => {
+                    let prefix = ns_uri_to_prefix(ns);
+                    if prefix.is_empty() {
+                        name.name().to_string()
+                    } else {
+                        format!("{prefix}:{}", name.name())
+                    }
+                }
+                None => name.name().to_string(),
+            };
+            SvgElement::Unknown(UnknownAttrs {
+                qualified_name,
+                // Raw, not whitespace-normalized: this is foreign content and
+                // the parser has no idea what its whitespace means.
+                text_content: collect_text_content(xml_node),
+            })
         }
     };
 
@@ -155,13 +358,7 @@ fn parse_element(xml_node: &XmlNode, doc: &mut SvgDocument) -> Result<NodeId, Do
     node.system_language = parse_space_list_attr(xml_node, "systemLanguage");
     doc.insert_node(node);
 
-    // Recurse into child elements.
-    for child in xml_node.children().filter(|c| c.is_element()) {
-        let child_id = parse_element(&child, doc)?;
-        doc.append_child(id, child_id);
-    }
-
-    Ok(id)
+    id
 }
 
 // ---------------------------------------------------------------------------
@@ -405,6 +602,31 @@ fn collect_text_content(n: &XmlNode) -> String {
     text
 }
 
+/// Collect text content and apply the SVG `xml:space="default"` whitespace
+/// rules: newlines and tabs become spaces, runs of spaces collapse to one, and
+/// leading/trailing whitespace is stripped.
+///
+/// Serializing pretty-prints with indentation, so without this normalization a
+/// text element would absorb its own indentation on every parse-serialize
+/// cycle and grow a little wider each time the document is saved.
+fn collect_text_content_normalized(n: &XmlNode) -> String {
+    let raw = collect_text_content(n);
+    let mut out = String::with_capacity(raw.len());
+    let mut pending_space = false;
+    for ch in raw.chars() {
+        if ch.is_whitespace() {
+            pending_space = !out.is_empty();
+        } else {
+            if pending_space {
+                out.push(' ');
+                pending_space = false;
+            }
+            out.push(ch);
+        }
+    }
+    out
+}
+
 fn parse_length_list_attr(n: &XmlNode, attr: &str) -> Vec<SvgLength> {
     n.attribute(attr).map(parse_length_list).unwrap_or_default()
 }
@@ -420,7 +642,7 @@ fn parse_text_attrs(n: &XmlNode) -> TextAttrs {
         font_weight: n.attribute("font-weight").and_then(FontWeight::parse),
         font_style: n.attribute("font-style").and_then(FontStyle::parse),
         text_anchor: n.attribute("text-anchor").and_then(TextAnchor::parse),
-        text_content: collect_text_content(n),
+        text_content: collect_text_content_normalized(n),
     }
 }
 
@@ -435,7 +657,7 @@ fn parse_tspan_attrs(n: &XmlNode) -> TSpanAttrs {
         font_weight: n.attribute("font-weight").and_then(FontWeight::parse),
         font_style: n.attribute("font-style").and_then(FontStyle::parse),
         text_anchor: n.attribute("text-anchor").and_then(TextAnchor::parse),
-        text_content: collect_text_content(n),
+        text_content: collect_text_content_normalized(n),
     }
 }
 
@@ -443,7 +665,7 @@ fn parse_text_path_attrs(n: &XmlNode) -> TextPathAttrs {
     TextPathAttrs {
         href: resolve_href(n),
         start_offset: parse_opt_len_attr(n, "startOffset"),
-        text_content: collect_text_content(n),
+        text_content: collect_text_content_normalized(n),
     }
 }
 
@@ -840,13 +1062,13 @@ fn parse_fe_spot_light_attrs(n: &XmlNode) -> FeSpotLightAttrs {
 
 fn parse_title_attrs(n: &XmlNode) -> TitleAttrs {
     TitleAttrs {
-        text_content: collect_text_content(n),
+        text_content: collect_text_content_normalized(n),
     }
 }
 
 fn parse_desc_attrs(n: &XmlNode) -> DescAttrs {
     DescAttrs {
-        text_content: collect_text_content(n),
+        text_content: collect_text_content_normalized(n),
     }
 }
 
@@ -1121,68 +1343,124 @@ fn parse_box3d_attrs(n: &XmlNode) -> Box3dAttrs {
 // Presentation attributes
 // ---------------------------------------------------------------------------
 
+/// Look up presentation properties, preferring the inline `style` attribute.
+///
+/// A CSS declaration in `style="..."` outranks the matching presentation
+/// attribute, which is how Inkscape and most other editors write paint: a file
+/// saved as `style="fill:#3498db"` has no `fill` attribute at all. Reading only
+/// the attributes left every such shape filled with the default black.
+struct PresentationSource<'a, 'input> {
+    node: &'a XmlNode<'a, 'input>,
+    inline: std::collections::HashMap<String, String>,
+}
+
+impl<'a, 'input> PresentationSource<'a, 'input> {
+    fn new(node: &'a XmlNode<'a, 'input>) -> Self {
+        let inline = node
+            .attribute("style")
+            .map(parse_style_declarations)
+            .unwrap_or_default();
+        Self { node, inline }
+    }
+
+    fn get(&self, name: &str) -> Option<&str> {
+        if let Some(value) = self.inline.get(name) {
+            // `inherit` means "no value of my own"; leaving it unset lets the
+            // usual inheritance path supply one.
+            if value.eq_ignore_ascii_case("inherit") {
+                return None;
+            }
+            return Some(value.as_str());
+        }
+        self.node.attribute(name)
+    }
+}
+
+/// Split a `style` attribute value into lowercased property/value pairs.
+fn parse_style_declarations(style: &str) -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+    for decl in style.split(';') {
+        let decl = decl.trim();
+        if decl.is_empty() {
+            continue;
+        }
+        // Split on the first colon only; values such as `url(#a)` contain none,
+        // but data URIs do.
+        let Some(colon) = decl.find(':') else {
+            continue;
+        };
+        let property = decl[..colon].trim().to_ascii_lowercase();
+        let value = decl[colon + 1..].trim();
+        if !property.is_empty() && !value.is_empty() {
+            map.insert(property, value.to_string());
+        }
+    }
+    map
+}
+
 fn parse_presentation_attrs(n: &XmlNode) -> PresentationAttrs {
+    let props = PresentationSource::new(n);
     PresentationAttrs {
-        color: n.attribute("color").and_then(Color::parse),
-        fill: n.attribute("fill").and_then(Paint::parse),
-        stroke: n.attribute("stroke").and_then(Paint::parse),
-        stroke_width: n.attribute("stroke-width").and_then(|v| v.parse().ok()),
-        opacity: n.attribute("opacity").and_then(|v| v.parse().ok()),
-        transform: n
-            .attribute("transform")
-            .and_then(|v| parse_transform(v).ok()),
-        display: n.attribute("display").and_then(Display::parse),
-        visibility: n.attribute("visibility").and_then(Visibility::parse),
-        fill_opacity: n.attribute("fill-opacity").and_then(|v| v.parse().ok()),
-        stroke_opacity: n.attribute("stroke-opacity").and_then(|v| v.parse().ok()),
-        stroke_linecap: n.attribute("stroke-linecap").and_then(LineCap::parse),
-        stroke_linejoin: n.attribute("stroke-linejoin").and_then(LineJoin::parse),
-        stroke_miterlimit: n
-            .attribute("stroke-miterlimit")
-            .and_then(|v| v.parse().ok()),
-        stroke_dasharray: n.attribute("stroke-dasharray").and_then(parse_dasharray),
-        stroke_dashoffset: n
-            .attribute("stroke-dashoffset")
-            .and_then(|v| v.parse().ok()),
-        fill_rule: n.attribute("fill-rule").and_then(FillRule::parse),
-        clip_rule: n.attribute("clip-rule").and_then(FillRule::parse),
+        color: props.get("color").and_then(Color::parse),
+        fill: props.get("fill").and_then(Paint::parse),
+        stroke: props.get("stroke").and_then(Paint::parse),
+        stroke_width: props.get("stroke-width").and_then(|v| v.parse().ok()),
+        opacity: props.get("opacity").and_then(|v| v.parse().ok()),
+        transform: props.get("transform").and_then(|v| parse_transform(v).ok()),
+        display: props.get("display").and_then(Display::parse),
+        visibility: props.get("visibility").and_then(Visibility::parse),
+        fill_opacity: props.get("fill-opacity").and_then(|v| v.parse().ok()),
+        stroke_opacity: props.get("stroke-opacity").and_then(|v| v.parse().ok()),
+        stroke_linecap: props.get("stroke-linecap").and_then(LineCap::parse),
+        stroke_linejoin: props.get("stroke-linejoin").and_then(LineJoin::parse),
+        stroke_miterlimit: props.get("stroke-miterlimit").and_then(|v| v.parse().ok()),
+        stroke_dasharray: props.get("stroke-dasharray").and_then(parse_dasharray),
+        stroke_dashoffset: props.get("stroke-dashoffset").and_then(|v| v.parse().ok()),
+        fill_rule: props.get("fill-rule").and_then(FillRule::parse),
+        clip_rule: props.get("clip-rule").and_then(FillRule::parse),
         // Clipping, masking, filter references
-        clip_path: parse_url_pres_attr(n, "clip-path"),
-        mask: parse_url_pres_attr(n, "mask"),
-        filter: parse_url_pres_attr(n, "filter"),
+        clip_path: parse_url_pres_attr_from(&props, "clip-path"),
+        mask: parse_url_pres_attr_from(&props, "mask"),
+        filter: parse_url_pres_attr_from(&props, "filter"),
         // Marker references
-        marker_start: parse_url_pres_attr(n, "marker-start"),
-        marker_mid: parse_url_pres_attr(n, "marker-mid"),
-        marker_end: parse_url_pres_attr(n, "marker-end"),
+        marker_start: parse_url_pres_attr_from(&props, "marker-start"),
+        marker_mid: parse_url_pres_attr_from(&props, "marker-mid"),
+        marker_end: parse_url_pres_attr_from(&props, "marker-end"),
         // Blend mode
-        mix_blend_mode: n.attribute("mix-blend-mode").and_then(BlendMode::parse),
+        mix_blend_mode: props.get("mix-blend-mode").and_then(BlendMode::parse),
         // Isolation
-        isolation: n.attribute("isolation").map(|v| v.trim() == "isolate"),
+        isolation: props.get("isolation").map(|v| v.trim() == "isolate"),
         // Font / text properties
-        font_family: n
-            .attribute("font-family")
+        font_family: props
+            .get("font-family")
             .map(|s| s.trim_matches(|c| c == '\'' || c == '"').to_string()),
-        font_size: parse_opt_len_attr(n, "font-size"),
-        font_weight: n.attribute("font-weight").and_then(FontWeight::parse),
-        font_style: n.attribute("font-style").and_then(FontStyle::parse),
-        text_anchor: n.attribute("text-anchor").and_then(TextAnchor::parse),
-        letter_spacing: parse_opt_len_attr(n, "letter-spacing"),
-        word_spacing: parse_opt_len_attr(n, "word-spacing"),
-        text_decoration: n
-            .attribute("text-decoration")
-            .and_then(TextDecoration::parse),
+        font_size: parse_opt_len_attr_from(&props, "font-size"),
+        font_weight: props.get("font-weight").and_then(FontWeight::parse),
+        font_style: props.get("font-style").and_then(FontStyle::parse),
+        text_anchor: props.get("text-anchor").and_then(TextAnchor::parse),
+        letter_spacing: parse_opt_len_attr_from(&props, "letter-spacing"),
+        word_spacing: parse_opt_len_attr_from(&props, "word-spacing"),
+        text_decoration: props.get("text-decoration").and_then(TextDecoration::parse),
         // Vector effect
-        vector_effect: n.attribute("vector-effect").map(|v| v.to_string()),
+        vector_effect: props.get("vector-effect").map(|v| v.to_string()),
     }
 }
 
 /// Parse a URL reference presentation attribute value (stored as raw string).
-fn parse_url_pres_attr(n: &XmlNode, attr: &str) -> Option<String> {
-    let val = n.attribute(attr)?.trim();
+///
+/// Reads through the inline-style resolver so that `style="clip-path:url(#c)"`
+/// is honoured alongside the plain attribute.
+fn parse_url_pres_attr_from(props: &PresentationSource, attr: &str) -> Option<String> {
+    let val = props.get(attr)?.trim();
     if val.eq_ignore_ascii_case("none") || val.is_empty() {
         return None;
     }
     Some(val.to_string())
+}
+
+/// As `parse_opt_len_attr`, reading through the inline-style resolver.
+fn parse_opt_len_attr_from(props: &PresentationSource, attr: &str) -> Option<SvgLength> {
+    props.get(attr).and_then(|v| v.parse().ok())
 }
 
 fn parse_dasharray(s: &str) -> Option<Vec<f64>> {
@@ -1572,6 +1850,11 @@ fn handled_attrs(tag: &str) -> &'static [&'static str] {
             const A: &[&str] = &[
                 "id",
                 "d",
+                // Parsed into PathAttrs; listing them here keeps a second stale
+                // copy out of the extra-attribute map. Matching is on the
+                // local name, so the `inkscape:` prefix is not included.
+                "path-effect",
+                "original-d",
                 "color",
                 "fill",
                 "stroke",

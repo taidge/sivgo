@@ -180,10 +180,10 @@ fn render_node(doc: &SvgDocument, id: NodeId, cs: &mut String) {
 
     match &node.element {
         SvgElement::Rect(a) => {
-            let x = a.x.value;
-            let y = a.y.value;
-            let w = a.width.value;
-            let h = a.height.value;
+            let x = a.x.to_px();
+            let y = a.y.to_px();
+            let w = a.width.to_px();
+            let h = a.height.to_px();
             if w > 0.0 && h > 0.0 {
                 cs.push_str(&format!(
                     "{} {} {} {} re\n",
@@ -196,29 +196,29 @@ fn render_node(doc: &SvgDocument, id: NodeId, cs: &mut String) {
             }
         }
         SvgElement::Circle(a) => {
-            let cx = a.cx.value;
-            let cy = a.cy.value;
-            let r = a.r.value;
+            let cx = a.cx.to_px();
+            let cy = a.cy.to_px();
+            let r = a.r.to_px();
             if r > 0.0 {
                 emit_circle_path(cx, cy, r, cs);
                 apply_fill_stroke(pres, cs);
             }
         }
         SvgElement::Ellipse(a) => {
-            let cx = a.cx.value;
-            let cy = a.cy.value;
-            let rx = a.rx.value;
-            let ry = a.ry.value;
+            let cx = a.cx.to_px();
+            let cy = a.cy.to_px();
+            let rx = a.rx.to_px();
+            let ry = a.ry.to_px();
             if rx > 0.0 && ry > 0.0 {
                 emit_ellipse_path(cx, cy, rx, ry, cs);
                 apply_fill_stroke(pres, cs);
             }
         }
         SvgElement::Line(a) => {
-            let x1 = a.x1.value;
-            let y1 = a.y1.value;
-            let x2 = a.x2.value;
-            let y2 = a.y2.value;
+            let x1 = a.x1.to_px();
+            let y1 = a.y1.to_px();
+            let x2 = a.x2.to_px();
+            let y2 = a.y2.to_px();
             cs.push_str(&format!(
                 "{} {} m {} {} l\n",
                 fmt_f64(x1),
@@ -378,7 +378,7 @@ fn apply_stroke_state(pres: &PresentationAttrs, cs: &mut String) {
         ));
     }
     if let Some(ref sw) = pres.stroke_width {
-        cs.push_str(&format!("{} w\n", fmt_f64(sw.value)));
+        cs.push_str(&format!("{} w\n", fmt_f64(sw.to_px())));
     }
 }
 

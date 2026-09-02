@@ -10,6 +10,8 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 sivgo-dom = { path = "../crates/dom" }
+sivgo-render = { path = "../crates/render" }
+sivgo-io = { path = "../crates/io" }
 
 # Prevent this from interfering with workspaces
 [workspace]
@@ -18,4 +20,14 @@ members = ["."]
 [[bin]]
 name = "svg_parse"
 path = "fuzz_targets/svg_parse.rs"
+doc = false
+
+[[bin]]
+name = "svg_render"
+path = "fuzz_targets/svg_render.rs"
+doc = false
+
+[[bin]]
+name = "pdf_import"
+path = "fuzz_targets/pdf_import.rs"
 doc = false

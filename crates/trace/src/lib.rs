@@ -4,7 +4,7 @@
 //! The pipeline is:
 //!
 //! 1. Convert input to grayscale ([`GrayBitmap`])
-//! 2. Binarize with a threshold ([`threshold`], [`otsu_threshold`])
+//! 2. Binarize with a threshold ([`threshold()`], [`otsu_threshold`])
 //! 3. Trace contour boundaries ([`find_contours`])
 //! 4. Smooth contours into Bezier curves ([`smooth_contour`])
 //!

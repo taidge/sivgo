@@ -23,7 +23,7 @@ pub struct WidthPoint {
 /// Power Stroke LPE.
 ///
 /// Produces a closed outline path by offsetting the input path at a variable
-/// width defined by a series of [`WidthPoint`]s. Internally the path is
+/// width defined by a series of internal `WidthPoint` values. Internally the path is
 /// sampled at regular intervals and the width at each sample is linearly
 /// interpolated from the profile.
 #[derive(Debug, Clone)]

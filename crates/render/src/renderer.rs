@@ -20,6 +20,163 @@ use crate::types::{
     StrokeStyle,
 };
 
+/// Maximum nesting depth for element rendering.
+///
+/// SVG lets an element reach other elements by reference — `<use href>`,
+/// `clip-path`, `mask`, `marker-*` and `fill="url(#pattern)"` — and nothing in
+/// the format forbids a cycle. Without a limit, `<g id="a"><use href="#a"/></g>`
+/// recurses until the thread's stack is exhausted, which aborts the process
+/// rather than unwinding, taking down a server that renders untrusted input.
+///
+/// The limit also covers plain structural nesting from a deeply nested
+/// document. Real artwork nests a few dozen levels at most.
+///
+/// The value is bounded by how much stack a `render_node` frame uses, which is
+/// large (measured at roughly 60 KiB per level). At 48 levels a render needs
+/// about 3 MiB of stack, so callers that render on a thread with a small stack
+/// must give it a bigger one — see `sivgo-web`'s export handler.
+const MAX_RENDER_DEPTH: u32 = 48;
+
+thread_local! {
+    static RENDER_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Increments the render depth for its lifetime and restores it on drop.
+///
+/// The counter is thread-local rather than a parameter because recursion also
+/// travels through paint-server and mask resolution, which do not otherwise
+/// thread renderer state.
+struct RenderDepthGuard;
+
+impl RenderDepthGuard {
+    /// Returns `None` when the depth limit is already reached.
+    fn enter() -> Option<Self> {
+        RENDER_DEPTH.with(|d| {
+            let current = d.get();
+            if current >= MAX_RENDER_DEPTH {
+                None
+            } else {
+                d.set(current + 1);
+                Some(RenderDepthGuard)
+            }
+        })
+    }
+}
+
+impl Drop for RenderDepthGuard {
+    fn drop(&mut self) {
+        RENDER_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+    }
+}
+
+/// Everything a node needs from its ancestors while rendering.
+///
+/// Bundles the resolved presentation of the parent element with the current
+/// viewport, which percentage lengths resolve against. SVG resolves a
+/// percentage differently depending on the axis a length applies to, so the
+/// three accessors below exist rather than one generic one.
+#[derive(Debug, Clone)]
+pub struct RenderContext<'a> {
+    /// Resolved presentation attributes of the parent element.
+    inherited: sivgo_dom::PresentationAttrs,
+    /// Width of the current viewport in user units.
+    viewport_width: f64,
+    /// Height of the current viewport in user units.
+    viewport_height: f64,
+    /// Values contributed by the document's `<style>` rules, per node.
+    ///
+    /// Resolved once for the whole document because matching a selector needs
+    /// the tree, which a single element cannot supply.
+    overrides: &'a sivgo_style::StyleOverrides,
+}
+
+/// Shared empty overlay for documents with no stylesheet.
+static NO_OVERRIDES: std::sync::OnceLock<sivgo_style::StyleOverrides> = std::sync::OnceLock::new();
+
+fn no_overrides() -> &'static sivgo_style::StyleOverrides {
+    NO_OVERRIDES.get_or_init(sivgo_style::StyleOverrides::new)
+}
+
+impl<'a> RenderContext<'a> {
+    /// Root context: no inherited properties, viewport as given.
+    fn root(viewport_width: f64, viewport_height: f64) -> RenderContext<'static> {
+        RenderContext {
+            inherited: sivgo_dom::PresentationAttrs::default(),
+            viewport_width,
+            viewport_height,
+            overrides: no_overrides(),
+        }
+    }
+
+    /// The same context with a stylesheet overlay attached.
+    fn with_overrides(self, overrides: &'a sivgo_style::StyleOverrides) -> RenderContext<'a> {
+        RenderContext {
+            inherited: self.inherited,
+            viewport_width: self.viewport_width,
+            viewport_height: self.viewport_height,
+            overrides,
+        }
+    }
+
+    /// The same viewport, with `presentation` as the inherited set.
+    fn with_inherited(&self, presentation: sivgo_dom::PresentationAttrs) -> RenderContext<'a> {
+        RenderContext {
+            inherited: presentation,
+            viewport_width: self.viewport_width,
+            viewport_height: self.viewport_height,
+            overrides: self.overrides,
+        }
+    }
+
+    /// The element's own presentation with any stylesheet rules folded in.
+    ///
+    /// A rule outranks a plain presentation attribute, so a value the overlay
+    /// carries replaces the element's own. Inline `style` declarations were
+    /// already excluded when the overlay was built.
+    fn presentation_for(
+        &self,
+        node_id: NodeId,
+        own: &sivgo_dom::PresentationAttrs,
+    ) -> sivgo_dom::PresentationAttrs {
+        match self.overrides.get(&node_id) {
+            Some(from_stylesheet) => own.overridden_by(from_stylesheet),
+            None => own.clone(),
+        }
+    }
+
+    /// Font size in px, for `em` and `ex` lengths.
+    fn font_size(&self) -> f64 {
+        self.inherited
+            .font_size
+            .map(|l| l.to_px())
+            .filter(|v| v.is_finite() && *v > 0.0)
+            .unwrap_or(DEFAULT_FONT_SIZE)
+    }
+
+    /// Resolve a length measured along the x axis.
+    fn resolve_x(&self, len: sivgo_dom::SvgLength) -> f64 {
+        len.resolve_px(self.font_size(), self.viewport_width)
+    }
+
+    /// Resolve a length measured along the y axis.
+    fn resolve_y(&self, len: sivgo_dom::SvgLength) -> f64 {
+        len.resolve_px(self.font_size(), self.viewport_height)
+    }
+
+    /// Resolve a length that is not tied to an axis, such as a radius.
+    ///
+    /// The SVG spec uses the normalised diagonal of the viewport for these.
+    fn resolve_diagonal(&self, len: sivgo_dom::SvgLength) -> f64 {
+        let w = self.viewport_width;
+        let h = self.viewport_height;
+        let diagonal = ((w * w + h * h) / 2.0).sqrt();
+        len.resolve_px(self.font_size(), diagonal)
+    }
+}
+
+/// Font size assumed when nothing sets one, matching the CSS initial value.
+const DEFAULT_FONT_SIZE: f64 = 16.0;
+
 /// Stateless document renderer.
 ///
 /// Call [`DocumentRenderer::render`] to rasterize an entire `SvgDocument`
@@ -42,7 +199,58 @@ impl DocumentRenderer {
         let viewbox_transform = Self::compute_viewbox_transform(doc, root_id, backend.size());
 
         let mut text_engine = TextEngine::new();
-        Self::render_node(doc, root_id, &viewbox_transform, backend, &mut text_engine);
+        let (backend_w, backend_h) = backend.size();
+        let overrides = sivgo_style::stylesheet_overrides(doc);
+        let root_ctx =
+            Self::root_context(doc, root_id, (backend_w, backend_h)).with_overrides(&overrides);
+        Self::render_node(
+            doc,
+            root_id,
+            &viewbox_transform,
+            &root_ctx,
+            backend,
+            &mut text_engine,
+        );
+    }
+
+    /// Build the context for the root element.
+    ///
+    /// The viewport that percentages resolve against is the root `<svg>`'s
+    /// width and height when it declares them, falling back to the backend
+    /// surface. A percentage on the root itself refers to the surface.
+    fn root_context(
+        doc: &SvgDocument,
+        root_id: NodeId,
+        backend_size: (u32, u32),
+    ) -> RenderContext<'static> {
+        let surface = RenderContext::root(f64::from(backend_size.0), f64::from(backend_size.1));
+
+        let Some(node) = doc.get_node(root_id) else {
+            return surface;
+        };
+        let SvgElement::Svg(attrs) = &node.element else {
+            return surface;
+        };
+
+        let width = attrs
+            .width
+            .map(|l| surface.resolve_x(l))
+            .filter(|v| v.is_finite() && *v > 0.0)
+            .unwrap_or(surface.viewport_width);
+        let height = attrs
+            .height
+            .map(|l| surface.resolve_y(l))
+            .filter(|v| v.is_finite() && *v > 0.0)
+            .unwrap_or(surface.viewport_height);
+
+        // A viewBox redefines the user-space extent that percentages use.
+        if let Some(vb) = &attrs.view_box {
+            if vb.width > 0.0 && vb.height > 0.0 {
+                return RenderContext::root(vb.width, vb.height);
+            }
+        }
+
+        RenderContext::root(width, height)
     }
 
     /// Compute the transform that maps the viewBox to the viewport (backend size).
@@ -81,49 +289,82 @@ impl DocumentRenderer {
     }
 
     /// Recursively render a single node and its children.
+    ///
+    /// `inherited` carries the resolved presentation of the parent element so
+    /// that inheritable paint and text properties reach descendants that do
+    /// not set them.
     fn render_node(
         doc: &SvgDocument,
         node_id: NodeId,
         parent_transform: &Transform2D,
+        ctx: &RenderContext<'_>,
         backend: &mut dyn RenderBackend,
         text_engine: &mut TextEngine,
     ) {
+        // Bail out before recursing any deeper. `_depth_guard` restores the
+        // counter when this frame returns, on every path including panics.
+        let Some(_depth_guard) = RenderDepthGuard::enter() else {
+            log::warn!(
+                "render depth limit ({MAX_RENDER_DEPTH}) reached; skipping node — \
+                 the document nests too deeply or contains a reference cycle"
+            );
+            return;
+        };
+
         let Some(node) = doc.get_node(node_id) else {
             return;
         };
 
+        // Fold in the inheritable properties from the ancestors before reading
+        // anything: paint set on a group has to reach the shapes inside it.
+        let own = ctx.presentation_for(node_id, &node.presentation);
+        let presentation = own.inheriting_from(&ctx.inherited);
+        // Children see this element's resolved properties as their inherited set.
+        let child_ctx = ctx.with_inherited(presentation.clone());
+
+        // The editor's per-node hidden flag. It is not an SVG attribute, so it
+        // has to be checked separately; without this, hiding a layer had no
+        // effect on an export.
+        if node.hidden {
+            return;
+        }
+
         // display:none — skip this element AND all its children entirely.
-        if let Some(sivgo_dom::Display::None) = node.presentation.display {
+        if let Some(sivgo_dom::Display::None) = presentation.display {
             return;
         }
 
         // visibility:hidden / visibility:collapse — skip rendering THIS
         // element's own graphics but still process children (a child may
         // override visibility back to "visible").
-        let is_visible = match node.presentation.visibility {
+        let is_visible = match presentation.visibility {
             Some(sivgo_dom::Visibility::Hidden) | Some(sivgo_dom::Visibility::Collapse) => false,
             _ => true, // None (inherit → default visible) or Some(Visible)
         };
 
-        // Compute cumulative transform.
+        // Compute cumulative transform. An element's own transform maps its
+        // coordinates into the parent's system, so it applies first and the
+        // ancestors' transform second: `local` then `parent`, which is the
+        // matrix product `parent * local`. Composing the other way makes a
+        // parent scale fail to scale a child's offset.
         let local_transform = node
             .presentation
             .transform
             .unwrap_or_else(Transform2D::identity);
-        let transform = parent_transform.then(&local_transform);
+        let transform = local_transform.then(parent_transform);
 
         // Handle opacity: for group elements with opacity < 1.0 we use offscreen
         // rendering so that the group is composited as a single unit. For
         // non-group elements, per-element opacity via set_opacity is sufficient.
-        let group_opacity = node.presentation.opacity.unwrap_or(1.0);
+        let group_opacity = presentation.opacity.unwrap_or(1.0);
         let is_group = matches!(&node.element, SvgElement::Group(_));
         let use_offscreen = is_group && group_opacity < 1.0;
-        let has_opacity = node.presentation.opacity.is_some() && !use_offscreen;
+        let has_opacity = presentation.opacity.is_some() && !use_offscreen;
 
         // Isolation group: `isolation: isolate` creates a new stacking context.
         // This prevents blend modes inside the group from interacting with content
         // behind the group. Implemented by rendering into an offscreen buffer.
-        let use_isolation = node.presentation.isolation.unwrap_or(false) && !use_offscreen;
+        let use_isolation = presentation.isolation.unwrap_or(false) && !use_offscreen;
 
         // Check for mix-blend-mode on this element.
         // When a non-Normal blend mode is set, the element (and its children)
@@ -192,7 +433,14 @@ impl DocumentRenderer {
         let has_mask = mask_ref.is_some();
         if let Some(mask_id_str) = mask_ref {
             if let Some(mask_node_id) = doc.find_by_xml_id(&mask_id_str) {
-                Self::apply_mask(doc, mask_node_id, &transform, backend, text_engine);
+                Self::apply_mask(
+                    doc,
+                    mask_node_id,
+                    &transform,
+                    &child_ctx,
+                    backend,
+                    text_engine,
+                );
             }
         }
 
@@ -209,14 +457,23 @@ impl DocumentRenderer {
             }
             SvgElement::Defs(_) => {
                 // Defs are not rendered directly; skip children.
+                // Every state the code above pushed has to come back off,
+                // including the isolation layer. Missing one leaves an
+                // orphaned offscreen buffer that swallows the rest of the
+                // document.
                 if has_clip {
                     backend.clear_clip();
                 }
                 if has_mask {
                     backend.clear_mask();
                 }
-                if has_opacity {
+                if use_offscreen {
+                    backend.pop_offscreen_with_opacity(group_opacity);
+                } else if has_opacity {
                     backend.restore();
+                }
+                if use_isolation {
+                    backend.pop_offscreen_with_opacity(1.0);
                 }
                 if has_filter {
                     let _ = backend.pop_offscreen_raw();
@@ -237,14 +494,23 @@ impl DocumentRenderer {
             | SvgElement::Stop(_)
             | SvgElement::Pattern(_) => {
                 // These are never rendered directly; skip entirely.
+                // Every state the code above pushed has to come back off,
+                // including the isolation layer. Missing one leaves an
+                // orphaned offscreen buffer that swallows the rest of the
+                // document.
                 if has_clip {
                     backend.clear_clip();
                 }
                 if has_mask {
                     backend.clear_mask();
                 }
-                if has_opacity {
+                if use_offscreen {
+                    backend.pop_offscreen_with_opacity(group_opacity);
+                } else if has_opacity {
                     backend.restore();
+                }
+                if use_isolation {
+                    backend.pop_offscreen_with_opacity(1.0);
                 }
                 if has_filter {
                     let _ = backend.pop_offscreen_raw();
@@ -259,7 +525,7 @@ impl DocumentRenderer {
                     Self::render_use_element(
                         doc,
                         attrs,
-                        &node.presentation,
+                        &child_ctx,
                         &transform,
                         backend,
                         text_engine,
@@ -302,56 +568,68 @@ impl DocumentRenderer {
                 return;
             }
             SvgElement::Rect(attrs) if is_visible => {
-                let x = attrs.x.to_px();
-                let y = attrs.y.to_px();
-                let w = attrs.width.to_px();
-                let h = attrs.height.to_px();
+                let x = ctx.resolve_x(attrs.x);
+                let y = ctx.resolve_y(attrs.y);
+                let w = ctx.resolve_x(attrs.width);
+                let h = ctx.resolve_y(attrs.height);
                 if w > 0.0 && h > 0.0 {
-                    let rect = Rect::new(x, y, x + w, y + h);
-                    // Fill
-                    if let Some(paint) = resolve_fill_paint(doc, &node.presentation) {
-                        backend.fill_rect(rect, &paint, &transform);
-                    }
-                    // Stroke
-                    if let Some((paint, style)) = resolve_stroke(doc, &node.presentation) {
-                        backend.stroke_rect(rect, &paint, &style, &transform);
+                    let (rx, ry) = rect_corner_radii(attrs);
+                    if let Some(path) = rounded_rect_path(x, y, w, h, rx, ry) {
+                        // Rounded corners need a real outline; the backend's
+                        // rect primitives only draw square corners.
+                        if let Some(paint) = resolve_fill_paint(doc, &presentation) {
+                            backend.fill_path(&path, &paint, FillRule::NonZero, &transform);
+                        }
+                        if let Some((paint, style)) = resolve_stroke(doc, &presentation) {
+                            backend.stroke_path(&path, &paint, &style, &transform);
+                        }
+                    } else {
+                        let rect = Rect::new(x, y, x + w, y + h);
+                        // Fill
+                        if let Some(paint) = resolve_fill_paint(doc, &presentation) {
+                            backend.fill_rect(rect, &paint, &transform);
+                        }
+                        // Stroke
+                        if let Some((paint, style)) = resolve_stroke(doc, &presentation) {
+                            backend.stroke_rect(rect, &paint, &style, &transform);
+                        }
                     }
                 }
             }
             SvgElement::Circle(attrs) if is_visible => {
-                let cx = attrs.cx.to_px();
-                let cy = attrs.cy.to_px();
-                let r = attrs.r.to_px();
+                let cx = ctx.resolve_x(attrs.cx);
+                let cy = ctx.resolve_y(attrs.cy);
+                let r = ctx.resolve_diagonal(attrs.r);
                 if r > 0.0 {
-                    if let Some(paint) = resolve_fill_paint(doc, &node.presentation) {
+                    if let Some(paint) = resolve_fill_paint(doc, &presentation) {
                         backend.fill_circle(cx, cy, r, &paint, &transform);
                     }
-                    if let Some((paint, style)) = resolve_stroke(doc, &node.presentation) {
+                    if let Some((paint, style)) = resolve_stroke(doc, &presentation) {
                         backend.stroke_circle(cx, cy, r, &paint, &style, &transform);
                     }
                 }
             }
             SvgElement::Ellipse(attrs) if is_visible => {
-                let cx = attrs.cx.to_px();
-                let cy = attrs.cy.to_px();
-                let rx = attrs.rx.to_px();
-                let ry = attrs.ry.to_px();
+                let cx = ctx.resolve_x(attrs.cx);
+                let cy = ctx.resolve_y(attrs.cy);
+                let rx = ctx.resolve_x(attrs.rx);
+                let ry = ctx.resolve_y(attrs.ry);
                 if rx > 0.0 && ry > 0.0 {
-                    if let Some(paint) = resolve_fill_paint(doc, &node.presentation) {
+                    if let Some(paint) = resolve_fill_paint(doc, &presentation) {
                         backend.fill_ellipse(cx, cy, rx, ry, &paint, &transform);
                     }
-                    if let Some((paint, style)) = resolve_stroke(doc, &node.presentation) {
+                    if let Some((paint, style)) = resolve_stroke(doc, &presentation) {
                         backend.stroke_ellipse(cx, cy, rx, ry, &paint, &style, &transform);
                     }
                 }
             }
             SvgElement::Line(attrs) if is_visible => {
-                let x1 = attrs.x1.to_px();
-                let y1 = attrs.y1.to_px();
-                let x2 = attrs.x2.to_px();
-                let y2 = attrs.y2.to_px();
+                let x1 = ctx.resolve_x(attrs.x1);
+                let y1 = ctx.resolve_y(attrs.y1);
+                let x2 = ctx.resolve_x(attrs.x2);
+                let y2 = ctx.resolve_y(attrs.y2);
                 // Lines only have stroke (no fill).
-                if let Some((paint, style)) = resolve_stroke(doc, &node.presentation) {
+                if let Some((paint, style)) = resolve_stroke(doc, &presentation) {
                     let mut path = BezPath::new();
                     path.move_to(Point::new(x1, y1));
                     path.line_to(Point::new(x2, y2));
@@ -359,11 +637,11 @@ impl DocumentRenderer {
                 }
             }
             SvgElement::Path(attrs) if is_visible => {
-                let fill_rule = resolve_fill_rule(&node.presentation);
-                if let Some(paint) = resolve_fill_paint(doc, &node.presentation) {
+                let fill_rule = resolve_fill_rule(&presentation);
+                if let Some(paint) = resolve_fill_paint(doc, &presentation) {
                     backend.fill_path(&attrs.d, &paint, fill_rule, &transform);
                 }
-                if let Some((paint, style)) = resolve_stroke(doc, &node.presentation) {
+                if let Some((paint, style)) = resolve_stroke(doc, &presentation) {
                     backend.stroke_path(&attrs.d, &paint, &style, &transform);
                 }
             }
@@ -371,11 +649,11 @@ impl DocumentRenderer {
                 if attrs.points.len() >= 2 {
                     let path = points_to_bezpath(&attrs.points, false);
                     // Polyline: stroke only by default, but fill if specified.
-                    if let Some(paint) = resolve_fill_paint(doc, &node.presentation) {
-                        let fill_rule = resolve_fill_rule(&node.presentation);
+                    if let Some(paint) = resolve_fill_paint(doc, &presentation) {
+                        let fill_rule = resolve_fill_rule(&presentation);
                         backend.fill_path(&path, &paint, fill_rule, &transform);
                     }
-                    if let Some((paint, style)) = resolve_stroke(doc, &node.presentation) {
+                    if let Some((paint, style)) = resolve_stroke(doc, &presentation) {
                         backend.stroke_path(&path, &paint, &style, &transform);
                     }
                 }
@@ -383,11 +661,11 @@ impl DocumentRenderer {
             SvgElement::Polygon(attrs) if is_visible => {
                 if attrs.points.len() >= 3 {
                     let path = points_to_bezpath(&attrs.points, true);
-                    if let Some(paint) = resolve_fill_paint(doc, &node.presentation) {
-                        let fill_rule = resolve_fill_rule(&node.presentation);
+                    if let Some(paint) = resolve_fill_paint(doc, &presentation) {
+                        let fill_rule = resolve_fill_rule(&presentation);
                         backend.fill_path(&path, &paint, fill_rule, &transform);
                     }
-                    if let Some((paint, style)) = resolve_stroke(doc, &node.presentation) {
+                    if let Some((paint, style)) = resolve_stroke(doc, &presentation) {
                         backend.stroke_path(&path, &paint, &style, &transform);
                     }
                 }
@@ -400,7 +678,7 @@ impl DocumentRenderer {
                     doc,
                     node_id,
                     attrs,
-                    &node.presentation,
+                    &presentation,
                     &transform,
                     backend,
                     text_engine,
@@ -413,7 +691,7 @@ impl DocumentRenderer {
                     Self::render_flow_root(
                         doc,
                         node_id,
-                        &node.presentation,
+                        &presentation,
                         &transform,
                         backend,
                         text_engine,
@@ -477,23 +755,40 @@ impl DocumentRenderer {
                     let switch_children: Vec<NodeId> = doc.children(node_id).to_vec();
                     for child_id in switch_children {
                         if let Some(child_node) = doc.get_node(child_id) {
-                            // Skip if requiredFeatures is specified (we
-                            // support none of the optional feature strings).
-                            if child_node.attributes.contains_key("requiredFeatures") {
+                            // The parser stores these in typed fields, not in
+                            // the extra-attribute map, so looking them up there
+                            // always missed and `<switch>` unconditionally took
+                            // its first child.
+                            //
+                            // A non-empty requiredFeatures or requiredExtensions
+                            // list never matches: no optional feature strings or
+                            // extensions are supported.
+                            if child_node
+                                .required_features
+                                .as_ref()
+                                .is_some_and(|f| !f.is_empty())
+                            {
                                 continue;
                             }
-                            // Skip if requiredExtensions is specified (we
-                            // support no extensions).
-                            if child_node.attributes.contains_key("requiredExtensions") {
+                            if child_node
+                                .required_extensions
+                                .as_ref()
+                                .is_some_and(|e| !e.is_empty())
+                            {
                                 continue;
                             }
-                            // systemLanguage: if not present the child matches.
-                            // If present, accept it (a real implementation
-                            // would compare against the user's locale; for now
-                            // we treat any value as matching so the first
-                            // localised branch wins).
+                            // systemLanguage: absent matches. Present is
+                            // accepted as-is, so the first localised branch
+                            // wins rather than none of them.
                             // Render this child and stop.
-                            Self::render_node(doc, child_id, &transform, backend, text_engine);
+                            Self::render_node(
+                                doc,
+                                child_id,
+                                &transform,
+                                &child_ctx,
+                                backend,
+                                text_engine,
+                            );
                             break;
                         }
                     }
@@ -539,14 +834,19 @@ impl DocumentRenderer {
                 }
                 return;
             }
+            // An element the parser does not model is not SVG content: the
+            // spec says such an element and its children are not rendered.
+            // Recursing into it used to draw `<foreignObject>` bodies as if
+            // they were shapes.
+            SvgElement::Unknown(_) => {}
             _ => {}
         }
 
         // Render markers for shape elements that have marker-start/mid/end.
         if is_visible && node.element.is_shape() {
-            let has_markers = node.presentation.marker_start.is_some()
-                || node.presentation.marker_mid.is_some()
-                || node.presentation.marker_end.is_some();
+            let has_markers = presentation.marker_start.is_some()
+                || presentation.marker_mid.is_some()
+                || presentation.marker_end.is_some();
             if has_markers {
                 // Build the BezPath for this shape.
                 if let Some(shape_path) = element_to_bezpath(&node.element) {
@@ -558,9 +858,10 @@ impl DocumentRenderer {
                     Self::render_markers(
                         doc,
                         &shape_path,
-                        &node.presentation,
+                        &presentation,
                         stroke_width,
                         &transform,
+                        &child_ctx,
                         backend,
                         text_engine,
                     );
@@ -568,10 +869,34 @@ impl DocumentRenderer {
             }
         }
 
-        // Recurse into children.
-        let children: Vec<NodeId> = doc.children(node_id).to_vec();
-        for child_id in children {
-            Self::render_node(doc, child_id, &transform, backend, text_engine);
+        // Recurse into children, except where the element's content is not
+        // SVG graphics. `<foreignObject>` holds markup for another language,
+        // `<script>`/`<style>`/`<title>`/`<desc>`/`<metadata>` hold text, and
+        // the font and Inkscape bookkeeping elements hold definitions. Walking
+        // into them drew their contents as if they were shapes.
+        let renders_children = !matches!(
+            node.element,
+            SvgElement::ForeignObject(_)
+                | SvgElement::Script(_)
+                | SvgElement::StyleElement(_)
+                | SvgElement::Title(_)
+                | SvgElement::Desc(_)
+                | SvgElement::Metadata(_)
+                | SvgElement::SvgFont(_)
+                | SvgElement::FontFace(_)
+                | SvgElement::Glyph(_)
+                | SvgElement::MissingGlyph(_)
+                | SvgElement::HKern(_)
+                | SvgElement::VKern(_)
+                | SvgElement::SodipodiNamedView(_)
+                | SvgElement::SodipodiGuide(_)
+                | SvgElement::Unknown(_)
+        );
+        if renders_children {
+            let children: Vec<NodeId> = doc.children(node_id).to_vec();
+            for child_id in children {
+                Self::render_node(doc, child_id, &transform, &child_ctx, backend, text_engine);
+            }
         }
 
         if has_clip {
@@ -632,6 +957,15 @@ impl DocumentRenderer {
         transform: &Transform2D,
         backend: &mut dyn RenderBackend,
     ) {
+        // Nested clip paths recurse here without going through `render_node`,
+        // so they need their own depth guard: `clip-path` references that
+        // point at each other used to recurse until the stack ran out, which
+        // aborts the process instead of unwinding.
+        let Some(_depth_guard) = RenderDepthGuard::enter() else {
+            log::warn!("clip-path nesting limit reached; the references may form a cycle");
+            return;
+        };
+
         let Some(clip_node) = doc.get_node(clip_node_id) else {
             return;
         };
@@ -655,7 +989,8 @@ impl DocumentRenderer {
             });
         if let Some(nested_clip_id_str) = nested_clip_ref {
             if let Some(nested_clip_node_id) = doc.find_by_xml_id(&nested_clip_id_str) {
-                // Avoid infinite recursion: don't apply self as nested clip.
+                // Direct self-reference is caught here; longer cycles are cut
+                // off by the depth guard above.
                 if nested_clip_node_id != clip_node_id {
                     Self::apply_clip_path(doc, nested_clip_node_id, transform, backend);
                 }
@@ -713,6 +1048,7 @@ impl DocumentRenderer {
         doc: &SvgDocument,
         mask_node_id: NodeId,
         transform: &Transform2D,
+        ctx: &RenderContext<'_>,
         backend: &mut dyn RenderBackend,
         text_engine: &mut TextEngine,
     ) {
@@ -732,7 +1068,14 @@ impl DocumentRenderer {
         // Render each child of the mask element.
         let children: Vec<NodeId> = doc.children(mask_node_id).to_vec();
         for child_id in children {
-            Self::render_node(doc, child_id, transform, &mut temp_backend, text_engine);
+            Self::render_node(
+                doc,
+                child_id,
+                transform,
+                ctx,
+                &mut temp_backend,
+                text_engine,
+            );
         }
 
         let mask_pixels = temp_backend.pixels();
@@ -744,7 +1087,8 @@ impl DocumentRenderer {
     fn render_use_element(
         doc: &SvgDocument,
         attrs: &sivgo_dom::UseAttrs,
-        _pres: &sivgo_dom::PresentationAttrs,
+        // The referenced content inherits from the `<use>` element itself.
+        ctx: &RenderContext<'_>,
         parent_transform: &Transform2D,
         backend: &mut dyn RenderBackend,
         text_engine: &mut TextEngine,
@@ -760,11 +1104,13 @@ impl DocumentRenderer {
             return;
         };
 
-        // Apply x/y offset as a translation.
+        // The use element's x/y shift the referenced content within the use
+        // element's own coordinate system, so the translation applies before
+        // the transform inherited from the ancestors.
         let dx = attrs.x.map(|l| l.to_px()).unwrap_or(0.0);
         let dy = attrs.y.map(|l| l.to_px()).unwrap_or(0.0);
         let use_transform = if dx != 0.0 || dy != 0.0 {
-            parent_transform.then(&Transform2D::translate(dx, dy))
+            Transform2D::translate(dx, dy).then(parent_transform)
         } else {
             *parent_transform
         };
@@ -787,7 +1133,9 @@ impl DocumentRenderer {
                         vp_h,
                         symbol_attrs.preserve_aspect_ratio.as_ref(),
                     );
-                    use_transform.then(&vb_transform)
+                    // The viewBox maps symbol coordinates into the use
+                    // element's viewport, so it applies before `use_transform`.
+                    vb_transform.then(&use_transform)
                 } else {
                     use_transform
                 };
@@ -795,14 +1143,14 @@ impl DocumentRenderer {
                 // Render the symbol's children.
                 let children: Vec<NodeId> = doc.children(ref_node_id).to_vec();
                 for child_id in children {
-                    Self::render_node(doc, child_id, &symbol_transform, backend, text_engine);
+                    Self::render_node(doc, child_id, &symbol_transform, ctx, backend, text_engine);
                 }
             }
             _ => {
                 // For non-symbol referenced elements, render them directly
                 // (applying the use's presentation attributes is optional;
                 // for now we render the referenced element as-is).
-                Self::render_node(doc, ref_node_id, &use_transform, backend, text_engine);
+                Self::render_node(doc, ref_node_id, &use_transform, ctx, backend, text_engine);
             }
         }
     }
@@ -1863,15 +2211,19 @@ impl DocumentRenderer {
     // -----------------------------------------------------------------------
 
     /// Render markers (start, mid, end) for a shape element's path.
+    #[allow(clippy::too_many_arguments)]
     fn render_markers(
         doc: &SvgDocument,
         path: &BezPath,
         pres: &sivgo_dom::PresentationAttrs,
         stroke_width: f64,
         transform: &Transform2D,
+        ctx: &RenderContext<'_>,
         backend: &mut dyn RenderBackend,
         text_engine: &mut TextEngine,
     ) {
+        // Marker content inherits from the element the marker is attached to.
+        let marker_ctx = ctx.with_inherited(pres.clone());
         let vertices = get_path_vertices(path);
         if vertices.is_empty() {
             return;
@@ -1918,6 +2270,7 @@ impl DocumentRenderer {
                 stroke_width,
                 is_start,
                 transform,
+                &marker_ctx,
                 backend,
                 text_engine,
             );
@@ -1933,6 +2286,7 @@ impl DocumentRenderer {
         stroke_width: f64,
         is_start: bool,
         parent_transform: &Transform2D,
+        ctx: &RenderContext<'_>,
         backend: &mut dyn RenderBackend,
         text_engine: &mut TextEngine,
     ) {
@@ -2017,7 +2371,7 @@ impl DocumentRenderer {
         // Render marker's children.
         let children: Vec<NodeId> = doc.children(marker_node_id).to_vec();
         for child_id in children {
-            Self::render_node(doc, child_id, &marker_transform, backend, text_engine);
+            Self::render_node(doc, child_id, &marker_transform, ctx, backend, text_engine);
         }
     }
 }
@@ -2257,7 +2611,7 @@ fn resolve_fill_paint(
     doc: &SvgDocument,
     pres: &sivgo_dom::PresentationAttrs,
 ) -> Option<RenderPaint> {
-    match &pres.fill {
+    let paint = match &pres.fill {
         Some(Paint::Color(c)) => Some(RenderPaint::solid(*c)),
         Some(Paint::None) => None,
         Some(Paint::Url(ref url)) => resolve_paint_server(doc, url),
@@ -2270,7 +2624,10 @@ fn resolve_fill_paint(
             // SVG default: fill is black.
             Some(RenderPaint::solid(Color::BLACK))
         }
-    }
+    };
+
+    // `fill-opacity` scales the paint's alpha, independently of `opacity`.
+    paint.map(|p| p.with_opacity(pres.fill_opacity.unwrap_or(1.0)))
 }
 
 /// Resolve the stroke paint and style for an element.
@@ -2292,6 +2649,9 @@ fn resolve_stroke(
         None => return None, // SVG default: no stroke
     };
 
+    // `stroke-opacity` scales the paint's alpha, independently of `opacity`.
+    let paint = paint.with_opacity(pres.stroke_opacity.unwrap_or(1.0));
+
     let width = pres.stroke_width.map(|l| l.to_px()).unwrap_or(1.0);
 
     let line_cap = match pres.stroke_linecap {
@@ -2309,7 +2669,18 @@ fn resolve_stroke(
     };
 
     let miter_limit = pres.stroke_miterlimit.unwrap_or(4.0);
-    let dash_array = pres.stroke_dasharray.clone();
+    // An odd number of dash values repeats the list once, per the SVG spec.
+    // The backend requires an even count and silently draws a solid line
+    // otherwise, which turned `stroke-dasharray="5"` into no dashes at all.
+    let dash_array = pres.stroke_dasharray.as_ref().map(|values| {
+        if values.len() % 2 == 1 {
+            let mut doubled = values.clone();
+            doubled.extend_from_slice(values);
+            doubled
+        } else {
+            values.clone()
+        }
+    });
     let dash_offset = pres.stroke_dashoffset.unwrap_or(0.0);
 
     Some((
@@ -2558,7 +2929,10 @@ fn resolve_pattern(
         content_transform
     };
 
-    // Render each child of the pattern content node.
+    // Render each child of the pattern content node. Pattern content is not
+    // in the referencing element's inheritance chain, so it starts fresh, and
+    // percentages inside a tile resolve against the tile.
+    let pattern_ctx = RenderContext::root(tile_w, tile_h);
     let mut text_engine = sivgo_text::TextEngine::new();
     let children: Vec<NodeId> = doc.children(content_node_id).to_vec();
     for child_id in children {
@@ -2566,6 +2940,7 @@ fn resolve_pattern(
             doc,
             child_id,
             &content_transform,
+            &pattern_ctx,
             &mut tile_backend,
             &mut text_engine,
         );
@@ -2976,6 +3351,70 @@ fn compute_viewbox_to_viewport_transform(
 // ---------------------------------------------------------------------------
 
 /// Try to convert an SVG element to a `BezPath` for clip-path building.
+/// Build the outline of a rounded rectangle.
+///
+/// `rx`/`ry` follow the SVG rules: a missing radius mirrors the other one, and
+/// each is clamped to half the corresponding side. Returns `None` when both
+/// radii are zero, so callers can keep using the faster square-rect path.
+fn rounded_rect_path(x: f64, y: f64, w: f64, h: f64, rx: f64, ry: f64) -> Option<BezPath> {
+    let rx = rx.min(w / 2.0).max(0.0);
+    let ry = ry.min(h / 2.0).max(0.0);
+    if rx <= 0.0 || ry <= 0.0 {
+        return None;
+    }
+
+    // Distance from a corner to the control point of a quarter ellipse.
+    const KAPPA: f64 = 0.552_284_749_831;
+    let cx = rx * KAPPA;
+    let cy = ry * KAPPA;
+    let (x1, y1) = (x + w, y + h);
+
+    let mut path = BezPath::new();
+    path.move_to(Point::new(x + rx, y));
+    path.line_to(Point::new(x1 - rx, y));
+    path.curve_to(
+        Point::new(x1 - rx + cx, y),
+        Point::new(x1, y + ry - cy),
+        Point::new(x1, y + ry),
+    );
+    path.line_to(Point::new(x1, y1 - ry));
+    path.curve_to(
+        Point::new(x1, y1 - ry + cy),
+        Point::new(x1 - rx + cx, y1),
+        Point::new(x1 - rx, y1),
+    );
+    path.line_to(Point::new(x + rx, y1));
+    path.curve_to(
+        Point::new(x + rx - cx, y1),
+        Point::new(x, y1 - ry + cy),
+        Point::new(x, y1 - ry),
+    );
+    path.line_to(Point::new(x, y + ry));
+    path.curve_to(
+        Point::new(x, y + ry - cy),
+        Point::new(x + rx - cx, y),
+        Point::new(x + rx, y),
+    );
+    path.close();
+    Some(path)
+}
+
+/// Resolve a rect's corner radii, mirroring whichever one is absent.
+///
+/// The attributes default to zero, which the SVG grammar also uses to mean
+/// "square corners", so a zero radius is treated as unspecified and the other
+/// axis supplies the value.
+fn rect_corner_radii(attrs: &sivgo_dom::RectAttrs) -> (f64, f64) {
+    let rx = attrs.rx.to_px();
+    let ry = attrs.ry.to_px();
+    match (rx > 0.0, ry > 0.0) {
+        (true, true) => (rx, ry),
+        (true, false) => (rx, rx),
+        (false, true) => (ry, ry),
+        (false, false) => (0.0, 0.0),
+    }
+}
+
 fn element_to_bezpath(element: &SvgElement) -> Option<BezPath> {
     match element {
         SvgElement::Rect(attrs) => {
@@ -2985,6 +3424,10 @@ fn element_to_bezpath(element: &SvgElement) -> Option<BezPath> {
             let h = attrs.height.to_px();
             if w <= 0.0 || h <= 0.0 {
                 return None;
+            }
+            let (rx, ry) = rect_corner_radii(attrs);
+            if let Some(rounded) = rounded_rect_path(x, y, w, h, rx, ry) {
+                return Some(rounded);
             }
             let mut path = BezPath::new();
             path.move_to(Point::new(x, y));
@@ -3186,7 +3629,7 @@ fn decode_png_rgba(data: &[u8]) -> Option<(Vec<u8>, u32, u32)> {
 
     // Premultiply alpha (tiny-skia expects premultiplied RGBA).
     let mut premul = rgba;
-    for pixel in premul.chunks_exact_mut(4) {
+    for pixel in premul.as_chunks_mut::<4>().0 {
         let a = pixel[3] as u16;
         pixel[0] = ((pixel[0] as u16 * a + 127) / 255) as u8;
         pixel[1] = ((pixel[1] as u16 * a + 127) / 255) as u8;
@@ -3196,8 +3639,41 @@ fn decode_png_rgba(data: &[u8]) -> Option<(Vec<u8>, u32, u32)> {
     Some((premul, width, height))
 }
 
+thread_local! {
+    /// Whether `<image href="...">` may read from the local file system.
+    ///
+    /// A desktop document legitimately references images next to it, but a
+    /// server rendering documents it received over the network must not: an
+    /// `href` is just a string in the input, so honouring it turns the render
+    /// endpoint into an arbitrary-file reader. See
+    /// [`render_document_to_pixmap_without_file_access`].
+    static ALLOW_FILE_IMAGES: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+/// Disables file-system image loading for the duration of its lifetime.
+struct NoFileImagesGuard {
+    previous: bool,
+}
+
+impl NoFileImagesGuard {
+    fn enter() -> Self {
+        let previous = ALLOW_FILE_IMAGES.with(|flag| flag.replace(false));
+        NoFileImagesGuard { previous }
+    }
+}
+
+impl Drop for NoFileImagesGuard {
+    fn drop(&mut self) {
+        ALLOW_FILE_IMAGES.with(|flag| flag.set(self.previous));
+    }
+}
+
 /// Load an image from a file path. Supports PNG and JPEG.
 fn load_image_from_path(path: &str) -> Option<(Vec<u8>, u32, u32)> {
+    if !ALLOW_FILE_IMAGES.with(std::cell::Cell::get) {
+        log::warn!("ignoring <image> reference to a local path: file access is disabled");
+        return None;
+    }
     let data = std::fs::read(path).ok()?;
     // Try PNG first.
     if let Some(result) = decode_png_rgba(&data) {
@@ -3294,6 +3770,25 @@ pub fn render_document_to_pixmap(doc: &SvgDocument, width: u32, height: u32) -> 
     let mut backend = TinySkiaBackend::new(width, height);
     DocumentRenderer::render(doc, &mut backend);
     backend.pixels().to_vec()
+}
+
+/// As [`render_document_to_pixmap`], but `<image>` elements may only use
+/// `data:` URIs.
+///
+/// Use this for documents that arrived from outside the machine. Without it,
+/// `<image href="/etc/hostname">` makes the renderer read that file and draw
+/// whatever it contains into the output, and a path such as `/dev/zero` or a
+/// UNC share turns a single request into an out-of-memory kill or an outbound
+/// authentication attempt.
+///
+/// The restriction applies to the calling thread for the duration of the call.
+pub fn render_document_to_pixmap_without_file_access(
+    doc: &SvgDocument,
+    width: u32,
+    height: u32,
+) -> Vec<u8> {
+    let _guard = NoFileImagesGuard::enter();
+    render_document_to_pixmap(doc, width, height)
 }
 
 // ---------------------------------------------------------------------------

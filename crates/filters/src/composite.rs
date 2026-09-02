@@ -70,15 +70,18 @@ fn composite_pixel(i1: &[f32], i2: &[f32], op: &CompositeOp) -> [f32; 4] {
             [i1[0], i1[1], i1[2], ra]
         }
         CompositeOp::Atop => {
-            // result = i1 * i2.a + i2 * (1 - i1.a)
-            let ra = a2; // alpha of atop = a2
+            // Premultiplied: Cp1*a1*a2 + Cp2*a2*(1-a1), with result alpha a2.
+            // Dividing through by a2 leaves the straight-alpha colour below.
+            // The first term scales by the *source* alpha, a1; using a2 there
+            // makes the result depend on the wrong layer's transparency.
+            let ra = a2;
             if ra == 0.0 {
                 return [0.0, 0.0, 0.0, 0.0];
             }
             [
-                i1[0] * a2 + i2[0] * (1.0 - a1),
-                i1[1] * a2 + i2[1] * (1.0 - a1),
-                i1[2] * a2 + i2[2] * (1.0 - a1),
+                i1[0] * a1 + i2[0] * (1.0 - a1),
+                i1[1] * a1 + i2[1] * (1.0 - a1),
+                i1[2] * a1 + i2[2] * (1.0 - a1),
                 ra,
             ]
         }
@@ -110,6 +113,48 @@ fn composite_pixel(i1: &[f32], i2: &[f32], op: &CompositeOp) -> [f32; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `atop` keeps the backdrop's alpha and blends by the source's alpha.
+    #[test]
+    fn atop_blends_by_the_source_alpha() {
+        // Source: white at 50% over an opaque black backdrop.
+        let mut src = FilterBuffer::new(1, 1);
+        src.set_pixel(0, 0, [1.0, 1.0, 1.0, 0.5]);
+        let mut dst = FilterBuffer::new(1, 1);
+        dst.set_pixel(0, 0, [0.0, 0.0, 0.0, 1.0]);
+
+        let out = composite(&src, &dst, CompositeOp::Atop).get_pixel(0, 0);
+
+        // C = C1*a1 + C2*(1-a1) = 1*0.5 + 0*0.5 = 0.5, alpha = backdrop's 1.0.
+        assert!((out[0] - 0.5).abs() < 1e-5, "expected 0.5, got {}", out[0]);
+        assert!((out[3] - 1.0).abs() < 1e-5, "alpha comes from the backdrop");
+    }
+
+    #[test]
+    fn atop_with_an_opaque_source_replaces_the_backdrop() {
+        let mut src = FilterBuffer::new(1, 1);
+        src.set_pixel(0, 0, [0.25, 0.5, 0.75, 1.0]);
+        let mut dst = FilterBuffer::new(1, 1);
+        dst.set_pixel(0, 0, [1.0, 0.0, 0.0, 1.0]);
+
+        let out = composite(&src, &dst, CompositeOp::Atop).get_pixel(0, 0);
+        for (got, want) in out.iter().zip([0.25, 0.5, 0.75, 1.0].iter()) {
+            assert!((got - want).abs() < 1e-5, "got {out:?}");
+        }
+    }
+
+    #[test]
+    fn atop_with_a_transparent_source_leaves_the_backdrop() {
+        let mut src = FilterBuffer::new(1, 1);
+        src.set_pixel(0, 0, [1.0, 1.0, 1.0, 0.0]);
+        let mut dst = FilterBuffer::new(1, 1);
+        dst.set_pixel(0, 0, [0.25, 0.5, 0.75, 1.0]);
+
+        let out = composite(&src, &dst, CompositeOp::Atop).get_pixel(0, 0);
+        for (got, want) in out.iter().zip([0.25, 0.5, 0.75, 1.0].iter()) {
+            assert!((got - want).abs() < 1e-5, "got {out:?}");
+        }
+    }
 
     #[test]
     fn test_composite_over() {

@@ -32,6 +32,36 @@ fn doc_needs_xlink(_doc: &SvgDocument) -> bool {
     false
 }
 
+/// Writes attributes for a single element, dropping duplicates.
+///
+/// Several attributes are reachable through more than one path: font
+/// properties live on both [`TextAttrs`] and [`PresentationAttrs`], and
+/// attributes that the parser stores in a typed field may also survive in the
+/// node's extra-attribute map. Emitting a name twice produces XML that no
+/// conformant parser will accept, so the first write of a given name wins and
+/// later ones are skipped.
+struct AttrWriter<'a> {
+    inner: &'a mut XmlWriter,
+    written: Vec<String>,
+}
+
+impl<'a> AttrWriter<'a> {
+    fn new(inner: &'a mut XmlWriter) -> Self {
+        AttrWriter {
+            inner,
+            written: Vec::new(),
+        }
+    }
+
+    fn write_attribute(&mut self, name: &str, value: &str) {
+        if self.written.iter().any(|n| n == name) {
+            return;
+        }
+        self.written.push(name.to_string());
+        self.inner.write_attribute(name, value);
+    }
+}
+
 fn serialize_node(
     doc: &SvgDocument,
     id: NodeId,
@@ -47,66 +77,74 @@ fn serialize_node(
     let tag = node.element.tag_name();
     w.start_element(tag);
 
-    // SVG namespace on root element.
-    if is_root {
-        w.write_attribute("xmlns", "http://www.w3.org/2000/svg");
-        if needs_xlink {
-            w.write_attribute("xmlns:xlink", "http://www.w3.org/1999/xlink");
-        }
-    }
+    {
+        // Every attribute for this element goes through `aw`, which drops a
+        // name that has already been emitted. Without it, attributes reachable
+        // from two sources (font properties, `inkscape:path-effect`, ...) would
+        // be written twice and the output would fail to re-parse.
+        let mut aw = AttrWriter::new(w);
 
-    // Namespace declarations from the original document (for round-tripping).
-    // Only emit on the root element to avoid duplicates — child nodes may
-    // report inherited namespace declarations from the parser.
-    if is_root {
-        let mut ns_keys: Vec<&String> = node.namespaces.keys().collect();
-        ns_keys.sort();
-        for prefix in ns_keys {
-            if let Some(uri) = node.namespaces.get(prefix) {
-                if prefix.is_empty() {
-                    // Default namespace — already written above for root.
-                    if uri != "http://www.w3.org/2000/svg" {
-                        w.write_attribute("xmlns", uri);
-                    }
-                } else {
-                    // Skip xlink if already written above.
-                    if !(needs_xlink && prefix == "xlink") {
-                        let attr_name = format!("xmlns:{prefix}");
-                        w.write_attribute(&attr_name, uri);
+        // SVG namespace on root element.
+        if is_root {
+            aw.write_attribute("xmlns", "http://www.w3.org/2000/svg");
+            if needs_xlink {
+                aw.write_attribute("xmlns:xlink", "http://www.w3.org/1999/xlink");
+            }
+        }
+
+        // Namespace declarations from the original document (for round-tripping).
+        // Only emit on the root element to avoid duplicates — child nodes may
+        // report inherited namespace declarations from the parser.
+        if is_root {
+            let mut ns_keys: Vec<&String> = node.namespaces.keys().collect();
+            ns_keys.sort();
+            for prefix in ns_keys {
+                if let Some(uri) = node.namespaces.get(prefix) {
+                    if prefix.is_empty() {
+                        // Default namespace — already written above for root.
+                        if uri != "http://www.w3.org/2000/svg" {
+                            aw.write_attribute("xmlns", uri);
+                        }
+                    } else {
+                        // Skip xlink if already written above.
+                        if !(needs_xlink && prefix == "xlink") {
+                            let attr_name = format!("xmlns:{prefix}");
+                            aw.write_attribute(&attr_name, uri);
+                        }
                     }
                 }
             }
         }
-    }
 
-    // xml_id as the `id` attribute.
-    if let Some(ref xml_id) = node.xml_id {
-        w.write_attribute("id", xml_id);
-    }
+        // xml_id as the `id` attribute.
+        if let Some(ref xml_id) = node.xml_id {
+            aw.write_attribute("id", xml_id);
+        }
 
-    // Element-specific attributes.
-    write_element_attrs(&node.element, w);
+        // Element-specific attributes.
+        write_element_attrs(&node.element, &mut aw);
 
-    // Presentation attributes.
-    write_presentation_attrs(&node.presentation, w);
+        // Presentation attributes.
+        write_presentation_attrs(&node.presentation, &mut aw);
 
-    // Conditional processing attributes.
-    if let Some(ref rf) = node.required_features {
-        w.write_attribute("requiredFeatures", &rf.join(" "));
-    }
-    if let Some(ref re) = node.required_extensions {
-        w.write_attribute("requiredExtensions", &re.join(" "));
-    }
-    if let Some(ref sl) = node.system_language {
-        w.write_attribute("systemLanguage", &sl.join(","));
-    }
+        // Conditional processing attributes.
+        if let Some(ref rf) = node.required_features {
+            aw.write_attribute("requiredFeatures", &rf.join(" "));
+        }
+        if let Some(ref re) = node.required_extensions {
+            aw.write_attribute("requiredExtensions", &re.join(" "));
+        }
+        if let Some(ref sl) = node.system_language {
+            aw.write_attribute("systemLanguage", &sl.join(","));
+        }
 
-    // Extra (unrecognized / round-tripped) attributes.
-    let mut extra_keys: Vec<&String> = node.attributes.keys().collect();
-    extra_keys.sort(); // deterministic order
-    for key in extra_keys {
-        if let Some(val) = node.attributes.get(key) {
-            w.write_attribute(key, val);
+        // Extra (unrecognized / round-tripped) attributes.
+        let mut extra_keys: Vec<&String> = node.attributes.keys().collect();
+        extra_keys.sort(); // deterministic order
+        for key in extra_keys {
+            if let Some(val) = node.attributes.get(key) {
+                aw.write_attribute(key, val);
+            }
         }
     }
 
@@ -143,6 +181,7 @@ fn get_text_content(elem: &SvgElement) -> Option<&str> {
         SvgElement::Script(a) => a.content.as_deref(),
         SvgElement::FlowPara(a) => Some(&a.text_content),
         SvgElement::FlowSpan(a) => Some(&a.text_content),
+        SvgElement::Unknown(a) => Some(&a.text_content),
         _ => None,
     }
 }
@@ -151,7 +190,7 @@ fn get_text_content(elem: &SvgElement) -> Option<&str> {
 // Element attributes
 // ---------------------------------------------------------------------------
 
-fn write_element_attrs(elem: &SvgElement, w: &mut XmlWriter) {
+fn write_element_attrs(elem: &SvgElement, w: &mut AttrWriter) {
     match elem {
         SvgElement::Svg(a) => {
             if let Some(ref width) = a.width {
@@ -998,6 +1037,10 @@ fn write_element_attrs(elem: &SvgElement, w: &mut XmlWriter) {
                 w.write_attribute("inkscape:corner7", v);
             }
         }
+        SvgElement::Unknown(_) => {
+            // Everything this element carried is preserved in the node's
+            // extra-attribute map and written from there.
+        }
     }
 }
 
@@ -1005,7 +1048,7 @@ fn write_element_attrs(elem: &SvgElement, w: &mut XmlWriter) {
 // Filter primitive helpers
 // ---------------------------------------------------------------------------
 
-fn write_filter_primitive_common(w: &mut XmlWriter, c: &FilterPrimitiveAttrs) {
+fn write_filter_primitive_common(w: &mut AttrWriter, c: &FilterPrimitiveAttrs) {
     if let Some(ref r) = c.result {
         w.write_attribute("result", r);
     }
@@ -1015,13 +1058,13 @@ fn write_filter_primitive_common(w: &mut XmlWriter, c: &FilterPrimitiveAttrs) {
     write_opt_len_attr(w, "height", &c.height);
 }
 
-fn write_filter_input(w: &mut XmlWriter, attr: &str, input: &Option<FilterInput>) {
+fn write_filter_input(w: &mut AttrWriter, attr: &str, input: &Option<FilterInput>) {
     if let Some(ref fi) = input {
         w.write_attribute(attr, &fi.to_svg());
     }
 }
 
-fn write_std_deviation(w: &mut XmlWriter, x: f64, y: f64) {
+fn write_std_deviation(w: &mut AttrWriter, x: f64, y: f64) {
     if x != 0.0 || y != 0.0 {
         if (x - y).abs() < f64::EPSILON {
             w.write_attribute("stdDeviation", &x.to_string());
@@ -1035,17 +1078,17 @@ fn write_std_deviation(w: &mut XmlWriter, x: f64, y: f64) {
 // Length attribute helpers
 // ---------------------------------------------------------------------------
 
-fn write_len_attr(w: &mut XmlWriter, name: &str, len: &SvgLength) {
+fn write_len_attr(w: &mut AttrWriter, name: &str, len: &SvgLength) {
     w.write_attribute(name, &len.to_string());
 }
 
-fn write_len_attr_nonzero(w: &mut XmlWriter, name: &str, len: &SvgLength) {
+fn write_len_attr_nonzero(w: &mut AttrWriter, name: &str, len: &SvgLength) {
     if len.value != 0.0 {
         w.write_attribute(name, &len.to_string());
     }
 }
 
-fn write_opt_len_attr(w: &mut XmlWriter, name: &str, len: &Option<SvgLength>) {
+fn write_opt_len_attr(w: &mut AttrWriter, name: &str, len: &Option<SvgLength>) {
     if let Some(ref l) = len {
         w.write_attribute(name, &l.to_string());
     }
@@ -1055,7 +1098,7 @@ fn write_opt_len_attr(w: &mut XmlWriter, name: &str, len: &Option<SvgLength>) {
 // Presentation attributes
 // ---------------------------------------------------------------------------
 
-fn write_presentation_attrs(p: &PresentationAttrs, w: &mut XmlWriter) {
+fn write_presentation_attrs(p: &PresentationAttrs, w: &mut AttrWriter) {
     if let Some(ref color) = p.color {
         w.write_attribute("color", &color.to_hex());
     }

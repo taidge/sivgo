@@ -2,7 +2,8 @@
 //!
 //! Renders SVG files to pixel buffers and compares them against reference
 //! images. Differences are measured as mean absolute pixel error (MAE).
-//! If no reference exists, the test creates one automatically.
+//! The render integration tests also use the corpus for deterministic smoke
+//! coverage while reference images are being established.
 
 use std::path::{Path, PathBuf};
 
@@ -42,7 +43,12 @@ pub fn compare_pixels(
     let mut max_diff: u8 = 0;
     let mut diff_count: usize = 0;
 
-    for (a_chunk, r_chunk) in actual.chunks_exact(4).zip(reference.chunks_exact(4)) {
+    for (a_chunk, r_chunk) in actual
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(reference.as_chunks::<4>().0.iter())
+    {
         let mut pixel_differs = false;
         for i in 0..4 {
             let d = (a_chunk[i] as i16 - r_chunk[i] as i16).unsigned_abs() as u8;
@@ -79,14 +85,15 @@ pub fn compare_pixels(
 /// Returns an RGBA buffer where:
 /// - Identical pixels are shown at 30% opacity
 /// - Different pixels are highlighted in red
-pub fn generate_diff_image(
-    actual: &[u8],
-    reference: &[u8],
-    threshold: u8,
-) -> Vec<u8> {
+pub fn generate_diff_image(actual: &[u8], reference: &[u8], threshold: u8) -> Vec<u8> {
     let mut diff = Vec::with_capacity(actual.len());
 
-    for (a_chunk, r_chunk) in actual.chunks_exact(4).zip(reference.chunks_exact(4)) {
+    for (a_chunk, r_chunk) in actual
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(reference.as_chunks::<4>().0.iter())
+    {
         let max_ch_diff = (0..4)
             .map(|i| (a_chunk[i] as i16 - r_chunk[i] as i16).unsigned_abs() as u8)
             .max()
@@ -111,7 +118,7 @@ pub fn generate_diff_image(
 
 /// Get the path to the reference image directory.
 pub fn reference_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
+    workspace_root()
         .join("tests")
         .join("visual")
         .join("references")
@@ -119,8 +126,20 @@ pub fn reference_dir() -> PathBuf {
 
 /// Get the path to the example SVGs directory.
 pub fn examples_dir() -> PathBuf {
+    workspace_root().join("examples")
+}
+
+/// Get the path to the visual smoke-test corpus.
+pub fn corpus_dir() -> PathBuf {
+    workspace_root().join("tests").join("visual").join("corpus")
+}
+
+fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("examples")
+        .ancestors()
+        .nth(2)
+        .expect("render crate should be nested under the workspace root")
+        .to_path_buf()
 }
 
 #[cfg(test)]

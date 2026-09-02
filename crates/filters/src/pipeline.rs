@@ -264,8 +264,12 @@ impl FilterPipeline {
                 output = clip_buffer_to_region(&output, &sub_rect);
             }
 
+            // Every stored result carries the canvas dimensions. Primitives are
+            // free to produce something else — an `<feMerge/>` with no
+            // children yields an empty buffer — and a later primitive that
+            // pairs two inputs requires them to agree on size.
             last_result = result_name.clone();
-            named_buffers.insert(result_name, output);
+            named_buffers.insert(result_name, fit_buffer(output, w, h));
         }
 
         let mut final_buf = named_buffers
@@ -562,15 +566,73 @@ fn get_buffer(
     name: &str,
     fallback: &FilterBuffer,
 ) -> FilterBuffer {
-    named.get(name).cloned().unwrap_or_else(|| {
+    let buf = named.get(name).cloned().unwrap_or_else(|| {
         log::warn!("Filter buffer '{}' not found, using SourceGraphic", name);
         fallback.clone()
-    })
+    });
+    // Primitives that combine two inputs require matching dimensions, so an
+    // odd-sized buffer must never reach them.
+    fit_buffer(buf, fallback.width, fallback.height)
+}
+
+/// Return `buf` at exactly `width` x `height`.
+///
+/// A buffer that already matches is returned untouched; otherwise the
+/// overlapping top-left region is copied into a correctly sized transparent
+/// buffer. Primitives such as `feComposite` and `feBlend` require their two
+/// inputs to agree on size, and a mismatch used to abort the whole render.
+fn fit_buffer(buf: FilterBuffer, width: u32, height: u32) -> FilterBuffer {
+    if buf.width == width && buf.height == height {
+        return buf;
+    }
+
+    let mut fitted = FilterBuffer::new(width, height);
+    let copy_w = buf.width.min(width);
+    let copy_h = buf.height.min(height);
+    for y in 0..copy_h {
+        for x in 0..copy_w {
+            fitted.set_pixel(x, y, buf.get_pixel(x, y));
+        }
+    }
+    fitted
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An `<feMerge/>` with no children yields an empty buffer. Feeding that
+    /// into a primitive that pairs two inputs used to abort the render.
+    #[test]
+    fn empty_merge_result_does_not_break_later_primitives() {
+        let mut src = FilterBuffer::new(4, 4);
+        src.fill(1.0, 0.0, 0.0, 1.0);
+
+        let empty = crate::merge::merge(&[]);
+        assert_eq!((empty.width, empty.height), (0, 0));
+
+        let fitted = fit_buffer(empty, src.width, src.height);
+        assert_eq!((fitted.width, fitted.height), (4, 4));
+
+        // Both size-sensitive combiners now accept it.
+        let _ = crate::composite::composite(&fitted, &src, crate::composite::CompositeOp::Over);
+        let _ = crate::blend::blend(&fitted, &src, crate::blend::BlendMode::Multiply);
+    }
+
+    #[test]
+    fn fit_buffer_pads_and_crops() {
+        let mut small = FilterBuffer::new(2, 2);
+        small.fill(0.25, 0.5, 0.75, 1.0);
+
+        let grown = fit_buffer(small.clone(), 4, 4);
+        assert_eq!((grown.width, grown.height), (4, 4));
+        assert_eq!(grown.get_pixel(0, 0), [0.25, 0.5, 0.75, 1.0]);
+        assert_eq!(grown.get_pixel(3, 3), [0.0, 0.0, 0.0, 0.0]);
+
+        let shrunk = fit_buffer(small, 1, 1);
+        assert_eq!((shrunk.width, shrunk.height), (1, 1));
+        assert_eq!(shrunk.get_pixel(0, 0), [0.25, 0.5, 0.75, 1.0]);
+    }
 
     #[test]
     fn test_empty_pipeline_returns_source() {

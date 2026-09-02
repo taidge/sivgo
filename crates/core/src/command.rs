@@ -23,6 +23,13 @@ pub struct CommandHistory {
     undo_stack: Vec<Box<dyn Command>>,
     redo_stack: Vec<Box<dyn Command>>,
     max_depth: usize,
+    /// Undo depth at the last save, used to tell whether the document has
+    /// unsaved changes.
+    ///
+    /// `None` means the save point has been pushed off the end of the undo
+    /// stack, so the document must be treated as modified: the edits that
+    /// would have to be undone to get back to the saved state no longer exist.
+    saved_depth: Option<usize>,
 }
 
 impl CommandHistory {
@@ -32,6 +39,7 @@ impl CommandHistory {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             max_depth,
+            saved_depth: Some(0),
         }
     }
 
@@ -45,7 +53,27 @@ impl CommandHistory {
         // Enforce max depth.
         if self.undo_stack.len() > self.max_depth {
             self.undo_stack.remove(0);
+            // The save point shifts down with the stack, and is lost entirely
+            // once it falls off the bottom.
+            self.saved_depth = match self.saved_depth {
+                Some(0) => None,
+                Some(depth) => Some(depth - 1),
+                None => None,
+            };
         }
+    }
+
+    /// Record that the document has just been saved.
+    pub fn mark_saved(&mut self) {
+        self.saved_depth = Some(self.undo_stack.len());
+    }
+
+    /// Whether the document has changed since the last save.
+    ///
+    /// Compares position in the undo stack rather than tracking a flag, so
+    /// undoing back to the saved state correctly reports "no changes".
+    pub fn is_dirty(&self) -> bool {
+        self.saved_depth != Some(self.undo_stack.len())
     }
 
     /// Undo the most recent command.  Returns `true` if there was something

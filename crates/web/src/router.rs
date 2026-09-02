@@ -3,10 +3,14 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use salvo::catch_panic::CatchPanic;
 use salvo::cors::Cors;
+use salvo::http::request::SecureMaxSize;
 use salvo::http::Method;
 use salvo::logging::Logger;
 use salvo::prelude::*;
+use salvo::size_limiter::max_size;
+use salvo::timeout::Timeout;
 
 use crate::assets::AssetStore;
 use crate::audit::AuditLog;
@@ -16,7 +20,7 @@ use crate::handlers;
 use crate::oauth::{OAuthClient, ReqwestOAuthHttpClient};
 use crate::plugin_registry::PluginRegistry;
 use crate::preferences::PreferencesStore;
-use crate::rate_limit::{public_rate_limit, RateLimiter};
+use crate::rate_limit::{public_rate_limit, user_rate_limit, RateLimiter, UserRateLimiter};
 use crate::store::Store;
 
 /// Build the full Salvo [`Router`] tree for the API.
@@ -92,22 +96,24 @@ pub fn create_router(store: Store, config: &ServerConfig) -> Service {
                 .push(
                     Router::with_path("oauth")
                         .push(Router::with_path("callback").get(handlers::oauth::oauth_callback))
-                        .push(Router::with_path("<provider>").get(handlers::oauth::oauth_login)),
+                        .push(Router::with_path("{provider}").get(handlers::oauth::oauth_login)),
                 ),
         )
         .push(Router::with_path("export").post(handlers::export::export_document))
-        .push(Router::with_path("shared/<token>").get(handlers::shares::get_shared_document))
+        .push(Router::with_path("shared/{token}").get(handlers::shares::get_shared_document))
         .push(Router::with_path("plugins").get(handlers::plugins::list_plugins));
 
     // Authenticated routes.
     let authenticated = Router::with_path("api/v1")
         .hoop(auth::auth_guard)
+        // Registration is open, so authenticated traffic needs a ceiling too.
+        .hoop(user_rate_limit)
         .push(
             Router::with_path("documents")
                 .get(handlers::documents::list_documents)
                 .post(handlers::documents::create_document)
                 .push(
-                    Router::with_path("<id>")
+                    Router::with_path("{id}")
                         .get(handlers::documents::get_document)
                         .put(handlers::documents::update_document)
                         .delete(handlers::documents::delete_document)
@@ -117,7 +123,7 @@ pub fn create_router(store: Store, config: &ServerConfig) -> Service {
                                 .get(handlers::shares::list_shares)
                                 .post(handlers::shares::create_share)
                                 .push(
-                                    Router::with_path("<share_id>")
+                                    Router::with_path("{share_id}")
                                         .delete(handlers::shares::revoke_share),
                                 ),
                         ),
@@ -128,7 +134,7 @@ pub fn create_router(store: Store, config: &ServerConfig) -> Service {
                 .get(handlers::assets::list_assets)
                 .post(handlers::assets::upload_asset)
                 .push(
-                    Router::with_path("<id>")
+                    Router::with_path("{id}")
                         .get(handlers::assets::download_asset)
                         .delete(handlers::assets::delete_asset),
                 ),
@@ -143,7 +149,7 @@ pub fn create_router(store: Store, config: &ServerConfig) -> Service {
             Router::with_path("plugins")
                 .push(Router::with_path("installed").get(handlers::plugins::list_installed_plugins))
                 .push(
-                    Router::with_path("<pluginId>")
+                    Router::with_path("{pluginId}")
                         .push(Router::with_path("install").post(handlers::plugins::install_plugin))
                         .push(
                             Router::with_path("uninstall")
@@ -153,6 +159,15 @@ pub fn create_router(store: Store, config: &ServerConfig) -> Service {
         );
 
     let router = Router::new()
+        // Salvo's default body cap is 64 KiB, far below the per-endpoint limits
+        // the handlers enforce, so every larger document or asset was rejected
+        // with a parse error before reaching them. This raises the transport
+        // limit to just above the largest handler limit; the handlers still
+        // apply their own, more specific caps.
+        .hoop(max_size(MAX_REQUEST_BODY_BYTES))
+        // `max_size` only rejects oversized bodies; the limit that `parse_json`
+        // itself applies is separate and defaults to 64 KiB.
+        .hoop(SecureMaxSize(MAX_REQUEST_BODY_BYTES as usize))
         .hoop(
             affix_state::inject(store)
                 .inject(config.clone())
@@ -160,11 +175,28 @@ pub fn create_router(store: Store, config: &ServerConfig) -> Service {
                 .inject(prefs_store)
                 .inject(plugin_registry)
                 .inject(audit_log)
-                .inject(public_rate_limiter),
+                .inject(public_rate_limiter)
+                .inject(UserRateLimiter::default()),
         )
         .hoop(affix_state::inject(oauth_client))
         .push(public)
         .push(authenticated);
 
-    Service::new(router).hoop(cors).hoop(Logger::new())
+    Service::new(router)
+        .hoop(cors)
+        .hoop(Logger::new())
+        // A panic in rendering or parsing must fail one request, not drop the
+        // connection with no response; a slow request must not hold a worker
+        // open indefinitely.
+        .hoop(CatchPanic::new())
+        .hoop(Timeout::new(REQUEST_TIMEOUT))
 }
+
+/// Largest request body accepted at the transport layer.
+///
+/// Sits just above the biggest per-endpoint limit (24 MiB for a base64 asset
+/// upload) so that handlers, not the transport, produce the error message.
+const MAX_REQUEST_BODY_BYTES: u64 = 32 * 1024 * 1024;
+
+/// Wall-clock limit for a single request.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
