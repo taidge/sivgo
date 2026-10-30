@@ -1,7 +1,8 @@
 //! Align & Distribute panel with alignment buttons, distribution buttons,
 //! and a "relative to" selector.
 
-use dioxus::prelude::*;
+use crate::controls::{action_button, choice_field, panel};
+use glory::prelude::*;
 
 /// Alignment operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,119 +47,103 @@ pub enum AlignAction {
 ///
 /// Includes 6 alignment buttons, 6 distribute buttons, and a "relative to"
 /// selector (selection or page).
-#[component]
-pub fn AlignPanel(relative_to: String, on_action: EventHandler<AlignAction>) -> Element {
-    let rel_value = relative_to.clone();
+#[derive(Clone)]
+pub struct AlignPanel {
+    pub relative_to: String,
+    pub on_action: crate::Callback<AlignAction>,
+}
 
-    rsx! {
-        div { class: "align-panel",
-            div { class: "panel-header", "Align & Distribute" }
-
-            // Relative-to selector
-            div { class: "prop-row",
-                label { class: "prop-label", "Relative to" }
-                select {
-                    class: "prop-select",
-                    value: "{rel_value}",
-                    onchange: move |evt: Event<FormData>| {
-                        let val = evt.value().to_string();
-                        let rel = if val == "Page" {
-                            AlignRelativeTo::Page
-                        } else {
-                            AlignRelativeTo::Selection
-                        };
-                        on_action.call(AlignAction::SetRelativeTo(rel));
-                    },
-                    option { value: "Selection", selected: rel_value == "Selection", "Selection" }
-                    option { value: "Page", selected: rel_value == "Page", "Page" }
-                }
-            }
-
-            // ---- Alignment buttons ----
-            div { class: "align-section",
-                div { class: "align-section-header", "Align" }
-                div { class: "align-buttons",
-                    button {
-                        class: "align-btn",
-                        title: "Align left edges",
-                        onclick: move |_| on_action.call(AlignAction::Align(AlignOp::Left)),
-                        "⫷ Left"
-                    }
-                    button {
-                        class: "align-btn",
-                        title: "Center on vertical axis",
-                        onclick: move |_| on_action.call(AlignAction::Align(AlignOp::CenterH)),
-                        "⫿ Center H"
-                    }
-                    button {
-                        class: "align-btn",
-                        title: "Align right edges",
-                        onclick: move |_| on_action.call(AlignAction::Align(AlignOp::Right)),
-                        "⫸ Right"
-                    }
-                    button {
-                        class: "align-btn",
-                        title: "Align top edges",
-                        onclick: move |_| on_action.call(AlignAction::Align(AlignOp::Top)),
-                        "⊤ Top"
-                    }
-                    button {
-                        class: "align-btn",
-                        title: "Center on horizontal axis",
-                        onclick: move |_| on_action.call(AlignAction::Align(AlignOp::CenterV)),
-                        "⊞ Center V"
-                    }
-                    button {
-                        class: "align-btn",
-                        title: "Align bottom edges",
-                        onclick: move |_| on_action.call(AlignAction::Align(AlignOp::Bottom)),
-                        "⊥ Bottom"
-                    }
-                }
-            }
-
-            // ---- Distribution buttons ----
-            div { class: "align-section",
-                div { class: "align-section-header", "Distribute" }
-                div { class: "align-buttons",
-                    button {
-                        class: "align-btn",
-                        title: "Make horizontal gaps equal",
-                        onclick: move |_| on_action.call(AlignAction::Distribute(DistributeOp::HorizontalGaps)),
-                        "↔ H Gaps"
-                    }
-                    button {
-                        class: "align-btn",
-                        title: "Make vertical gaps equal",
-                        onclick: move |_| on_action.call(AlignAction::Distribute(DistributeOp::VerticalGaps)),
-                        "↕ V Gaps"
-                    }
-                    button {
-                        class: "align-btn",
-                        title: "Distribute left edges equidistantly",
-                        onclick: move |_| on_action.call(AlignAction::Distribute(DistributeOp::Left)),
-                        "⫷ D-Left"
-                    }
-                    button {
-                        class: "align-btn",
-                        title: "Distribute centers horizontally",
-                        onclick: move |_| on_action.call(AlignAction::Distribute(DistributeOp::CenterH)),
-                        "⫿ D-CtrH"
-                    }
-                    button {
-                        class: "align-btn",
-                        title: "Distribute top edges equidistantly",
-                        onclick: move |_| on_action.call(AlignAction::Distribute(DistributeOp::Top)),
-                        "⊤ D-Top"
-                    }
-                    button {
-                        class: "align-btn",
-                        title: "Distribute centers vertically",
-                        onclick: move |_| on_action.call(AlignAction::Distribute(DistributeOp::CenterV)),
-                        "⊞ D-CtrV"
-                    }
-                }
-            }
+impl Widget for AlignPanel {
+    fn build(&mut self, scope: &Scope) -> Result {
+        let scope = panel(scope, "align-panel", "Align & Distribute")?;
+        let callback = self.on_action.clone();
+        choice_field(
+            &scope,
+            "Relative to",
+            self.relative_to.clone(),
+            &["Selection", "Page"],
+            move |v| {
+                callback.call(AlignAction::SetRelativeTo(if v == "Page" {
+                    AlignRelativeTo::Page
+                } else {
+                    AlignRelativeTo::Selection
+                }))
+            },
+        )?;
+        for (label, op) in [
+            ("Align left", AlignOp::Left),
+            ("Center horizontally", AlignOp::CenterH),
+            ("Align right", AlignOp::Right),
+            ("Align top", AlignOp::Top),
+            ("Center vertically", AlignOp::CenterV),
+            ("Align bottom", AlignOp::Bottom),
+        ] {
+            let callback = self.on_action.clone();
+            action_button(&scope, label, false, move || {
+                callback.call(AlignAction::Align(op.clone()))
+            })?;
         }
+        for (label, op) in [
+            ("Equal horizontal gaps", DistributeOp::HorizontalGaps),
+            ("Equal vertical gaps", DistributeOp::VerticalGaps),
+            ("Distribute left edges", DistributeOp::Left),
+            ("Distribute horizontal centers", DistributeOp::CenterH),
+            ("Distribute right edges", DistributeOp::Right),
+            ("Distribute top edges", DistributeOp::Top),
+            ("Distribute vertical centers", DistributeOp::CenterV),
+            ("Distribute bottom edges", DistributeOp::Bottom),
+        ] {
+            let callback = self.on_action.clone();
+            action_button(&scope, label, false, move || {
+                callback.call(AlignAction::Distribute(op.clone()))
+            })?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod semantic_tests {
+    use super::*;
+    use glory::render::{NodeId, Props};
+    use std::{cell::RefCell, rc::Rc};
+
+    fn button(app: &App, label: &str) -> NodeId {
+        let tree = app.tree();
+        let mut nodes = tree.roots().to_vec();
+        while let Some(id) = nodes.pop() {
+            let node = tree.node(id).unwrap();
+            if matches!(node.descriptor.view().props, Props::Button(props) if props.label == label)
+            {
+                return id;
+            }
+            nodes.extend(node.children.iter().copied());
+        }
+        panic!("missing button: {label}");
+    }
+
+    #[test]
+    fn alignment_and_distribution_controls_dispatch_typed_actions() {
+        let actions = Rc::new(RefCell::new(Vec::new()));
+        let captured = actions.clone();
+        let app = App::memory();
+        app.mount(AlignPanel {
+            relative_to: "Selection".into(),
+            on_action: crate::Callback::new(move |a| captured.borrow_mut().push(a)),
+        })
+        .unwrap();
+        app.dispatch(button(&app, "Align left"), Event::Activate)
+            .unwrap();
+        app.dispatch(button(&app, "Distribute bottom edges"), Event::Activate)
+            .unwrap();
+        assert!(matches!(
+            actions.borrow().as_slice(),
+            [
+                AlignAction::Align(AlignOp::Left),
+                AlignAction::Distribute(DistributeOp::Bottom)
+            ]
+        ));
+        app.clear().unwrap();
+        assert_eq!(app.stats().nodes, 0);
     }
 }

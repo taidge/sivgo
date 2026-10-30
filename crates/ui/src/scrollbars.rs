@@ -1,7 +1,8 @@
 //! Scrollbar components (horizontal and vertical) that reflect the viewport
 //! position relative to the document extents.
 
-use dioxus::prelude::*;
+use crate::Callback;
+use glory::prelude::*;
 
 /// Minimum thumb size in pixels to keep it visible and clickable.
 const MIN_THUMB_SIZE: f64 = 20.0;
@@ -57,12 +58,14 @@ fn scroll_extents(track_length: f64, document_length: f64, zoom: f64) -> (f64, f
     (visible_length, total, max_doc_offset)
 }
 
+#[cfg(test)]
 fn horizontal_track_style(bar_h: f64) -> String {
     format!(
         "position: relative; width: 100%; height: {bar_h}px; background: #1e1e1e; border-top: 1px solid #444;"
     )
 }
 
+#[cfg(test)]
 fn vertical_track_style(bar_w: f64) -> String {
     format!(
         "position: relative; width: {bar_w}px; height: 100%; background: #1e1e1e; border-left: 1px solid #444;"
@@ -73,101 +76,177 @@ fn vertical_track_style(bar_w: f64) -> String {
 ///
 /// Shows a thumb whose position and size are proportional to the viewport
 /// width relative to the full document width.
-#[component]
-pub fn HorizontalScrollbar(
-    /// Track length in pixels (the available scrollbar width).
-    track_length: f64,
-    /// The total document width in document coordinates.
-    document_width: f64,
-    /// Current viewport pan X offset (screen pixels).
-    pan_x: f64,
-    /// Current zoom factor.
-    zoom: f64,
-    /// Called when the user clicks on the scrollbar track to scroll.
-    /// The value is the desired new pan X in screen pixels.
-    on_scroll: EventHandler<f64>,
-) -> Element {
-    let bar_h = SCROLLBAR_SIZE;
-    let metrics = scrollbar_metrics(track_length, document_width, pan_x, zoom);
-    let (visible_width, total, max_doc_offset) = scroll_extents(track_length, document_width, zoom);
-    let track_style = horizontal_track_style(bar_h);
-    let thumb_pos_pct = metrics.thumb_pos_pct;
-    let thumb_size_pct = metrics.thumb_size_pct;
-
-    rsx! {
-        div {
-            class: "scrollbar scrollbar-horizontal",
-            style: "{track_style}",
-            onclick: move |evt: Event<dioxus::events::MouseData>| {
-                let coords = evt.data().element_coordinates();
-                let click_ratio = coords.x / track_length;
-                let new_doc_offset =
-                    (click_ratio * total - visible_width / 2.0).clamp(0.0, max_doc_offset);
-                let new_pan_x = -new_doc_offset * zoom;
-                on_scroll.call(new_pan_x);
-            },
-
-            // Thumb
-            div {
-                style: "position: absolute; left: {thumb_pos_pct}%; top: 2px; width: {thumb_size_pct}%; min-width: {MIN_THUMB_SIZE}px; max-width: 100%; height: {bar_h - 4.0}px; background: #555; border-radius: 3px; cursor: pointer;",
-                // Prevent click from propagating to track
-                onclick: move |evt: Event<dioxus::events::MouseData>| {
-                    evt.stop_propagation();
-                },
-            }
-        }
+pub struct HorizontalScrollbar {
+    pub track_length: f64,
+    pub document_width: f64,
+    pub pan_x: f64,
+    pub zoom: f64,
+    pub on_scroll: Callback<f64>,
+}
+pub struct VerticalScrollbar {
+    pub track_length: f64,
+    pub document_height: f64,
+    pub pan_y: f64,
+    pub zoom: f64,
+    pub on_scroll: Callback<f64>,
+}
+impl Widget for HorizontalScrollbar {
+    fn build(&mut self, scope: &Scope) -> Result {
+        scrollbar(
+            scope,
+            true,
+            self.track_length,
+            self.document_width,
+            self.pan_x,
+            self.zoom,
+            self.on_scroll.clone(),
+        )
     }
 }
-
-/// A vertical scrollbar linked to the viewport pan.
-///
-/// Shows a thumb whose position and size are proportional to the viewport
-/// height relative to the full document height.
-#[component]
-pub fn VerticalScrollbar(
-    /// Track length in pixels (the available scrollbar height).
-    track_length: f64,
-    /// The total document height in document coordinates.
-    document_height: f64,
-    /// Current viewport pan Y offset (screen pixels).
-    pan_y: f64,
-    /// Current zoom factor.
-    zoom: f64,
-    /// Called when the user clicks on the scrollbar track to scroll.
-    /// The value is the desired new pan Y in screen pixels.
-    on_scroll: EventHandler<f64>,
-) -> Element {
-    let bar_w = SCROLLBAR_SIZE;
-    let metrics = scrollbar_metrics(track_length, document_height, pan_y, zoom);
-    let (visible_height, total, max_doc_offset) =
-        scroll_extents(track_length, document_height, zoom);
-    let track_style = vertical_track_style(bar_w);
-    let thumb_pos_pct = metrics.thumb_pos_pct;
-    let thumb_size_pct = metrics.thumb_size_pct;
-
-    rsx! {
-        div {
-            class: "scrollbar scrollbar-vertical",
-            style: "{track_style}",
-            onclick: move |evt: Event<dioxus::events::MouseData>| {
-                let coords = evt.data().element_coordinates();
-                let click_ratio = coords.y / track_length;
-                let new_doc_offset =
-                    (click_ratio * total - visible_height / 2.0).clamp(0.0, max_doc_offset);
-                let new_pan_y = -new_doc_offset * zoom;
-                on_scroll.call(new_pan_y);
-            },
-
-            // Thumb
-            div {
-                style: "position: absolute; left: 2px; top: {thumb_pos_pct}%; width: {bar_w - 4.0}px; height: {thumb_size_pct}%; min-height: {MIN_THUMB_SIZE}px; max-height: 100%; background: #555; border-radius: 3px; cursor: pointer;",
-                // Prevent click from propagating to track
-                onclick: move |evt: Event<dioxus::events::MouseData>| {
-                    evt.stop_propagation();
-                },
-            }
-        }
+impl Widget for VerticalScrollbar {
+    fn build(&mut self, scope: &Scope) -> Result {
+        scrollbar(
+            scope,
+            false,
+            self.track_length,
+            self.document_height,
+            self.pan_y,
+            self.zoom,
+            self.on_scroll.clone(),
+        )
     }
+}
+fn scrollbar(
+    scope: &Scope,
+    horizontal: bool,
+    length: f64,
+    document: f64,
+    pan: f64,
+    zoom: f64,
+    callback: Callback<f64>,
+) -> Result {
+    use glory::render::{DragCapture, DragPhase, EventKind, Query, QueryValue, Semantics};
+    use glory::style::{Color, Position};
+    let length = length.max(1.0);
+    let zoom = zoom.max(0.000001);
+    let metrics = scrollbar_metrics(length, document, pan, zoom);
+    let preview = scope.cage(metrics);
+    let request_serial = std::rc::Rc::new(std::cell::Cell::new(0_u64));
+    let owner = scope.downgrade();
+    let node = scope.cage(None);
+    view()
+        .class(if horizontal {
+            "scrollbar scrollbar-horizontal"
+        } else {
+            "scrollbar scrollbar-vertical"
+        })
+        .name(if horizontal {
+            "Horizontal canvas scrollbar"
+        } else {
+            "Vertical canvas scrollbar"
+        })
+        .node_ref(node)
+        .style(Style {
+            background: Some(Color(30, 30, 30, 255)),
+            ..Style::new()
+                .position(Position::Relative)
+                .width(if horizontal {
+                    Length::Percent(100.0)
+                } else {
+                    Length::Px(SCROLLBAR_SIZE)
+                })
+                .height(if horizontal {
+                    Length::Px(SCROLLBAR_SIZE)
+                } else {
+                    Length::Percent(100.0)
+                })
+        })
+        .semantics(Some(Box::new(Semantics {
+            drag_capture: Some(DragCapture::Press),
+            ..Default::default()
+        })))
+        .on(EventKind::Drag, move |event| {
+            if let Event::Drag { phase, x, y, .. } = event {
+                let serial = request_serial.get().wrapping_add(1);
+                request_serial.set(serial);
+                if phase == DragPhase::Cancel {
+                    preview.revise(|value| *value = metrics);
+                    return;
+                }
+                let (Some(scope), Some(node)) = (owner.upgrade(), node.get()) else {
+                    return;
+                };
+                let callback = callback.clone();
+                let request_serial = request_serial.clone();
+                // Pointer coordinates are viewport-relative. Query the actual
+                // track box instead of assuming that the track starts at 0.
+                let result = scope.request(Query::Bounds(node), move |reply| {
+                    if request_serial.get() != serial {
+                        return;
+                    }
+                    let Ok(QueryValue::Bounds(bounds)) = reply else {
+                        return;
+                    };
+                    let (position, actual_length) = if horizontal {
+                        (x - bounds.x, bounds.width)
+                    } else {
+                        (y - bounds.y, bounds.height)
+                    };
+                    if actual_length <= 0.0 {
+                        return;
+                    }
+                    let (visible, total, max_offset) =
+                        scroll_extents(actual_length, document, zoom);
+                    let offset =
+                        (position / actual_length * total - visible / 2.0).clamp(0.0, max_offset);
+                    let next_pan = -offset * zoom;
+                    preview.revise(|value| {
+                        *value = scrollbar_metrics(actual_length, document, next_pan, zoom)
+                    });
+                    // Keep the pointer's owner mounted during the gesture; the
+                    // editor can rebuild its snapshot after the release.
+                    if phase == DragPhase::Drop {
+                        callback.call(next_pan);
+                    }
+                });
+                if let Err(error) = result {
+                    scope.report_error(error);
+                }
+            }
+        })
+        .show_in(scope)?;
+    let child = scope.child_in(node.get().ok_or(glory::ui::Error::Gone)?)?;
+    view()
+        .style(preview.map(move |metrics| {
+            Style {
+                background: Some(Color(100, 100, 100, 255)),
+                ..Style::new()
+                    .position(Position::Absolute)
+                    .radius(3.0)
+                    .left(if horizontal {
+                        Length::Percent(metrics.thumb_pos_pct)
+                    } else {
+                        Length::Px(2.0)
+                    })
+                    .top(if horizontal {
+                        Length::Px(2.0)
+                    } else {
+                        Length::Percent(metrics.thumb_pos_pct)
+                    })
+                    .width(if horizontal {
+                        Length::Percent(metrics.thumb_size_pct)
+                    } else {
+                        Length::Px(SCROLLBAR_SIZE - 4.0)
+                    })
+                    .height(if horizontal {
+                        Length::Px(SCROLLBAR_SIZE - 4.0)
+                    } else {
+                        Length::Percent(metrics.thumb_size_pct)
+                    })
+            }
+        }))
+        .show_in(&child)?;
+    scope.retain(child)
 }
 
 #[cfg(test)]

@@ -1,7 +1,8 @@
 //! Text Properties panel with font family, size, weight, style,
 //! line height, spacing, and alignment controls.
 
-use dioxus::prelude::*;
+use crate::{controls::*, Callback};
+use glory::prelude::*;
 
 /// Events emitted by the text properties panel.
 #[derive(Debug, Clone)]
@@ -21,217 +22,86 @@ pub enum TextAction {
 ///
 /// Provides controls for font family, size, weight, style, line height,
 /// letter spacing, word spacing, and text alignment.
-#[component]
-pub fn TextPanel(
-    text_content: String,
-    font_family: String,
-    font_size: f64,
-    font_weight: String,
-    font_style: String,
-    line_height: f64,
-    letter_spacing: f64,
-    word_spacing: f64,
-    text_align: String,
-    has_text_selection: bool,
-    on_action: EventHandler<TextAction>,
-) -> Element {
-    if !has_text_selection {
-        return rsx! {
-            div { class: "text-panel",
-                div { class: "panel-header", "Text" }
-                div { class: "prop-empty", "No text selected" }
-            }
-        };
-    }
+pub struct TextPanel {
+    pub text_content: String,
+    pub font_family: String,
+    pub font_size: f64,
+    pub font_weight: String,
+    pub font_style: String,
+    pub line_height: f64,
+    pub letter_spacing: f64,
+    pub word_spacing: f64,
+    pub text_align: String,
+    pub has_text_selection: bool,
+    pub on_action: Callback<TextAction>,
+}
 
-    let font_family_val = font_family.clone();
-    let text_content_val = text_content.clone();
-    let weight_val = font_weight.clone();
-    let style_val = font_style.clone();
-    let align_val = text_align.clone();
-
-    let font_weights = [
-        "Normal", "Bold", "100", "200", "300", "400", "500", "600", "700", "800", "900",
-    ];
-    let font_styles = ["Normal", "Italic", "Oblique"];
-    let alignments = ["Start", "Middle", "End"];
-
-    rsx! {
-        div { class: "text-panel",
-            div { class: "panel-header", "Text" }
-
-            div { class: "prop-section",
-                div { class: "prop-row stacked",
-                    label { class: "prop-label", "Content" }
-                    textarea {
-                        class: "prop-textarea text-content-input",
-                        rows: "4",
-                        value: "{text_content_val}",
-                        oninput: move |evt: Event<FormData>| {
-                            on_action.call(TextAction::SetTextContent(evt.value().to_string()));
-                        },
-                    }
-                }
-            }
-
-            // ---- Font Family ----
-            div { class: "prop-section",
-                div { class: "prop-row",
-                    label { class: "prop-label", "Font" }
-                    input {
-                        r#type: "text",
-                        class: "prop-input text-font-input",
-                        placeholder: "Font family",
-                        value: "{font_family_val}",
-                        onchange: move |evt: Event<FormData>| {
-                            on_action.call(TextAction::SetFontFamily(evt.value().to_string()));
-                        },
-                    }
-                }
-
-                // ---- Font Size ----
-                div { class: "prop-row",
-                    label { class: "prop-label", "Size" }
-                    input {
-                        r#type: "number",
-                        class: "prop-input",
-                        value: "{font_size}",
-                        min: "1",
-                        max: "1000",
-                        step: "1",
-                        onchange: move |evt: Event<FormData>| {
-                            if let Ok(val) = evt.value().parse::<f64>() {
-                                on_action.call(TextAction::SetFontSize(val));
-                            }
-                        },
-                    }
-                    span { class: "prop-unit", "px" }
-                }
-
-                // ---- Font Weight ----
-                div { class: "prop-row",
-                    label { class: "prop-label", "Weight" }
-                    select {
-                        class: "prop-select",
-                        value: "{weight_val}",
-                        onchange: move |evt: Event<FormData>| {
-                            on_action.call(TextAction::SetFontWeight(evt.value().to_string()));
-                        },
-                        for w in font_weights.iter() {
-                            {
-                                let is_sel = weight_val == *w;
-                                rsx! {
-                                    option {
-                                        value: "{w}",
-                                        selected: is_sel,
-                                        "{w}"
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // ---- Font Style ----
-                div { class: "prop-row",
-                    label { class: "prop-label", "Style" }
-                    select {
-                        class: "prop-select",
-                        value: "{style_val}",
-                        onchange: move |evt: Event<FormData>| {
-                            on_action.call(TextAction::SetFontStyle(evt.value().to_string()));
-                        },
-                        for s in font_styles.iter() {
-                            {
-                                let is_sel = style_val == *s;
-                                rsx! {
-                                    option {
-                                        value: "{s}",
-                                        selected: is_sel,
-                                        "{s}"
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // ---- Spacing ----
-            div { class: "prop-section",
-                div { class: "prop-section-header", "Spacing" }
-
-                div { class: "prop-row",
-                    label { class: "prop-label", "Line H" }
-                    input {
-                        r#type: "number",
-                        class: "prop-input",
-                        value: "{line_height}",
-                        min: "0",
-                        step: "0.1",
-                        onchange: move |evt: Event<FormData>| {
-                            if let Ok(val) = evt.value().parse::<f64>() {
-                                on_action.call(TextAction::SetLineHeight(val));
-                            }
-                        },
-                    }
-                }
-
-                div { class: "prop-row",
-                    label { class: "prop-label", "Letter" }
-                    input {
-                        r#type: "number",
-                        class: "prop-input",
-                        value: "{letter_spacing}",
-                        step: "0.5",
-                        onchange: move |evt: Event<FormData>| {
-                            if let Ok(val) = evt.value().parse::<f64>() {
-                                on_action.call(TextAction::SetLetterSpacing(val));
-                            }
-                        },
-                    }
-                    span { class: "prop-unit", "px" }
-                }
-
-                div { class: "prop-row",
-                    label { class: "prop-label", "Word" }
-                    input {
-                        r#type: "number",
-                        class: "prop-input",
-                        value: "{word_spacing}",
-                        step: "0.5",
-                        onchange: move |evt: Event<FormData>| {
-                            if let Ok(val) = evt.value().parse::<f64>() {
-                                on_action.call(TextAction::SetWordSpacing(val));
-                            }
-                        },
-                    }
-                    span { class: "prop-unit", "px" }
-                }
-            }
-
-            // ---- Alignment ----
-            div { class: "prop-section",
-                div { class: "prop-section-header", "Alignment" }
-                div { class: "text-align-buttons",
-                    for a in alignments.iter() {
-                        {
-                            let is_active = align_val == *a;
-                            let a_str = a.to_string();
-                            rsx! {
-                                button {
-                                    class: if is_active { "text-align-btn active" } else { "text-align-btn" },
-                                    title: "Align {a}",
-                                    onclick: move |_| {
-                                        on_action.call(TextAction::SetTextAlign(a_str.clone()));
-                                    },
-                                    "{a}"
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+impl Widget for TextPanel {
+    fn build(&mut self, scope: &Scope) -> Result {
+        let panel = panel(scope, "text-panel", "Text")?;
+        if !self.has_text_selection {
+            return text().content("No text selected").show_in(&panel);
         }
+        let callback = self.on_action.clone();
+        text().content("Content").show_in(&panel)?;
+        sapid::textarea()
+            .theme(crate::controls::editor_theme())
+            .name("Text content")
+            .default_value(self.text_content.clone())
+            .on_commit(move |v| callback.call(TextAction::SetTextContent(v)))
+            .show_in(&panel)?;
+        let callback = self.on_action.clone();
+        text_field(&panel, "Font family", self.font_family.clone(), move |v| {
+            callback.call(TextAction::SetFontFamily(v))
+        })?;
+        for (label, value, action) in [
+            (
+                "Font size",
+                self.font_size,
+                TextAction::SetFontSize as fn(f64) -> TextAction,
+            ),
+            ("Line height", self.line_height, TextAction::SetLineHeight),
+            (
+                "Letter spacing",
+                self.letter_spacing,
+                TextAction::SetLetterSpacing,
+            ),
+            (
+                "Word spacing",
+                self.word_spacing,
+                TextAction::SetWordSpacing,
+            ),
+        ] {
+            let callback = self.on_action.clone();
+            number_field(&panel, label, value, move |v| callback.call(action(v)))?;
+        }
+        for (label, value, options, action) in [
+            (
+                "Font weight",
+                self.font_weight.clone(),
+                &[
+                    "Normal", "Bold", "100", "200", "300", "400", "500", "600", "700", "800", "900",
+                ][..],
+                TextAction::SetFontWeight as fn(String) -> TextAction,
+            ),
+            (
+                "Font style",
+                self.font_style.clone(),
+                &["Normal", "Italic", "Oblique"][..],
+                TextAction::SetFontStyle,
+            ),
+            (
+                "Text alignment",
+                self.text_align.clone(),
+                &["Start", "Middle", "End"][..],
+                TextAction::SetTextAlign,
+            ),
+        ] {
+            let callback = self.on_action.clone();
+            choice_field(&panel, label, value, options, move |v| {
+                callback.call(action(v))
+            })?;
+        }
+        Ok(())
     }
 }

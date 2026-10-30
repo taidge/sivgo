@@ -1,6 +1,6 @@
-﻿# Sivgo
+# Sivgo
 
-Sivgo is a Rust SVG vector graphics editor prototype inspired by Inkscape. The current workspace provides a native Dioxus desktop application and a Salvo REST API backend; a Web/WASM client is not present in this worktree.
+Sivgo is a Rust SVG vector graphics editor prototype inspired by Inkscape. The current workspace provides a native Glory/Blitz desktop application with Sapid widgets and a Salvo REST API backend; a Web/WASM client is not present in this worktree.
 
 ## Architecture
 
@@ -19,8 +19,8 @@ Sivgo is organized as a Cargo workspace with 14 crates:
 | `sivgo-io` | Export: SVG, PNG, JPEG, WebP, PDF, EPS, DXF. Import: SVG, bitmaps, and a partial PDF reader |
 | `sivgo-core` | Editor engine: tools, commands, undo/redo, snapping, selection |
 | `sivgo-plugin` | Plugin manifests and a permission model. Modules are validated with `wasmparser` and run on a small built-in interpreter that covers numeric functions only; the scripting layer is a restricted expression DSL, not a Lua runtime |
-| `sivgo-ui` | Dioxus UI components used by the desktop app |
-| `sivgo-desktop` | Desktop application binary (Dioxus desktop) |
+| `sivgo-ui` | Glory semantic UI components and Sapid controls used by the desktop app |
+| `sivgo-desktop` | Desktop application binary (Glory Blitz desktop host) |
 | `sivgo-web` | Salvo REST API backend for documents, assets, export, preferences, and plugins |
 
 Each crate depends only on what it actually uses:
@@ -37,15 +37,40 @@ sivgo-render  math + dom + text + filters
 sivgo-io      math + dom + render + trace
 sivgo-core    math + dom + path-ops + text
 sivgo-plugin  math + dom
-sivgo-ui      core + dom + render
+sivgo-ui      math + core + dom + render
 sivgo-desktop math + dom + render + io + core + plugin + ui
 sivgo-web     dom + render
 ```
 
 ## Prerequisites
 
-- **Rust** 1.89+ (install via [rustup](https://rustup.rs))
+- **Rust** 1.94+ (install via [rustup](https://rustup.rs))
 - **just** command runner (install via `cargo install just`)
+
+The `glory` branch uses sibling source checkouts:
+
+```text
+D:/Works/glory-rs/glory
+D:/Works/glory-rs/sapid
+D:/Works/taidge/sivgo
+```
+
+Workspace dependencies resolve these paths relative to Sivgo's root. Glory is
+loaded from `../../glory-rs/glory/crates/glory`, and Sapid from
+`../../glory-rs/sapid`. Keep these repositories in that relative layout.
+The desktop host renders through Blitz; it does not require a WebView.
+
+On Windows the checked-in Cargo configuration places build output in
+`D:/BuildCache/sivgo-glory/target` and compiler temporary files in
+`D:/BuildCache/sivgo-glory/tmp`. Create that temporary directory before building.
+Use `CARGO_HOME=D:/BuildCache/cargo` for downloaded dependency caches.
+`./scripts/cargo.ps1 test --workspace` sets these paths, creates the directories,
+and verifies Cargo metadata before executing the requested Cargo command. On other
+systems override `CARGO_TARGET_DIR` and update the temporary paths in
+`.cargo/config.toml`; for
+WSL use a verified D-drive mount under `/mnt/d/BuildCache/sivgo-glory`.
+After setting the environment, `cargo metadata --no-deps --format-version 1`
+reports the effective `target_directory`.
 
 No external database is required for the current development backend; `sivgo-web` uses in-memory stores.
 

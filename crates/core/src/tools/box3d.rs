@@ -476,6 +476,10 @@ impl Command for CreateBox3dCommand {
     fn description(&self) -> &str {
         "Create 3D box"
     }
+
+    fn created_selection(&self) -> Vec<NodeId> {
+        self.box3d_id.into_iter().collect()
+    }
 }
 
 #[cfg(test)]

@@ -83,4 +83,12 @@ impl Command for AddNodeCommand {
     fn description(&self) -> &str {
         "Add element"
     }
+
+    fn created_selection(&self) -> Vec<NodeId> {
+        if self.element.is_renderable() {
+            self.created_id.into_iter().collect()
+        } else {
+            Vec::new()
+        }
+    }
 }

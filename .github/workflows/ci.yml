@@ -13,6 +13,13 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-D warnings"
+  CARGO_TARGET_DIR: ${{ github.workspace }}/build-cache/target
+  TMP: /tmp
+  TEMP: /tmp
+
+defaults:
+  run:
+    working-directory: taidge/sivgo
 
 jobs:
   build-and-test:
@@ -20,8 +27,53 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Prepare build directories
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            mkdir -p D:/BuildCache/sivgo-glory/target D:/BuildCache/sivgo-glory/tmp
+            echo "CARGO_HOME=D:/BuildCache/cargo" >> "$GITHUB_ENV"
+            echo "CARGO_TARGET_DIR=D:/BuildCache/sivgo-glory/target" >> "$GITHUB_ENV"
+            echo "TMP=D:/BuildCache/sivgo-glory/tmp" >> "$GITHUB_ENV"
+            echo "TEMP=D:/BuildCache/sivgo-glory/tmp" >> "$GITHUB_ENV"
+          else
+            echo "CARGO_HOME=$HOME/.cargo" >> "$GITHUB_ENV"
+          fi
+
+      - name: Install Linux window dependencies
+        if: runner.os == 'Linux'
+        working-directory: ${{ github.workspace }}
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libudev-dev
+
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          path: taidge/sivgo
+
+      - name: Configure compiler temporary files
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          p = Path('.cargo/config.toml')
+          p.write_text(p.read_text().replace('D:/BuildCache/sivgo-glory/tmp', os.environ['TEMP'].replace(chr(92), '/')))
+          PY
+
+      - name: Checkout Glory
+        uses: actions/checkout@v4
+        with:
+          repository: glory-rs/glory
+          ref: f046098d795027e2d15e8c6b587188327ea1b7fc
+          path: glory-rs/glory
+
+      - name: Checkout Sapid
+        uses: actions/checkout@v4
+        with:
+          repository: sapid-ui/sapid
+          ref: 0c40831538a37c2467b0a6d0240a69c75e0c8832
+          path: glory-rs/sapid
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -32,9 +84,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
+            ${{ env.CARGO_HOME }}/registry
+            ${{ env.CARGO_HOME }}/git
+            ${{ env.CARGO_TARGET_DIR }}
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
@@ -56,8 +108,7 @@ jobs:
           RUSTDOCFLAGS: "-D warnings"
         run: cargo doc --workspace --no-deps
 
-  # The desktop crate pulls in platform-specific windowing, clipboard and file
-  # dialog code that never compiles on the Linux job above.
+  # Check native windowing, clipboard, and dialogs on each desktop platform.
   cross-platform-check:
     name: Check (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -67,8 +118,53 @@ jobs:
         os: [windows-latest, macos-latest]
 
     steps:
+      - name: Prepare build directories
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            mkdir -p D:/BuildCache/sivgo-glory/target D:/BuildCache/sivgo-glory/tmp
+            echo "CARGO_HOME=D:/BuildCache/cargo" >> "$GITHUB_ENV"
+            echo "CARGO_TARGET_DIR=D:/BuildCache/sivgo-glory/target" >> "$GITHUB_ENV"
+            echo "TMP=D:/BuildCache/sivgo-glory/tmp" >> "$GITHUB_ENV"
+            echo "TEMP=D:/BuildCache/sivgo-glory/tmp" >> "$GITHUB_ENV"
+          else
+            echo "CARGO_HOME=$HOME/.cargo" >> "$GITHUB_ENV"
+          fi
+
+      - name: Install Linux window dependencies
+        if: runner.os == 'Linux'
+        working-directory: ${{ github.workspace }}
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libudev-dev
+
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          path: taidge/sivgo
+
+      - name: Configure compiler temporary files
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          p = Path('.cargo/config.toml')
+          p.write_text(p.read_text().replace('D:/BuildCache/sivgo-glory/tmp', os.environ['TEMP'].replace(chr(92), '/')))
+          PY
+
+      - name: Checkout Glory
+        uses: actions/checkout@v4
+        with:
+          repository: glory-rs/glory
+          ref: f046098d795027e2d15e8c6b587188327ea1b7fc
+          path: glory-rs/glory
+
+      - name: Checkout Sapid
+        uses: actions/checkout@v4
+        with:
+          repository: sapid-ui/sapid
+          ref: 0c40831538a37c2467b0a6d0240a69c75e0c8832
+          path: glory-rs/sapid
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -77,9 +173,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
+            ${{ env.CARGO_HOME }}/registry
+            ${{ env.CARGO_HOME }}/git
+            ${{ env.CARGO_TARGET_DIR }}
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
@@ -94,8 +190,53 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Prepare build directories
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            mkdir -p D:/BuildCache/sivgo-glory/target D:/BuildCache/sivgo-glory/tmp
+            echo "CARGO_HOME=D:/BuildCache/cargo" >> "$GITHUB_ENV"
+            echo "CARGO_TARGET_DIR=D:/BuildCache/sivgo-glory/target" >> "$GITHUB_ENV"
+            echo "TMP=D:/BuildCache/sivgo-glory/tmp" >> "$GITHUB_ENV"
+            echo "TEMP=D:/BuildCache/sivgo-glory/tmp" >> "$GITHUB_ENV"
+          else
+            echo "CARGO_HOME=$HOME/.cargo" >> "$GITHUB_ENV"
+          fi
+
+      - name: Install Linux window dependencies
+        if: runner.os == 'Linux'
+        working-directory: ${{ github.workspace }}
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libudev-dev
+
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          path: taidge/sivgo
+
+      - name: Configure compiler temporary files
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          p = Path('.cargo/config.toml')
+          p.write_text(p.read_text().replace('D:/BuildCache/sivgo-glory/tmp', os.environ['TEMP'].replace(chr(92), '/')))
+          PY
+
+      - name: Checkout Glory
+        uses: actions/checkout@v4
+        with:
+          repository: glory-rs/glory
+          ref: f046098d795027e2d15e8c6b587188327ea1b7fc
+          path: glory-rs/glory
+
+      - name: Checkout Sapid
+        uses: actions/checkout@v4
+        with:
+          repository: sapid-ui/sapid
+          ref: 0c40831538a37c2467b0a6d0240a69c75e0c8832
+          path: glory-rs/sapid
 
       - name: Read MSRV from Cargo.toml
         id: msrv
@@ -119,8 +260,53 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Prepare build directories
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            mkdir -p D:/BuildCache/sivgo-glory/target D:/BuildCache/sivgo-glory/tmp
+            echo "CARGO_HOME=D:/BuildCache/cargo" >> "$GITHUB_ENV"
+            echo "CARGO_TARGET_DIR=D:/BuildCache/sivgo-glory/target" >> "$GITHUB_ENV"
+            echo "TMP=D:/BuildCache/sivgo-glory/tmp" >> "$GITHUB_ENV"
+            echo "TEMP=D:/BuildCache/sivgo-glory/tmp" >> "$GITHUB_ENV"
+          else
+            echo "CARGO_HOME=$HOME/.cargo" >> "$GITHUB_ENV"
+          fi
+
+      - name: Install Linux window dependencies
+        if: runner.os == 'Linux'
+        working-directory: ${{ github.workspace }}
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libudev-dev
+
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          path: taidge/sivgo
+
+      - name: Configure compiler temporary files
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          p = Path('.cargo/config.toml')
+          p.write_text(p.read_text().replace('D:/BuildCache/sivgo-glory/tmp', os.environ['TEMP'].replace(chr(92), '/')))
+          PY
+
+      - name: Checkout Glory
+        uses: actions/checkout@v4
+        with:
+          repository: glory-rs/glory
+          ref: f046098d795027e2d15e8c6b587188327ea1b7fc
+          path: glory-rs/glory
+
+      - name: Checkout Sapid
+        uses: actions/checkout@v4
+        with:
+          repository: sapid-ui/sapid
+          ref: 0c40831538a37c2467b0a6d0240a69c75e0c8832
+          path: glory-rs/sapid
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@nightly
@@ -129,9 +315,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            fuzz/target
+            ${{ env.CARGO_HOME }}/registry
+            ${{ env.CARGO_HOME }}/git
+            ${{ env.CARGO_TARGET_DIR }}
           key: ${{ runner.os }}-fuzz-${{ hashFiles('fuzz/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-fuzz-

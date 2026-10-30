@@ -1,7 +1,8 @@
 //! Live Path Effects (LPE) panel for adding, editing, reordering,
 //! and removing path effects applied to selected objects.
 
-use dioxus::prelude::*;
+use crate::controls::{action_button, panel, text_field};
+use glory::prelude::*;
 
 /// Kind of Live Path Effect.
 ///
@@ -117,153 +118,95 @@ pub enum LpeAction {
 }
 
 /// A panel for managing Live Path Effects on selected path objects.
-#[component]
-pub fn LpePanel(
-    effects: Vec<LpeEntry>,
-    selected_id: Option<String>,
-    has_selection: bool,
-    on_action: EventHandler<LpeAction>,
-) -> Element {
-    if !has_selection {
-        return rsx! {
-            div { class: "lpe-panel",
-                div { class: "panel-header", "Live Path Effects" }
-                div { class: "prop-empty", "No path selected" }
+#[derive(Clone)]
+pub struct LpePanel {
+    pub effects: Vec<LpeEntry>,
+    pub selected_id: Option<String>,
+    pub has_selection: bool,
+    pub on_action: crate::Callback<LpeAction>,
+}
+
+impl Widget for LpePanel {
+    fn build(&mut self, scope: &Scope) -> Result {
+        let scope = panel(scope, "lpe-panel", "Live Path Effects")?;
+        if !self.has_selection {
+            text()
+                .content("Select a path to edit its live effects.")
+                .show_in(&scope)?;
+            return Ok(());
+        }
+        let selected_kind = scope.cage(LpeKind::all().first().map(|kind| kind.key().to_owned()));
+        crate::controls::choice_options(
+            &scope,
+            "Effect",
+            selected_kind.get().unwrap_or_default(),
+            LpeKind::all()
+                .iter()
+                .map(|kind| (kind.key().to_owned(), kind.label().to_owned()))
+                .collect(),
+            move |value| selected_kind.revise(|current| *current = Some(value)),
+        )?;
+        let callback = self.on_action.clone();
+        action_button(&scope, "Add effect", false, move || {
+            if let Some(kind) = selected_kind.get().as_deref().and_then(LpeKind::from_key) {
+                callback.call(LpeAction::Add(kind));
             }
-        };
-    }
-
-    let all_kinds = LpeKind::all();
-
-    rsx! {
-        div { class: "lpe-panel",
-            div { class: "panel-header", "Live Path Effects" }
-
-            // ---- Add LPE ----
-            div { class: "prop-section",
-                div { class: "prop-section-header", "Add Effect" }
-                div { class: "lpe-add-buttons",
-                    for kind in all_kinds.iter() {
-                        {
-                            let k = kind.clone();
-                            rsx! {
-                                button {
-                                    class: "action-btn lpe-add-btn",
-                                    title: "Add {kind.label()}",
-                                    onclick: move |_| on_action.call(LpeAction::Add(k.clone())),
-                                    "{kind.label()}"
-                                }
-                            }
-                        }
-                    }
+        })?;
+        for (index, entry) in self.effects.iter().enumerate() {
+            let scope = panel(
+                &scope,
+                if self.selected_id.as_ref() == Some(&entry.id) {
+                    "effect-card selected"
+                } else {
+                    "effect-card"
+                },
+                entry.kind.label(),
+            )?;
+            for (label, action) in [
+                ("Edit parameters", LpeAction::Select(entry.id.clone())),
+                (
+                    if entry.enabled { "Disable" } else { "Enable" },
+                    LpeAction::ToggleEnabled(entry.id.clone()),
+                ),
+                ("Remove", LpeAction::Remove(entry.id.clone())),
+            ] {
+                let callback = self.on_action.clone();
+                action_button(&scope, label, false, move || callback.call(action.clone()))?;
+            }
+            let id = entry.id.clone();
+            let callback = self.on_action.clone();
+            sapid::button()
+                .theme(crate::controls::editor_theme())
+                .label("Move up")
+                .enabled(index > 0)
+                .on_press(move || callback.call(LpeAction::MoveUp(id.clone())))
+                .show_in(&scope)?;
+            let id = entry.id.clone();
+            let callback = self.on_action.clone();
+            sapid::button()
+                .theme(crate::controls::editor_theme())
+                .label("Move down")
+                .enabled(index + 1 < self.effects.len())
+                .on_press(move || callback.call(LpeAction::MoveDown(id.clone())))
+                .show_in(&scope)?;
+            if self.selected_id.as_ref() == Some(&entry.id) {
+                for param in &entry.params {
+                    let callback = self.on_action.clone();
+                    let id = entry.id.clone();
+                    let name = param.name.clone();
+                    text_field(&scope, &param.name, param.value.clone(), move |value| {
+                        callback.call(LpeAction::SetParam(id.clone(), name.clone(), value))
+                    })?;
                 }
-            }
-
-            // ---- Effect stack ----
-            div { class: "prop-section",
-                div { class: "prop-section-header", "Effect Stack" }
-                div { class: "lpe-list",
-                    for (idx, effect) in effects.iter().enumerate() {
-                        {
-                            let eid = effect.id.clone();
-                            let eid_up = effect.id.clone();
-                            let eid_down = effect.id.clone();
-                            let eid_del = effect.id.clone();
-                            let eid_toggle = effect.id.clone();
-                            let is_selected = selected_id.as_deref() == Some(effect.id.as_str());
-                            let is_first = idx == 0;
-                            let is_last = idx == effects.len() - 1;
-                            rsx! {
-                                div {
-                                    key: "{effect.id}",
-                                    class: if is_selected { "lpe-item selected" } else { "lpe-item" },
-                                    onclick: move |_| on_action.call(LpeAction::Select(eid.clone())),
-
-                                    span {
-                                        class: if effect.enabled { "lpe-label" } else { "lpe-label disabled" },
-                                        "{effect.kind.label()}"
-                                    }
-
-                                    button {
-                                        class: "lpe-btn",
-                                        title: if effect.enabled { "Disable" } else { "Enable" },
-                                        onclick: move |_| on_action.call(LpeAction::ToggleEnabled(eid_toggle.clone())),
-                                        if effect.enabled { "On" } else { "Off" }
-                                    }
-                                    button {
-                                        class: "lpe-btn",
-                                        title: "Move up",
-                                        disabled: is_first,
-                                        onclick: move |_| on_action.call(LpeAction::MoveUp(eid_up.clone())),
-                                        "Up"
-                                    }
-                                    button {
-                                        class: "lpe-btn",
-                                        title: "Move down",
-                                        disabled: is_last,
-                                        onclick: move |_| on_action.call(LpeAction::MoveDown(eid_down.clone())),
-                                        "Dn"
-                                    }
-                                    button {
-                                        class: "lpe-btn delete",
-                                        title: "Remove",
-                                        onclick: move |_| on_action.call(LpeAction::Remove(eid_del.clone())),
-                                        "X"
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    if effects.is_empty() {
-                        div { class: "lpe-list-empty", "No effects applied" }
-                    }
-                }
-            }
-
-            // ---- Selected LPE parameters ----
-            if let Some(ref sel_id) = selected_id {
-                {
-                    if let Some(selected) = effects.iter().find(|e| &e.id == sel_id) {
-                        let params = selected.params.clone();
-                        let sel_eid = sel_id.clone();
-                        rsx! {
-                            div { class: "prop-section",
-                                div { class: "prop-section-header", "Parameters: {selected.kind.label()}" }
-                                for param in params.iter() {
-                                    {
-                                        let eid = sel_eid.clone();
-                                        let pname = param.name.clone();
-                                        let pval = param.value.clone();
-                                        rsx! {
-                                            div { class: "prop-row",
-                                                label { class: "prop-label", "{pname}" }
-                                                input {
-                                                    r#type: "text",
-                                                    class: "prop-input",
-                                                    value: "{pval}",
-                                                    onchange: move |evt: Event<FormData>| {
-                                                        on_action.call(LpeAction::SetParam(
-                                                            eid.clone(),
-                                                            pname.clone(),
-                                                            evt.value().to_string(),
-                                                        ));
-                                                    },
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                if params.is_empty() {
-                                    div { class: "prop-empty", "No parameters" }
-                                }
-                            }
-                        }
-                    } else {
-                        rsx! { }
-                    }
+                if entry.params.is_empty() {
+                    text().content("No parameters").show_in(&scope)?;
                 }
             }
         }
+        if self.effects.is_empty() {
+            text().content("No effects applied").show_in(&scope)?;
+        }
+        Ok(())
     }
 }
 

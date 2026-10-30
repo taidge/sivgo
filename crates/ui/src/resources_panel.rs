@@ -1,7 +1,8 @@
 //! Document Resources panel for listing all resources used in the SVG
 //! document: gradients, patterns, fonts, images, filters, and markers.
 
-use dioxus::prelude::*;
+use crate::{controls::*, Callback};
+use glory::prelude::*;
 
 /// Kind of SVG document resource.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -108,126 +109,73 @@ pub enum ResourcesAction {
 
 /// A panel listing all resources (gradients, patterns, fonts, images, etc.)
 /// used in the document, with usage counts and cleanup controls.
-#[component]
-pub fn ResourcesPanel(
-    resources: Vec<ResourceEntry>,
-    kind_filter: Option<String>,
-    selected_id: Option<String>,
-    on_action: EventHandler<ResourcesAction>,
-) -> Element {
-    let filter_val = kind_filter.clone().unwrap_or_default();
-    let kind_options = vec![
-        "All",
-        "Gradient",
-        "Pattern",
-        "Font",
-        "Image",
-        "Filter",
-        "Marker",
-        "Symbol",
-        "Clip Path",
-        "Mask",
-        "Template",
-        "Tutorial",
-        "Extension Asset",
-    ];
+pub struct ResourcesPanel {
+    pub resources: Vec<ResourceEntry>,
+    pub kind_filter: Option<String>,
+    pub selected_id: Option<String>,
+    pub on_action: Callback<ResourcesAction>,
+}
 
-    // Client-side filtering
-    let filtered: Vec<&ResourceEntry> = resources
-        .iter()
-        .filter(|r| filter_val.is_empty() || filter_val == "All" || r.kind.label() == filter_val)
-        .collect();
-
-    let unused_count = resources.iter().filter(|r| r.is_unused()).count();
-
-    rsx! {
-        div { class: "resources-panel",
-            div { class: "panel-header", "Document Resources" }
-
-            // ---- Kind filter ----
-            div { class: "prop-row",
-                label { class: "prop-label", "Filter" }
-                select {
-                    class: "prop-select",
-                    value: "{filter_val}",
-                    onchange: move |evt: Event<FormData>| {
-                        let val = evt.value().to_string();
-                        let kind = match val.as_str() {
-                            "Gradient" => Some(ResourceKind::Gradient),
-                            "Pattern" => Some(ResourceKind::Pattern),
-                            "Font" => Some(ResourceKind::Font),
-                            "Image" => Some(ResourceKind::Image),
-                            "Filter" => Some(ResourceKind::Filter),
-                            "Marker" => Some(ResourceKind::Marker),
-                            "Symbol" => Some(ResourceKind::Symbol),
-                            "Clip Path" => Some(ResourceKind::ClipPath),
-                            "Mask" => Some(ResourceKind::Mask),
-                            "Template" => Some(ResourceKind::Template),
-                            "Tutorial" => Some(ResourceKind::Tutorial),
-                            "Extension Asset" => Some(ResourceKind::ExtensionAsset),
-                            _ => None,
-                        };
-                        on_action.call(ResourcesAction::SetKindFilter(kind));
-                    },
-                    for opt in kind_options.iter() {
-                        {
-                            let is_sel = filter_val == *opt || (filter_val.is_empty() && *opt == "All");
-                            rsx! { option { value: "{opt}", selected: is_sel, "{opt}" } }
-                        }
-                    }
-                }
+impl Widget for ResourcesPanel {
+    fn build(&mut self, scope: &Scope) -> Result {
+        let panel = panel(scope, "resources-panel", "Document Resources")?;
+        let mut options = vec!["All"];
+        options.extend(ResourceKind::all().iter().map(ResourceKind::label));
+        let callback = self.on_action.clone();
+        choice_field(
+            &panel,
+            "Resource kind",
+            self.kind_filter.clone().unwrap_or_else(|| "All".into()),
+            &options,
+            move |v| {
+                callback.call(ResourcesAction::SetKindFilter(
+                    ResourceKind::all().iter().find(|k| k.label() == v).cloned(),
+                ));
+            },
+        )?;
+        let filter = self.kind_filter.as_deref().unwrap_or("All");
+        let mut count = 0;
+        for resource in &self.resources {
+            if !filter.is_empty() && filter != "All" && filter != resource.kind.label() {
+                continue;
             }
-
-            // ---- Resource list ----
-            div { class: "resources-list",
-                div { class: "prop-section-header", "Resources ({filtered.len()})" }
-                for res in filtered.iter() {
-                    {
-                        let rid = res.id.clone();
-                        let rid_del = res.id.clone();
-                        let is_selected = selected_id.as_deref() == Some(res.id.as_str());
-                        let is_unused = res.is_unused();
-                        rsx! {
-                            div {
-                                key: "{res.id}",
-                                class: if is_selected { "resource-item selected" } else { "resource-item" },
-                                onclick: move |_| on_action.call(ResourcesAction::Select(rid.clone())),
-
-                                span { class: "resource-kind-badge", "{res.kind.label()}" }
-                                span { class: "resource-name", "{res.name}" }
-                                span { class: "resource-id", "#{res.id}" }
-                                span {
-                                    class: if is_unused { "resource-usage unused" } else { "resource-usage" },
-                                    "{res.usage_count} uses"
-                                }
-
-                                if is_unused {
-                                    button {
-                                        class: "resource-btn delete",
-                                        title: "Delete unused resource",
-                                        onclick: move |_| on_action.call(ResourcesAction::DeleteUnused(rid_del.clone())),
-                                        "X"
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                if filtered.is_empty() {
-                    div { class: "resources-empty", "No resources found" }
-                }
-            }
-
-            // ---- Cleanup ----
-            div { class: "dialog-actions",
-                button {
-                    class: "action-btn",
-                    disabled: unused_count == 0,
-                    onclick: move |_| on_action.call(ResourcesAction::DeleteAllUnused),
-                    "Delete All Unused ({unused_count})"
-                }
+            count += 1;
+            let callback = self.on_action.clone();
+            let id = resource.id.clone();
+            action_button(
+                &panel,
+                &format!(
+                    "{}: {} #{} ({} uses)",
+                    resource.kind.label(),
+                    resource.name,
+                    resource.id,
+                    resource.usage_count
+                ),
+                self.selected_id.as_ref() == Some(&resource.id),
+                move || callback.call(ResourcesAction::Select(id.clone())),
+            )?;
+            if resource.is_unused() {
+                let callback = self.on_action.clone();
+                let id = resource.id.clone();
+                action_button(
+                    &panel,
+                    &format!("Delete unused {}", resource.name),
+                    false,
+                    move || callback.call(ResourcesAction::DeleteUnused(id.clone())),
+                )?;
             }
         }
+        if count == 0 {
+            text().content("No resources found").show_in(&panel)?;
+        }
+        let unused = self.resources.iter().filter(|r| r.is_unused()).count();
+        let callback = self.on_action.clone();
+        sapid::button()
+            .theme(crate::controls::editor_theme())
+            .label(format!("Delete All Unused ({unused})"))
+            .enabled(unused > 0)
+            .on_press(move || callback.call(ResourcesAction::DeleteAllUnused))
+            .show_in(&panel)
     }
 }
 

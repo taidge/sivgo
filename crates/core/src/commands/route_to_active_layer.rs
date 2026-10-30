@@ -101,4 +101,8 @@ impl Command for RouteToActiveLayerCommand {
     fn description(&self) -> &str {
         self.inner.description()
     }
+
+    fn created_selection(&self) -> Vec<NodeId> {
+        self.inner.created_selection()
+    }
 }

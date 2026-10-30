@@ -1,7 +1,8 @@
 //! Status bar component showing cursor position, zoom, selection info, and
 //! object count.
 
-use dioxus::prelude::*;
+use crate::controls::*;
+use glory::prelude::*;
 
 /// A horizontal status bar displayed at the bottom of the editor window.
 ///
@@ -10,62 +11,41 @@ use dioxus::prelude::*;
 /// - Zoom level as a percentage
 /// - Selection info (count and type description)
 /// - Total object count in the document
-#[component]
-pub fn StatusBar(
-    /// Cursor position in document coordinates.
-    cursor_position: Signal<(f64, f64)>,
-    /// Current zoom factor (1.0 = 100%).
-    zoom: f64,
-    /// Number of currently selected objects.
-    selection_count: usize,
-    /// Short description of the selected element type(s), e.g. "rect" or "mixed".
-    #[props(default = String::new())]
-    selection_type: String,
-    /// Total number of objects in the document.
-    #[props(default = 0)]
-    object_count: usize,
-) -> Element {
-    let (cursor_x_value, cursor_y_value) = *cursor_position.read();
-    let zoom_pct = zoom * 100.0;
+pub struct StatusBar {
+    pub cursor_position: Cage<(f64, f64)>,
+    pub zoom: f64,
+    pub selection_count: usize,
+    pub selection_type: String,
+    pub object_count: usize,
+}
 
-    let selection_text = if selection_count == 0 {
-        "No selection".to_string()
-    } else if selection_count == 1 {
-        if selection_type.is_empty() {
-            "1 selected".to_string()
-        } else {
-            format!("1 {} selected", selection_type)
-        }
-    } else if selection_type.is_empty() {
-        format!("{} selected", selection_count)
-    } else {
-        format!("{} {} selected", selection_count, selection_type)
-    };
-
-    rsx! {
-        div { class: "status-bar",
-            div { class: "status-section",
-                div { class: "status-cluster",
-                    span { class: "status-label", "Cursor" }
-                    span { class: "status-item", "{cursor_x_value:.1}, {cursor_y_value:.1}" }
+impl Widget for StatusBar {
+    fn build(&mut self, scope: &Scope) -> Result {
+        let panel = panel(scope, "status-bar", "")?;
+        let cursor = self.cursor_position;
+        text()
+            .content(cursor.map(|(x, y)| format!("Cursor: {x:.1}, {y:.1}")))
+            .show_in(&panel)?;
+        text()
+            .content(format!("Zoom: {:.0}%", self.zoom * 100.0))
+            .show_in(&panel)?;
+        text()
+            .content(if self.selection_count == 0 {
+                "No selection".into()
+            } else {
+                format!("{} {} selected", self.selection_count, self.selection_type)
+            })
+            .show_in(&panel)?;
+        text()
+            .content(format!(
+                "{} {}",
+                self.object_count,
+                if self.object_count == 1 {
+                    "object"
+                } else {
+                    "objects"
                 }
-                div { class: "status-cluster",
-                    span { class: "status-label", "Zoom" }
-                    span { class: "status-item", "{zoom_pct:.0}%" }
-                }
-            }
-            div { class: "status-section",
-                div { class: "status-cluster emphasis",
-                    span { class: "status-label", "Selection" }
-                    span { class: "status-item", "{selection_text}" }
-                }
-                if object_count > 0 {
-                    div { class: "status-cluster",
-                        span { class: "status-label", "Document" }
-                        span { class: "status-item", "{object_count} objects" }
-                    }
-                }
-            }
-        }
+            ))
+            .show_in(&panel)
     }
 }

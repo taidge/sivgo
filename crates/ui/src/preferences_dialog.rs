@@ -1,7 +1,8 @@
 //! Preferences dialog with categorised settings sections:
 //! Tools, Interface, I/O, Rendering, and Snapping.
 
-use dioxus::prelude::*;
+use crate::controls::{action_button, choice_field, number_field, panel};
+use glory::prelude::*;
 use serde::{Deserialize, Serialize};
 
 /// Top-level section within the preferences dialog.
@@ -146,377 +147,258 @@ pub enum PreferencesAction {
 
 /// A dialog for editing application-wide preferences organised into
 /// sections: Tools, Interface, I/O, Rendering, and Snapping.
-#[component]
-pub fn PreferencesDialog(
-    state: PreferencesState,
-    on_action: EventHandler<PreferencesAction>,
-) -> Element {
-    let sections = PreferencesSection::all();
-    let themes = ["Dark", "Light", "System"];
-    let icon_sizes = ["Small", "Medium", "Large"];
-    let filter_qualities = ["Low", "Medium", "High"];
+#[derive(Clone)]
+pub struct PreferencesDialog {
+    pub state: PreferencesState,
+    pub on_action: crate::Callback<PreferencesAction>,
+}
 
-    let theme_val = state.theme.clone();
-    let icon_val = state.icon_size.clone();
-    let filter_val = state.display_filter_quality.clone();
-    let shape_val = state.default_shape_tool.clone();
-
-    rsx! {
-        div { class: "preferences-dialog",
-            div { class: "panel-header",
-                span { "Preferences" }
-                button {
-                    class: "dialog-close-btn",
-                    title: "Close",
-                    onclick: move |_| on_action.call(PreferencesAction::Close),
-                    "X"
-                }
+impl Widget for PreferencesDialog {
+    fn build(&mut self, scope: &Scope) -> Result {
+        let scope = panel(scope, "preferences-dialog", "Preferences")?;
+        for section in PreferencesSection::all() {
+            let next = section.clone();
+            let callback = self.on_action.clone();
+            action_button(
+                &scope,
+                section.label(),
+                self.state.section == *section,
+                move || callback.call(PreferencesAction::SetSection(next.clone())),
+            )?;
+        }
+        match self.state.section {
+            PreferencesSection::Tools => {
+                let callback = self.on_action.clone();
+                choice_field(
+                    &scope,
+                    "Default shape tool",
+                    self.state.default_shape_tool.clone(),
+                    &["Rectangle", "Ellipse", "Star", "Spiral"],
+                    move |value| callback.call(PreferencesAction::SetDefaultShapeTool(value)),
+                )?;
+                let callback = self.on_action.clone();
+                sapid::checkbox()
+                    .theme(crate::controls::editor_theme())
+                    .label("Show bounding box")
+                    .default_checked(self.state.bounding_box_display)
+                    .on_checked_change(move |value| {
+                        callback.call(PreferencesAction::SetBoundingBoxDisplay(value))
+                    })
+                    .show_in(&scope)?;
             }
-
-            div { class: "preferences-layout",
-                // Section sidebar
-                div { class: "preferences-sidebar",
-                    for sec in sections.iter() {
-                        {
-                            let is_active = state.section == *sec;
-                            let sec_clone = sec.clone();
-                            rsx! {
-                                button {
-                                    class: if is_active { "pref-section-btn active" } else { "pref-section-btn" },
-                                    onclick: move |_| on_action.call(PreferencesAction::SetSection(sec_clone.clone())),
-                                    "{sec.label()}"
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Section content
-                div { class: "preferences-content",
-                    match state.section {
-                        PreferencesSection::Tools => rsx! {
-                            div { class: "prop-section",
-                                div { class: "prop-section-header", "Tools" }
-                                div { class: "prop-row",
-                                    label { class: "prop-label", "Default shape" }
-                                    input {
-                                        r#type: "text",
-                                        class: "prop-input",
-                                        value: "{shape_val}",
-                                        onchange: move |evt: Event<FormData>| {
-                                            on_action.call(PreferencesAction::SetDefaultShapeTool(evt.value().to_string()));
-                                        },
-                                    }
-                                }
-                                div { class: "prop-row",
-                                    label { class: "prop-label", "Bounding box" }
-                                    input {
-                                        r#type: "checkbox",
-                                        class: "prop-checkbox",
-                                        checked: state.bounding_box_display,
-                                        onchange: move |evt: Event<FormData>| {
-                                            on_action.call(PreferencesAction::SetBoundingBoxDisplay(evt.value() == "true"));
-                                        },
-                                    }
-                                }
-                            }
-                        },
-                        PreferencesSection::Interface => rsx! {
-                            div { class: "prop-section",
-                                div { class: "prop-section-header", "Interface" }
-                                div { class: "prop-row",
-                                    label { class: "prop-label", "Theme" }
-                                    select {
-                                        class: "prop-select",
-                                        value: "{theme_val}",
-                                        onchange: move |evt: Event<FormData>| {
-                                            on_action.call(PreferencesAction::SetTheme(evt.value().to_string()));
-                                        },
-                                        for t in themes.iter() {
-                                            {
-                                                let is_sel = theme_val == *t;
-                                                rsx! { option { value: "{t}", selected: is_sel, "{t}" } }
-                                            }
-                                        }
-                                    }
-                                }
-                                div { class: "prop-row",
-                                    label { class: "prop-label", "Icon size" }
-                                    select {
-                                        class: "prop-select",
-                                        value: "{icon_val}",
-                                        onchange: move |evt: Event<FormData>| {
-                                            on_action.call(PreferencesAction::SetIconSize(evt.value().to_string()));
-                                        },
-                                        for s in icon_sizes.iter() {
-                                            {
-                                                let is_sel = icon_val == *s;
-                                                rsx! { option { value: "{s}", selected: is_sel, "{s}" } }
-                                            }
-                                        }
-                                    }
-                                }
-                                div { class: "prop-row",
-                                    label { class: "prop-label", "Tooltips" }
-                                    input {
-                                        r#type: "checkbox",
-                                        class: "prop-checkbox",
-                                        checked: state.show_tooltips,
-                                        onchange: move |evt: Event<FormData>| {
-                                            on_action.call(PreferencesAction::SetShowTooltips(evt.value() == "true"));
-                                        },
-                                    }
-                                }
-                            }
-                        },
-                        PreferencesSection::IO => rsx! {
-                            div { class: "prop-section",
-                                div { class: "prop-section-header", "I/O" }
-                                div { class: "prop-row",
-                                    label { class: "prop-label", "Auto-save" }
-                                    input {
-                                        r#type: "checkbox",
-                                        class: "prop-checkbox",
-                                        checked: state.auto_save,
-                                        onchange: move |evt: Event<FormData>| {
-                                            on_action.call(PreferencesAction::SetAutoSave(evt.value() == "true"));
-                                        },
-                                    }
-                                }
-                                div { class: "prop-row",
-                                    label { class: "prop-label", "Interval (s)" }
-                                    input {
-                                        r#type: "number",
-                                        class: "prop-input",
-                                        value: "{state.auto_save_interval_secs}",
-                                        min: "10",
-                                        step: "10",
-                                        onchange: move |evt: Event<FormData>| {
-                                            if let Ok(val) = evt.value().parse::<u32>() {
-                                                on_action.call(PreferencesAction::SetAutoSaveInterval(val));
-                                            }
-                                        },
-                                    }
-                                }
-                                div { class: "prop-row",
-                                    label { class: "prop-label", "Recent files" }
-                                    input {
-                                        r#type: "number",
-                                        class: "prop-input",
-                                        value: "{state.recent_files_count}",
-                                        min: "0",
-                                        max: "50",
-                                        step: "1",
-                                        onchange: move |evt: Event<FormData>| {
-                                            if let Ok(val) = evt.value().parse::<u32>() {
-                                                on_action.call(PreferencesAction::SetRecentFilesCount(val));
-                                            }
-                                        },
-                                    }
-                                }
-                            }
-                        },
-                        PreferencesSection::Rendering => rsx! {
-                            div { class: "prop-section",
-                                div { class: "prop-section-header", "Rendering" }
-                                div { class: "prop-row",
-                                    label { class: "prop-label", "Anti-aliasing" }
-                                    input {
-                                        r#type: "checkbox",
-                                        class: "prop-checkbox",
-                                        checked: state.anti_aliasing,
-                                        onchange: move |evt: Event<FormData>| {
-                                            on_action.call(PreferencesAction::SetAntiAliasing(evt.value() == "true"));
-                                        },
-                                    }
-                                }
-                                div { class: "prop-row",
-                                    label { class: "prop-label", "Filter quality" }
-                                    select {
-                                        class: "prop-select",
-                                        value: "{filter_val}",
-                                        onchange: move |evt: Event<FormData>| {
-                                            on_action.call(PreferencesAction::SetDisplayFilterQuality(evt.value().to_string()));
-                                        },
-                                        for q in filter_qualities.iter() {
-                                            {
-                                                let is_sel = filter_val == *q;
-                                                rsx! { option { value: "{q}", selected: is_sel, "{q}" } }
-                                            }
-                                        }
-                                    }
-                                }
-                                div { class: "prop-row",
-                                    label { class: "prop-label", "Canvas border" }
-                                    input {
-                                        r#type: "checkbox",
-                                        class: "prop-checkbox",
-                                        checked: state.canvas_border,
-                                        onchange: move |evt: Event<FormData>| {
-                                            on_action.call(PreferencesAction::SetCanvasBorder(evt.value() == "true"));
-                                        },
-                                    }
-                                }
-                            }
-                        },
-                        PreferencesSection::Snapping => rsx! {
-                            div { class: "prop-section",
-                                div { class: "prop-section-header", "Snapping" }
-                                div { class: "prop-row",
-                                    label { class: "prop-label", "Snap to nodes" }
-                                    input {
-                                        r#type: "checkbox",
-                                        class: "prop-checkbox",
-                                        checked: state.snap_to_nodes,
-                                        onchange: move |evt: Event<FormData>| {
-                                            on_action.call(PreferencesAction::SetSnapToNodes(evt.value() == "true"));
-                                        },
-                                    }
-                                }
-                                div { class: "prop-row",
-                                    label { class: "prop-label", "Snap to paths" }
-                                    input {
-                                        r#type: "checkbox",
-                                        class: "prop-checkbox",
-                                        checked: state.snap_to_paths,
-                                        onchange: move |evt: Event<FormData>| {
-                                            on_action.call(PreferencesAction::SetSnapToPaths(evt.value() == "true"));
-                                        },
-                                    }
-                                }
-                                div { class: "prop-row",
-                                    label { class: "prop-label", "Snap to grid" }
-                                    input {
-                                        r#type: "checkbox",
-                                        class: "prop-checkbox",
-                                        checked: state.snap_to_grid,
-                                        onchange: move |evt: Event<FormData>| {
-                                            on_action.call(PreferencesAction::SetSnapToGrid(evt.value() == "true"));
-                                        },
-                                    }
-                                }
-                                div { class: "prop-row",
-                                    label { class: "prop-label", "Snap to guides" }
-                                    input {
-                                        r#type: "checkbox",
-                                        class: "prop-checkbox",
-                                        checked: state.snap_to_guides,
-                                        onchange: move |evt: Event<FormData>| {
-                                            on_action.call(PreferencesAction::SetSnapToGuides(evt.value() == "true"));
-                                        },
-                                    }
-                                }
-                                div { class: "prop-row",
-                                    label { class: "prop-label", "Snap to objects" }
-                                    input {
-                                        r#type: "checkbox",
-                                        class: "prop-checkbox",
-                                        checked: state.snap_to_objects,
-                                        onchange: move |evt: Event<FormData>| {
-                                            on_action.call(PreferencesAction::SetSnapToObjects(evt.value() == "true"));
-                                        },
-                                    }
-                                }
-                                div { class: "prop-row",
-                                    label { class: "prop-label", "Snap intersections" }
-                                    input {
-                                        r#type: "checkbox",
-                                        class: "prop-checkbox",
-                                        checked: state.snap_to_intersections,
-                                        onchange: move |evt: Event<FormData>| {
-                                            on_action.call(PreferencesAction::SetSnapToIntersections(evt.value() == "true"));
-                                        },
-                                    }
-                                }
-                                div { class: "prop-row",
-                                    label { class: "prop-label", "Equal spacing" }
-                                    input {
-                                        r#type: "checkbox",
-                                        class: "prop-checkbox",
-                                        checked: state.snap_to_equal_spacing,
-                                        onchange: move |evt: Event<FormData>| {
-                                            on_action.call(PreferencesAction::SetSnapToEqualSpacing(evt.value() == "true"));
-                                        },
-                                    }
-                                }
-                                div { class: "prop-section-header", "Snap Sources" }
-                                div { class: "prop-row",
-                                    label { class: "prop-label", "Cursor point" }
-                                    input {
-                                        r#type: "checkbox",
-                                        class: "prop-checkbox",
-                                        checked: state.snap_from_cursor,
-                                        onchange: move |evt: Event<FormData>| {
-                                            on_action.call(PreferencesAction::SetSnapFromCursor(evt.value() == "true"));
-                                        },
-                                    }
-                                }
-                                div { class: "prop-row",
-                                    label { class: "prop-label", "Object nodes" }
-                                    input {
-                                        r#type: "checkbox",
-                                        class: "prop-checkbox",
-                                        checked: state.snap_from_object_nodes,
-                                        onchange: move |evt: Event<FormData>| {
-                                            on_action.call(PreferencesAction::SetSnapFromObjectNodes(evt.value() == "true"));
-                                        },
-                                    }
-                                }
-                                div { class: "prop-row",
-                                    label { class: "prop-label", "BBox corners" }
-                                    input {
-                                        r#type: "checkbox",
-                                        class: "prop-checkbox",
-                                        checked: state.snap_from_bbox_corners,
-                                        onchange: move |evt: Event<FormData>| {
-                                            on_action.call(PreferencesAction::SetSnapFromBBoxCorners(evt.value() == "true"));
-                                        },
-                                    }
-                                }
-                                div { class: "prop-row",
-                                    label { class: "prop-label", "BBox centers" }
-                                    input {
-                                        r#type: "checkbox",
-                                        class: "prop-checkbox",
-                                        checked: state.snap_from_bbox_centers,
-                                        onchange: move |evt: Event<FormData>| {
-                                            on_action.call(PreferencesAction::SetSnapFromBBoxCenters(evt.value() == "true"));
-                                        },
-                                    }
-                                }
-                                div { class: "prop-row",
-                                    label { class: "prop-label", "BBox midpoints" }
-                                    input {
-                                        r#type: "checkbox",
-                                        class: "prop-checkbox",
-                                        checked: state.snap_from_bbox_midpoints,
-                                        onchange: move |evt: Event<FormData>| {
-                                            on_action.call(PreferencesAction::SetSnapFromBBoxMidpoints(evt.value() == "true"));
-                                        },
-                                    }
-                                }
-                                div { class: "prop-row",
-                                    label { class: "prop-label", "Distance" }
-                                    input {
-                                        r#type: "number",
-                                        class: "prop-input",
-                                        value: "{state.snap_distance}",
-                                        min: "1",
-                                        step: "1",
-                                        onchange: move |evt: Event<FormData>| {
-                                            if let Ok(val) = evt.value().parse::<f64>() {
-                                                on_action.call(PreferencesAction::SetSnapDistance(val));
-                                            }
-                                        },
-                                    }
-                                    span { class: "prop-unit", "px" }
-                                }
-                            }
-                        },
-                    }
-                }
+            PreferencesSection::Interface => {
+                let callback = self.on_action.clone();
+                choice_field(
+                    &scope,
+                    "Theme",
+                    self.state.theme.clone(),
+                    &["Dark", "Light", "System"],
+                    move |value| callback.call(PreferencesAction::SetTheme(value)),
+                )?;
+                let callback = self.on_action.clone();
+                choice_field(
+                    &scope,
+                    "Icon size",
+                    self.state.icon_size.clone(),
+                    &["Small", "Medium", "Large"],
+                    move |value| callback.call(PreferencesAction::SetIconSize(value)),
+                )?;
+                let callback = self.on_action.clone();
+                sapid::checkbox()
+                    .theme(crate::controls::editor_theme())
+                    .label("Show tooltips")
+                    .default_checked(self.state.show_tooltips)
+                    .on_checked_change(move |value| {
+                        callback.call(PreferencesAction::SetShowTooltips(value))
+                    })
+                    .show_in(&scope)?;
+            }
+            PreferencesSection::IO => {
+                let callback = self.on_action.clone();
+                sapid::checkbox()
+                    .theme(crate::controls::editor_theme())
+                    .label("Auto save")
+                    .default_checked(self.state.auto_save)
+                    .on_checked_change(move |value| {
+                        callback.call(PreferencesAction::SetAutoSave(value))
+                    })
+                    .show_in(&scope)?;
+                let callback = self.on_action.clone();
+                number_field(
+                    &scope,
+                    "Auto save interval (seconds)",
+                    self.state.auto_save_interval_secs as f64,
+                    move |value| {
+                        callback.call(PreferencesAction::SetAutoSaveInterval(
+                            value.clamp(10.0, 86400.0) as u32,
+                        ));
+                    },
+                )?;
+                let callback = self.on_action.clone();
+                number_field(
+                    &scope,
+                    "Recent files",
+                    self.state.recent_files_count as f64,
+                    move |value| {
+                        callback.call(PreferencesAction::SetRecentFilesCount(
+                            value.clamp(0.0, 50.0) as u32,
+                        ));
+                    },
+                )?;
+            }
+            PreferencesSection::Rendering => {
+                let callback = self.on_action.clone();
+                sapid::checkbox()
+                    .theme(crate::controls::editor_theme())
+                    .label("Anti-aliasing")
+                    .default_checked(self.state.anti_aliasing)
+                    .on_checked_change(move |value| {
+                        callback.call(PreferencesAction::SetAntiAliasing(value))
+                    })
+                    .show_in(&scope)?;
+                let callback = self.on_action.clone();
+                sapid::checkbox()
+                    .theme(crate::controls::editor_theme())
+                    .label("Canvas border")
+                    .default_checked(self.state.canvas_border)
+                    .on_checked_change(move |value| {
+                        callback.call(PreferencesAction::SetCanvasBorder(value))
+                    })
+                    .show_in(&scope)?;
+                let callback = self.on_action.clone();
+                choice_field(
+                    &scope,
+                    "Filter quality",
+                    self.state.display_filter_quality.clone(),
+                    &["Low", "Medium", "High"],
+                    move |value| callback.call(PreferencesAction::SetDisplayFilterQuality(value)),
+                )?;
+            }
+            PreferencesSection::Snapping => {
+                let callback = self.on_action.clone();
+                sapid::checkbox()
+                    .theme(crate::controls::editor_theme())
+                    .label("Snap to nodes")
+                    .default_checked(self.state.snap_to_nodes)
+                    .on_checked_change(move |value| {
+                        callback.call(PreferencesAction::SetSnapToNodes(value))
+                    })
+                    .show_in(&scope)?;
+                let callback = self.on_action.clone();
+                sapid::checkbox()
+                    .theme(crate::controls::editor_theme())
+                    .label("Snap to paths")
+                    .default_checked(self.state.snap_to_paths)
+                    .on_checked_change(move |value| {
+                        callback.call(PreferencesAction::SetSnapToPaths(value))
+                    })
+                    .show_in(&scope)?;
+                let callback = self.on_action.clone();
+                sapid::checkbox()
+                    .theme(crate::controls::editor_theme())
+                    .label("Snap to grid")
+                    .default_checked(self.state.snap_to_grid)
+                    .on_checked_change(move |value| {
+                        callback.call(PreferencesAction::SetSnapToGrid(value))
+                    })
+                    .show_in(&scope)?;
+                let callback = self.on_action.clone();
+                sapid::checkbox()
+                    .theme(crate::controls::editor_theme())
+                    .label("Snap to guides")
+                    .default_checked(self.state.snap_to_guides)
+                    .on_checked_change(move |value| {
+                        callback.call(PreferencesAction::SetSnapToGuides(value))
+                    })
+                    .show_in(&scope)?;
+                let callback = self.on_action.clone();
+                sapid::checkbox()
+                    .theme(crate::controls::editor_theme())
+                    .label("Snap to objects")
+                    .default_checked(self.state.snap_to_objects)
+                    .on_checked_change(move |value| {
+                        callback.call(PreferencesAction::SetSnapToObjects(value))
+                    })
+                    .show_in(&scope)?;
+                let callback = self.on_action.clone();
+                sapid::checkbox()
+                    .theme(crate::controls::editor_theme())
+                    .label("Snap to intersections")
+                    .default_checked(self.state.snap_to_intersections)
+                    .on_checked_change(move |value| {
+                        callback.call(PreferencesAction::SetSnapToIntersections(value))
+                    })
+                    .show_in(&scope)?;
+                let callback = self.on_action.clone();
+                sapid::checkbox()
+                    .theme(crate::controls::editor_theme())
+                    .label("Equal spacing")
+                    .default_checked(self.state.snap_to_equal_spacing)
+                    .on_checked_change(move |value| {
+                        callback.call(PreferencesAction::SetSnapToEqualSpacing(value))
+                    })
+                    .show_in(&scope)?;
+                let callback = self.on_action.clone();
+                sapid::checkbox()
+                    .theme(crate::controls::editor_theme())
+                    .label("Snap from cursor")
+                    .default_checked(self.state.snap_from_cursor)
+                    .on_checked_change(move |value| {
+                        callback.call(PreferencesAction::SetSnapFromCursor(value))
+                    })
+                    .show_in(&scope)?;
+                let callback = self.on_action.clone();
+                sapid::checkbox()
+                    .theme(crate::controls::editor_theme())
+                    .label("Snap from object nodes")
+                    .default_checked(self.state.snap_from_object_nodes)
+                    .on_checked_change(move |value| {
+                        callback.call(PreferencesAction::SetSnapFromObjectNodes(value))
+                    })
+                    .show_in(&scope)?;
+                let callback = self.on_action.clone();
+                sapid::checkbox()
+                    .theme(crate::controls::editor_theme())
+                    .label("Snap from box corners")
+                    .default_checked(self.state.snap_from_bbox_corners)
+                    .on_checked_change(move |value| {
+                        callback.call(PreferencesAction::SetSnapFromBBoxCorners(value))
+                    })
+                    .show_in(&scope)?;
+                let callback = self.on_action.clone();
+                sapid::checkbox()
+                    .theme(crate::controls::editor_theme())
+                    .label("Snap from box centers")
+                    .default_checked(self.state.snap_from_bbox_centers)
+                    .on_checked_change(move |value| {
+                        callback.call(PreferencesAction::SetSnapFromBBoxCenters(value))
+                    })
+                    .show_in(&scope)?;
+                let callback = self.on_action.clone();
+                sapid::checkbox()
+                    .theme(crate::controls::editor_theme())
+                    .label("Snap from box midpoints")
+                    .default_checked(self.state.snap_from_bbox_midpoints)
+                    .on_checked_change(move |value| {
+                        callback.call(PreferencesAction::SetSnapFromBBoxMidpoints(value))
+                    })
+                    .show_in(&scope)?;
+                let callback = self.on_action.clone();
+                number_field(
+                    &scope,
+                    "Snap distance",
+                    self.state.snap_distance,
+                    move |value| {
+                        callback.call(PreferencesAction::SetSnapDistance(value.clamp(1.0, 512.0)));
+                    },
+                )?;
             }
         }
+        let callback = self.on_action.clone();
+        action_button(&scope, "Close preferences", false, move || {
+            callback.call(PreferencesAction::Close)
+        })?;
+        Ok(())
     }
 }
 

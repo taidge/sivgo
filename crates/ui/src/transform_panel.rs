@@ -1,6 +1,7 @@
 //! Transform panel with move, scale, rotate, and skew controls.
 
-use dioxus::prelude::*;
+use crate::{controls::*, Callback};
+use glory::prelude::*;
 
 /// Events emitted by the transform panel.
 #[derive(Debug, Clone)]
@@ -22,179 +23,82 @@ pub enum TransformAction {
 ///
 /// Displays numeric inputs for X/Y position, W/H dimensions (with optional
 /// percentage mode and aspect-ratio lock), rotation angle, and skew values.
-#[component]
-pub fn TransformPanel(
-    x: f64,
-    y: f64,
-    width: f64,
-    height: f64,
-    rotation: f64,
-    skew_x: f64,
-    skew_y: f64,
-    lock_aspect: bool,
-    percent_mode: bool,
-    has_selection: bool,
-    on_action: EventHandler<TransformAction>,
-) -> Element {
-    if !has_selection {
-        return rsx! {
-            div { class: "transform-panel",
-                div { class: "panel-header", "Transform" }
-                div { class: "prop-empty", "No selection" }
-            }
-        };
-    }
+pub struct TransformPanel {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    pub rotation: f64,
+    pub skew_x: f64,
+    pub skew_y: f64,
+    pub lock_aspect: bool,
+    pub percent_mode: bool,
+    pub has_selection: bool,
+    pub on_action: Callback<TransformAction>,
+}
 
-    rsx! {
-        div { class: "transform-panel",
-            div { class: "panel-header", "Transform" }
-
-            // ---- Move ----
-            div { class: "prop-section",
-                div { class: "prop-section-header", "Position" }
-                div { class: "prop-row",
-                    label { class: "prop-label", "X" }
-                    input {
-                        r#type: "number",
-                        class: "prop-input",
-                        value: "{x}",
-                        step: "1",
-                        onchange: move |evt: Event<FormData>| {
-                            if let Ok(val) = evt.value().parse::<f64>() {
-                                on_action.call(TransformAction::SetX(val));
-                            }
-                        },
-                    }
-                }
-                div { class: "prop-row",
-                    label { class: "prop-label", "Y" }
-                    input {
-                        r#type: "number",
-                        class: "prop-input",
-                        value: "{y}",
-                        step: "1",
-                        onchange: move |evt: Event<FormData>| {
-                            if let Ok(val) = evt.value().parse::<f64>() {
-                                on_action.call(TransformAction::SetY(val));
-                            }
-                        },
-                    }
-                }
-            }
-
-            // ---- Scale ----
-            div { class: "prop-section",
-                div { class: "prop-section-header", "Size" }
-                div { class: "prop-row",
-                    label { class: "prop-label", if percent_mode { "W %" } else { "W" } }
-                    input {
-                        r#type: "number",
-                        class: "prop-input",
-                        value: "{width}",
-                        min: "0",
-                        step: if percent_mode { "1" } else { "0.5" },
-                        onchange: move |evt: Event<FormData>| {
-                            if let Ok(val) = evt.value().parse::<f64>() {
-                                if percent_mode {
-                                    on_action.call(TransformAction::SetScalePercent(val, 0.0));
-                                } else {
-                                    on_action.call(TransformAction::SetWidth(val));
-                                }
-                            }
-                        },
-                    }
-                }
-                div { class: "prop-row",
-                    label { class: "prop-label", if percent_mode { "H %" } else { "H" } }
-                    input {
-                        r#type: "number",
-                        class: "prop-input",
-                        value: "{height}",
-                        min: "0",
-                        step: if percent_mode { "1" } else { "0.5" },
-                        onchange: move |evt: Event<FormData>| {
-                            if let Ok(val) = evt.value().parse::<f64>() {
-                                if percent_mode {
-                                    on_action.call(TransformAction::SetScalePercent(0.0, val));
-                                } else {
-                                    on_action.call(TransformAction::SetHeight(val));
-                                }
-                            }
-                        },
-                    }
-                }
-                div { class: "prop-row",
-                    button {
-                        class: if lock_aspect { "transform-toggle active" } else { "transform-toggle" },
-                        title: "Lock aspect ratio",
-                        onclick: move |_| on_action.call(TransformAction::ToggleLockAspect),
-                        if lock_aspect { "🔗 Locked" } else { "🔓 Unlocked" }
-                    }
-                    button {
-                        class: if percent_mode { "transform-toggle active" } else { "transform-toggle" },
-                        title: "Toggle percentage mode",
-                        onclick: move |_| on_action.call(TransformAction::TogglePercentMode),
-                        "% Mode"
-                    }
-                }
-            }
-
-            // ---- Rotate ----
-            div { class: "prop-section",
-                div { class: "prop-section-header", "Rotate" }
-                div { class: "prop-row",
-                    label { class: "prop-label", "Angle" }
-                    input {
-                        r#type: "number",
-                        class: "prop-input",
-                        value: "{rotation}",
-                        step: "1",
-                        min: "-360",
-                        max: "360",
-                        onchange: move |evt: Event<FormData>| {
-                            if let Ok(val) = evt.value().parse::<f64>() {
-                                on_action.call(TransformAction::SetRotation(val));
-                            }
-                        },
-                    }
-                    span { class: "prop-unit", "deg" }
-                }
-            }
-
-            // ---- Skew ----
-            div { class: "prop-section",
-                div { class: "prop-section-header", "Skew" }
-                div { class: "prop-row",
-                    label { class: "prop-label", "Horiz" }
-                    input {
-                        r#type: "number",
-                        class: "prop-input",
-                        value: "{skew_x}",
-                        step: "1",
-                        onchange: move |evt: Event<FormData>| {
-                            if let Ok(val) = evt.value().parse::<f64>() {
-                                on_action.call(TransformAction::SetSkewX(val));
-                            }
-                        },
-                    }
-                    span { class: "prop-unit", "deg" }
-                }
-                div { class: "prop-row",
-                    label { class: "prop-label", "Vert" }
-                    input {
-                        r#type: "number",
-                        class: "prop-input",
-                        value: "{skew_y}",
-                        step: "1",
-                        onchange: move |evt: Event<FormData>| {
-                            if let Ok(val) = evt.value().parse::<f64>() {
-                                on_action.call(TransformAction::SetSkewY(val));
-                            }
-                        },
-                    }
-                    span { class: "prop-unit", "deg" }
-                }
-            }
+impl Widget for TransformPanel {
+    fn build(&mut self, scope: &Scope) -> Result {
+        let panel = panel(scope, "transform-panel", "Transform")?;
+        if !self.has_selection {
+            return text().content("No selection").show_in(&panel);
         }
+        for (label, value, action) in [
+            (
+                "X",
+                self.x,
+                TransformAction::SetX as fn(f64) -> TransformAction,
+            ),
+            ("Y", self.y, TransformAction::SetY),
+            ("Rotation", self.rotation, TransformAction::SetRotation),
+            ("Horizontal skew", self.skew_x, TransformAction::SetSkewX),
+            ("Vertical skew", self.skew_y, TransformAction::SetSkewY),
+        ] {
+            let callback = self.on_action.clone();
+            number_field(&panel, label, value, move |v| callback.call(action(v)))?;
+        }
+        for (label, value, horizontal) in
+            [("Width", self.width, true), ("Height", self.height, false)]
+        {
+            let callback = self.on_action.clone();
+            let percent = self.percent_mode;
+            number_field(
+                &panel,
+                if percent {
+                    if horizontal {
+                        "Width %"
+                    } else {
+                        "Height %"
+                    }
+                } else {
+                    label
+                },
+                value,
+                move |v| {
+                    if v < 0.0 {
+                        return;
+                    }
+                    callback.call(if percent {
+                        if horizontal {
+                            TransformAction::SetScalePercent(v, 0.0)
+                        } else {
+                            TransformAction::SetScalePercent(0.0, v)
+                        }
+                    } else if horizontal {
+                        TransformAction::SetWidth(v)
+                    } else {
+                        TransformAction::SetHeight(v)
+                    });
+                },
+            )?;
+        }
+        let callback = self.on_action.clone();
+        action_button(&panel, "Lock aspect ratio", self.lock_aspect, move || {
+            callback.call(TransformAction::ToggleLockAspect)
+        })?;
+        let callback = self.on_action.clone();
+        action_button(&panel, "Percentage mode", self.percent_mode, move || {
+            callback.call(TransformAction::TogglePercentMode)
+        })
     }
 }

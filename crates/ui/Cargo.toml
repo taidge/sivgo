@@ -6,8 +6,10 @@ edition.workspace = true
 [dependencies]
 sivgo-core = { workspace = true }
 sivgo-dom = { workspace = true }
+sivgo-math = { workspace = true }
 sivgo-render = { workspace = true }
-dioxus = { workspace = true }
+glory = { workspace = true }
+sapid = { workspace = true }
 base64 = { workspace = true }
 png = { workspace = true }
 log = { workspace = true }

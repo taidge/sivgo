@@ -1,7 +1,8 @@
 //! Document Properties panel with page size, background, orientation,
 //! metadata, and grid settings.
 
-use dioxus::prelude::*;
+use crate::controls::{choice_field, color_field, editor_theme, number_field, panel, text_field};
+use glory::prelude::*;
 
 /// Page size preset.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,220 +98,137 @@ pub enum DocPropertiesAction {
 
 /// A panel for editing document-level properties such as page size,
 /// background color, orientation, metadata, and grid settings.
-#[component]
-pub fn DocPropertiesPanel(
-    preset: String,
-    width: f64,
-    height: f64,
-    background_color: String,
-    orientation: String,
-    title: String,
-    author: String,
-    description: String,
-    grid_enabled: bool,
-    grid_spacing_x: f64,
-    grid_spacing_y: f64,
-    snap_to_grid: bool,
-    on_action: EventHandler<DocPropertiesAction>,
-) -> Element {
-    let presets = ["A4", "A3", "Letter", "Legal", "Custom"];
-    let preset_val = preset.clone();
-    let bg_val = background_color.clone();
-    let orient_val = orientation.clone();
-    let title_val = title.clone();
-    let author_val = author.clone();
-    let desc_val = description.clone();
+#[derive(Clone)]
+pub struct DocPropertiesPanel {
+    pub preset: String,
+    pub width: f64,
+    pub height: f64,
+    pub background_color: String,
+    pub orientation: String,
+    pub title: String,
+    pub author: String,
+    pub description: String,
+    pub grid_enabled: bool,
+    pub grid_spacing_x: f64,
+    pub grid_spacing_y: f64,
+    pub snap_to_grid: bool,
+    pub on_action: crate::Callback<DocPropertiesAction>,
+}
 
-    rsx! {
-        div { class: "doc-properties-panel",
-            div { class: "panel-header", "Document Properties" }
-
-            // ---- Page Size ----
-            div { class: "prop-section",
-                div { class: "prop-section-header", "Page Size" }
-                div { class: "prop-row",
-                    label { class: "prop-label", "Preset" }
-                    select {
-                        class: "prop-select",
-                        value: "{preset_val}",
-                        onchange: move |evt: Event<FormData>| {
-                            on_action.call(DocPropertiesAction::SetPreset(evt.value().to_string()));
-                        },
-                        for p in presets.iter() {
-                            {
-                                let is_sel = preset_val == *p;
-                                rsx! {
-                                    option {
-                                        value: "{p}",
-                                        selected: is_sel,
-                                        "{p}"
-                                    }
-                                }
-                            }
-                        }
-                    }
+impl Widget for DocPropertiesPanel {
+    fn build(&mut self, scope: &Scope) -> Result {
+        let root = panel(scope, "doc-properties-panel", "Document Properties")?;
+        let page = panel(&root, "document-page-section", "Page")?;
+        let callback = self.on_action.clone();
+        choice_field(
+            &page,
+            "Page preset",
+            self.preset.clone(),
+            &["A4", "A3", "Letter", "Legal", "Custom"],
+            move |value| callback.call(DocPropertiesAction::SetPreset(value)),
+        )?;
+        for (label, value, action) in [
+            (
+                "Width (mm)",
+                self.width,
+                DocPropertiesAction::SetWidth as fn(f64) -> DocPropertiesAction,
+            ),
+            ("Height (mm)", self.height, DocPropertiesAction::SetHeight),
+        ] {
+            let callback = self.on_action.clone();
+            number_field(&page, label, value, move |value| {
+                if value > 0.0 {
+                    callback.call(action(value));
                 }
-                div { class: "prop-row",
-                    label { class: "prop-label", "Width" }
-                    input {
-                        r#type: "number",
-                        class: "prop-input",
-                        value: "{width}",
-                        min: "1",
-                        step: "1",
-                        onchange: move |evt: Event<FormData>| {
-                            if let Ok(val) = evt.value().parse::<f64>() {
-                                on_action.call(DocPropertiesAction::SetWidth(val));
-                            }
-                        },
-                    }
-                    span { class: "prop-unit", "mm" }
-                }
-                div { class: "prop-row",
-                    label { class: "prop-label", "Height" }
-                    input {
-                        r#type: "number",
-                        class: "prop-input",
-                        value: "{height}",
-                        min: "1",
-                        step: "1",
-                        onchange: move |evt: Event<FormData>| {
-                            if let Ok(val) = evt.value().parse::<f64>() {
-                                on_action.call(DocPropertiesAction::SetHeight(val));
-                            }
-                        },
-                    }
-                    span { class: "prop-unit", "mm" }
-                }
-            }
-
-            // ---- Background & Orientation ----
-            div { class: "prop-section",
-                div { class: "prop-section-header", "Appearance" }
-                div { class: "prop-row",
-                    label { class: "prop-label", "Background" }
-                    input {
-                        r#type: "color",
-                        class: "prop-input color-input",
-                        value: "{bg_val}",
-                        onchange: move |evt: Event<FormData>| {
-                            on_action.call(DocPropertiesAction::SetBackgroundColor(evt.value().to_string()));
-                        },
-                    }
-                }
-                div { class: "prop-row",
-                    label { class: "prop-label", "Orientation" }
-                    button {
-                        class: if orient_val == "Portrait" { "toggle-btn active" } else { "toggle-btn" },
-                        onclick: move |_| on_action.call(DocPropertiesAction::SetOrientation(PageOrientation::Portrait)),
-                        "Portrait"
-                    }
-                    button {
-                        class: if orient_val == "Landscape" { "toggle-btn active" } else { "toggle-btn" },
-                        onclick: move |_| on_action.call(DocPropertiesAction::SetOrientation(PageOrientation::Landscape)),
-                        "Landscape"
-                    }
-                }
-            }
-
-            // ---- Metadata ----
-            div { class: "prop-section",
-                div { class: "prop-section-header", "Metadata" }
-                div { class: "prop-row",
-                    label { class: "prop-label", "Title" }
-                    input {
-                        r#type: "text",
-                        class: "prop-input",
-                        placeholder: "Document title",
-                        value: "{title_val}",
-                        onchange: move |evt: Event<FormData>| {
-                            on_action.call(DocPropertiesAction::SetTitle(evt.value().to_string()));
-                        },
-                    }
-                }
-                div { class: "prop-row",
-                    label { class: "prop-label", "Author" }
-                    input {
-                        r#type: "text",
-                        class: "prop-input",
-                        placeholder: "Author name",
-                        value: "{author_val}",
-                        onchange: move |evt: Event<FormData>| {
-                            on_action.call(DocPropertiesAction::SetAuthor(evt.value().to_string()));
-                        },
-                    }
-                }
-                div { class: "prop-row",
-                    label { class: "prop-label", "Description" }
-                    textarea {
-                        class: "prop-textarea",
-                        rows: "3",
-                        placeholder: "Document description",
-                        value: "{desc_val}",
-                        oninput: move |evt: Event<FormData>| {
-                            on_action.call(DocPropertiesAction::SetDescription(evt.value().to_string()));
-                        },
-                    }
-                }
-            }
-
-            // ---- Grid Settings ----
-            div { class: "prop-section",
-                div { class: "prop-section-header", "Grid" }
-                div { class: "prop-row",
-                    label { class: "prop-label", "Enabled" }
-                    input {
-                        r#type: "checkbox",
-                        class: "prop-checkbox",
-                        checked: grid_enabled,
-                        onchange: move |evt: Event<FormData>| {
-                            on_action.call(DocPropertiesAction::SetGridEnabled(evt.value() == "true"));
-                        },
-                    }
-                }
-                div { class: "prop-row",
-                    label { class: "prop-label", "Spacing X" }
-                    input {
-                        r#type: "number",
-                        class: "prop-input",
-                        value: "{grid_spacing_x}",
-                        min: "0.1",
-                        step: "1",
-                        onchange: move |evt: Event<FormData>| {
-                            if let Ok(val) = evt.value().parse::<f64>() {
-                                on_action.call(DocPropertiesAction::SetGridSpacingX(val));
-                            }
-                        },
-                    }
-                }
-                div { class: "prop-row",
-                    label { class: "prop-label", "Spacing Y" }
-                    input {
-                        r#type: "number",
-                        class: "prop-input",
-                        value: "{grid_spacing_y}",
-                        min: "0.1",
-                        step: "1",
-                        onchange: move |evt: Event<FormData>| {
-                            if let Ok(val) = evt.value().parse::<f64>() {
-                                on_action.call(DocPropertiesAction::SetGridSpacingY(val));
-                            }
-                        },
-                    }
-                }
-                div { class: "prop-row",
-                    label { class: "prop-label", "Snap" }
-                    input {
-                        r#type: "checkbox",
-                        class: "prop-checkbox",
-                        checked: snap_to_grid,
-                        onchange: move |evt: Event<FormData>| {
-                            on_action.call(DocPropertiesAction::SetSnapToGrid(evt.value() == "true"));
-                        },
-                    }
-                }
-            }
+            })?;
         }
+        let callback = self.on_action.clone();
+        choice_field(
+            &page,
+            "Orientation",
+            self.orientation.clone(),
+            &["Portrait", "Landscape"],
+            move |value| {
+                callback.call(DocPropertiesAction::SetOrientation(
+                    if value == "Landscape" {
+                        PageOrientation::Landscape
+                    } else {
+                        PageOrientation::Portrait
+                    },
+                ));
+            },
+        )?;
+        let callback = self.on_action.clone();
+        color_field(
+            &page,
+            "Background color",
+            self.background_color.clone(),
+            move |value| callback.call(DocPropertiesAction::SetBackgroundColor(value)),
+        )?;
+        let grid = panel(&root, "document-grid-section", "Grid")?;
+        let callback = self.on_action.clone();
+        sapid::checkbox()
+            .theme(editor_theme())
+            .size(sapid::Size::ExtraSmall)
+            .label("Show grid")
+            .default_checked(self.grid_enabled)
+            .on_checked_change(move |value| {
+                callback.call(DocPropertiesAction::SetGridEnabled(value))
+            })
+            .show_in(&grid)?;
+        for (label, value, action) in [
+            (
+                "Grid spacing X",
+                self.grid_spacing_x,
+                DocPropertiesAction::SetGridSpacingX as fn(f64) -> DocPropertiesAction,
+            ),
+            (
+                "Grid spacing Y",
+                self.grid_spacing_y,
+                DocPropertiesAction::SetGridSpacingY,
+            ),
+        ] {
+            let callback = self.on_action.clone();
+            number_field(&grid, label, value, move |value| {
+                if value > 0.0 {
+                    callback.call(action(value));
+                }
+            })?;
+        }
+        let callback = self.on_action.clone();
+        sapid::checkbox()
+            .theme(editor_theme())
+            .size(sapid::Size::ExtraSmall)
+            .label("Snap to grid")
+            .default_checked(self.snap_to_grid)
+            .on_checked_change(move |value| {
+                callback.call(DocPropertiesAction::SetSnapToGrid(value))
+            })
+            .show_in(&grid)?;
+        let metadata = panel(&root, "document-metadata-section", "Metadata")?;
+        let callback = self.on_action.clone();
+        text_field(&metadata, "Title", self.title.clone(), move |value| {
+            callback.call(DocPropertiesAction::SetTitle(value))
+        })?;
+        let callback = self.on_action.clone();
+        text_field(&metadata, "Author", self.author.clone(), move |value| {
+            callback.call(DocPropertiesAction::SetAuthor(value))
+        })?;
+        text().content("Description").show_in(&metadata)?;
+        let callback = self.on_action.clone();
+        sapid::textarea()
+            .theme(editor_theme())
+            .size(sapid::Size::ExtraSmall)
+            .name("Description")
+            .default_value(self.description.clone())
+            .style(
+                Style::new()
+                    .width(Length::Px(242.0))
+                    .min_height(Length::Px(72.0)),
+            )
+            .on_commit(move |value| callback.call(DocPropertiesAction::SetDescription(value)))
+            .show_in(&metadata)?;
+        Ok(())
     }
 }
 

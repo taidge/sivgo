@@ -3,7 +3,8 @@
 //! Provides a visual editor to add, remove, reorder, and configure
 //! SVG filter primitives (feGaussianBlur, feOffset, feColorMatrix, etc.).
 
-use dioxus::prelude::*;
+use crate::controls::{action_button, panel, text_field};
+use glory::prelude::*;
 
 /// Kind of SVG filter primitive.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -231,143 +232,108 @@ pub enum FilterEditorAction {
 
 /// A visual editor for composing SVG filter chains from individual
 /// filter primitives with per-primitive parameter controls.
-#[component]
-pub fn FilterEditorPanel(
-    primitives: Vec<FilterPrimitive>,
-    selected_id: Option<String>,
-    on_action: EventHandler<FilterEditorAction>,
-) -> Element {
-    let all_kinds = FilterPrimitiveKind::all();
+#[derive(Clone)]
+pub struct FilterEditorPanel {
+    pub primitives: Vec<FilterPrimitive>,
+    pub selected_id: Option<String>,
+    pub on_action: crate::Callback<FilterEditorAction>,
+}
 
-    rsx! {
-        div { class: "filter-editor-panel",
-            div { class: "panel-header", "Filter Editor" }
-
-            // ---- Add primitive ----
-            div { class: "prop-section",
-                div { class: "prop-section-header", "Add Filter" }
-                div { class: "filter-add-buttons",
-                    for kind in all_kinds.iter() {
-                        {
-                            let k = kind.clone();
-                            rsx! {
-                                button {
-                                    class: "action-btn filter-add-btn",
-                                    title: "Add {kind.label()}",
-                                    onclick: move |_| on_action.call(FilterEditorAction::AddPrimitive(k.clone())),
-                                    "{kind.label()}"
-                                }
-                            }
-                        }
-                    }
-                }
+impl Widget for FilterEditorPanel {
+    fn build(&mut self, scope: &Scope) -> Result {
+        let scope = panel(scope, "filter-editor", "Filter Editor")?;
+        let selected_kind = scope.cage(
+            FilterPrimitiveKind::all()
+                .first()
+                .map(|kind| kind.key().to_owned()),
+        );
+        crate::controls::choice_options(
+            &scope,
+            "Filter primitive",
+            selected_kind.get().unwrap_or_default(),
+            FilterPrimitiveKind::all()
+                .iter()
+                .map(|kind| (kind.key().to_owned(), kind.label().to_owned()))
+                .collect(),
+            move |value| selected_kind.revise(|current| *current = Some(value)),
+        )?;
+        let callback = self.on_action.clone();
+        action_button(&scope, "Add primitive", false, move || {
+            if let Some(kind) = selected_kind
+                .get()
+                .as_deref()
+                .and_then(FilterPrimitiveKind::from_key)
+            {
+                callback.call(FilterEditorAction::AddPrimitive(kind));
             }
-
-            // ---- Filter chain ----
-            div { class: "prop-section",
-                div { class: "prop-section-header", "Filter Chain" }
-                div { class: "filter-chain-list",
-                    for (idx, prim) in primitives.iter().enumerate() {
-                        {
-                            let prim_id = prim.id.clone();
-                            let prim_id_up = prim.id.clone();
-                            let prim_id_down = prim.id.clone();
-                            let prim_id_del = prim.id.clone();
-                            let prim_id_toggle = prim.id.clone();
-                            let is_selected = selected_id.as_deref() == Some(prim.id.as_str());
-                            let is_first = idx == 0;
-                            let is_last = idx == primitives.len() - 1;
-                            rsx! {
-                                div {
-                                    key: "{prim.id}",
-                                    class: if is_selected { "filter-prim-item selected" } else { "filter-prim-item" },
-                                    onclick: move |_| on_action.call(FilterEditorAction::SelectPrimitive(prim_id.clone())),
-
-                                    span {
-                                        class: if prim.enabled { "filter-prim-label" } else { "filter-prim-label disabled" },
-                                        "{prim.kind.label()}"
-                                    }
-
-                                    button {
-                                        class: "filter-btn",
-                                        title: if prim.enabled { "Disable" } else { "Enable" },
-                                        onclick: move |_| on_action.call(FilterEditorAction::ToggleEnabled(prim_id_toggle.clone())),
-                                        if prim.enabled { "On" } else { "Off" }
-                                    }
-                                    button {
-                                        class: "filter-btn",
-                                        title: "Move up",
-                                        disabled: is_first,
-                                        onclick: move |_| on_action.call(FilterEditorAction::MoveUp(prim_id_up.clone())),
-                                        "Up"
-                                    }
-                                    button {
-                                        class: "filter-btn",
-                                        title: "Move down",
-                                        disabled: is_last,
-                                        onclick: move |_| on_action.call(FilterEditorAction::MoveDown(prim_id_down.clone())),
-                                        "Dn"
-                                    }
-                                    button {
-                                        class: "filter-btn delete",
-                                        title: "Remove",
-                                        onclick: move |_| on_action.call(FilterEditorAction::RemovePrimitive(prim_id_del.clone())),
-                                        "X"
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    if primitives.is_empty() {
-                        div { class: "filter-chain-empty", "No filters" }
-                    }
-                }
+        })?;
+        for (index, entry) in self.primitives.iter().enumerate() {
+            let scope = panel(
+                &scope,
+                if self.selected_id.as_ref() == Some(&entry.id) {
+                    "effect-card selected"
+                } else {
+                    "effect-card"
+                },
+                entry.kind.label(),
+            )?;
+            for (label, action) in [
+                (
+                    "Edit parameters",
+                    FilterEditorAction::SelectPrimitive(entry.id.clone()),
+                ),
+                (
+                    if entry.enabled { "Disable" } else { "Enable" },
+                    FilterEditorAction::ToggleEnabled(entry.id.clone()),
+                ),
+                (
+                    "Remove",
+                    FilterEditorAction::RemovePrimitive(entry.id.clone()),
+                ),
+            ] {
+                let callback = self.on_action.clone();
+                action_button(&scope, label, false, move || callback.call(action.clone()))?;
             }
-
-            // ---- Selected primitive parameters ----
-            if let Some(ref sel_id) = selected_id {
-                {
-                    if let Some(selected) = primitives.iter().find(|p| &p.id == sel_id) {
-                        let params = selected.params.clone();
-                        let sel_prim_id = sel_id.clone();
-                        rsx! {
-                            div { class: "prop-section",
-                                div { class: "prop-section-header", "Parameters: {selected.kind.label()}" }
-                                for param in params.iter() {
-                                    {
-                                        let pid = sel_prim_id.clone();
-                                        let pname = param.name.clone();
-                                        let pval = param.value.clone();
-                                        rsx! {
-                                            div { class: "prop-row",
-                                                label { class: "prop-label", "{pname}" }
-                                                input {
-                                                    r#type: "text",
-                                                    class: "prop-input",
-                                                    value: "{pval}",
-                                                    onchange: move |evt: Event<FormData>| {
-                                                        on_action.call(FilterEditorAction::SetParam(
-                                                            pid.clone(),
-                                                            pname.clone(),
-                                                            evt.value().to_string(),
-                                                        ));
-                                                    },
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                if params.is_empty() {
-                                    div { class: "prop-empty", "No parameters" }
-                                }
-                            }
-                        }
-                    } else {
-                        rsx! { }
-                    }
+            let id = entry.id.clone();
+            let callback = self.on_action.clone();
+            sapid::button()
+                .theme(crate::controls::editor_theme())
+                .label("Move up")
+                .enabled(index > 0)
+                .on_press(move || callback.call(FilterEditorAction::MoveUp(id.clone())))
+                .show_in(&scope)?;
+            let id = entry.id.clone();
+            let callback = self.on_action.clone();
+            sapid::button()
+                .theme(crate::controls::editor_theme())
+                .label("Move down")
+                .enabled(index + 1 < self.primitives.len())
+                .on_press(move || callback.call(FilterEditorAction::MoveDown(id.clone())))
+                .show_in(&scope)?;
+            if self.selected_id.as_ref() == Some(&entry.id) {
+                for param in &entry.params {
+                    let callback = self.on_action.clone();
+                    let id = entry.id.clone();
+                    let name = param.name.clone();
+                    text_field(&scope, &param.name, param.value.clone(), move |value| {
+                        callback.call(FilterEditorAction::SetParam(
+                            id.clone(),
+                            name.clone(),
+                            value,
+                        ))
+                    })?;
+                }
+                if entry.params.is_empty() {
+                    text().content("No parameters").show_in(&scope)?;
                 }
             }
         }
+        if self.primitives.is_empty() {
+            text()
+                .content("No filter primitives applied")
+                .show_in(&scope)?;
+        }
+        Ok(())
     }
 }
 

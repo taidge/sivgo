@@ -1,6 +1,7 @@
 //! Pages panel for Inkscape multi-page documents.
 
-use dioxus::prelude::*;
+use crate::controls::{action_button, number_field, panel, text_field};
+use glory::prelude::*;
 use sivgo_dom::NodeId;
 
 const PX_PER_MM: f64 = 96.0 / 25.4;
@@ -116,140 +117,86 @@ pub enum PageAction {
 }
 
 /// A compact inspector for creating, navigating, deleting, and editing pages.
-#[component]
-pub fn PagesPanel(pages: Vec<PageEntry>, on_action: EventHandler<PageAction>) -> Element {
-    let mut selected_template = use_signal(|| PageTemplate::CurrentDocument.id().to_string());
-    let template_value = selected_template.read().clone();
+#[derive(Clone)]
+pub struct PagesPanel {
+    pub pages: Vec<PageEntry>,
+    pub on_action: crate::Callback<PageAction>,
+}
 
-    rsx! {
-        div { class: "pages-panel",
-            div { class: "panel-header",
-                span { "Pages" }
-                button {
-                    class: "panel-action-btn",
-                    title: "Add page",
-                    onclick: move |_| on_action.call(PageAction::Add),
-                    "Add"
-                }
+impl Widget for PagesPanel {
+    fn build(&mut self, scope: &Scope) -> Result {
+        let scope = panel(scope, "pages-panel", "Pages")?;
+        let template = scope.cage(PageTemplate::CurrentDocument.id().to_string());
+        crate::controls::choice_options(
+            &scope,
+            "Page template",
+            template.get(),
+            PageTemplate::all()
+                .iter()
+                .map(|t| (t.id().to_owned(), t.label().to_owned()))
+                .collect(),
+            move |value| template.revise(|current| *current = value),
+        )?;
+        let callback = self.on_action.clone();
+        action_button(&scope, "Add template page", false, move || {
+            if let Some(t) = PageTemplate::from_id(&template.get()) {
+                callback.call(PageAction::AddTemplate(t));
             }
-            div { class: "page-template-row",
-                select {
-                    class: "prop-select",
-                    value: "{template_value}",
-                    onchange: move |evt: Event<FormData>| {
-                        selected_template.set(evt.value().to_string());
-                    },
-                    for template in PageTemplate::all().iter().copied() {
-                        option {
-                            value: "{template.id()}",
-                            selected: template.id() == template_value,
-                            "{template.label()}"
-                        }
-                    }
+        })?;
+        let callback = self.on_action.clone();
+        action_button(&scope, "Add page", false, move || {
+            callback.call(PageAction::Add)
+        })?;
+        for page in &self.pages {
+            let scope = panel(
+                &scope,
+                if page.active {
+                    "page-card active"
+                } else {
+                    "page-card"
+                },
+                &format!("Page {}", page.index + 1),
+            )?;
+            let id = page.id;
+            let callback = self.on_action.clone();
+            action_button(&scope, "Go to page", page.active, move || {
+                callback.call(PageAction::Navigate(id))
+            })?;
+            let callback = self.on_action.clone();
+            action_button(&scope, "Delete page", false, move || {
+                callback.call(PageAction::Delete(id))
+            })?;
+            let callback = self.on_action.clone();
+            text_field(&scope, "Page label", page.label.clone(), move |value| {
+                callback.call(PageAction::SetLabel(id, value))
+            })?;
+            let callback = self.on_action.clone();
+            number_field(&scope, "X", page.x, move |value| {
+                callback.call(PageAction::SetX(id, value));
+            })?;
+            let callback = self.on_action.clone();
+            number_field(&scope, "Y", page.y, move |value| {
+                callback.call(PageAction::SetY(id, value));
+            })?;
+            let callback = self.on_action.clone();
+            number_field(&scope, "Width", page.width, move |value| {
+                if value > 0.0 {
+                    callback.call(PageAction::SetWidth(id, value));
                 }
-                button {
-                    class: "panel-action-btn",
-                    title: "Add page from template",
-                    onclick: move |_| {
-                        if let Some(template) = PageTemplate::from_id(&selected_template.read()) {
-                            on_action.call(PageAction::AddTemplate(template));
-                        }
-                    },
-                    "Add Template"
+            })?;
+            let callback = self.on_action.clone();
+            number_field(&scope, "Height", page.height, move |value| {
+                if value > 0.0 {
+                    callback.call(PageAction::SetHeight(id, value));
                 }
-            }
-            if pages.is_empty() {
-                div { class: "prop-empty", "No pages" }
-            } else {
-                div { class: "page-list",
-                    for page in pages.iter() {
-                        {
-                            let id = page.id;
-                            rsx! {
-                                div {
-                                    key: "{page.index}",
-                                    class: if page.active { "page-row active" } else { "page-row" },
-                                    div { class: "page-row-head",
-                                        button {
-                                            class: "page-nav-btn",
-                                            title: "Go to page",
-                                            onclick: move |_| on_action.call(PageAction::Navigate(id)),
-                                            "#{page.index}"
-                                        }
-                                        input {
-                                            r#type: "text",
-                                            class: "page-label-input",
-                                            value: "{page.label}",
-                                            onchange: move |evt: Event<FormData>| {
-                                                on_action.call(PageAction::SetLabel(id, evt.value().to_string()));
-                                            },
-                                        }
-                                        button {
-                                            class: "page-delete-btn",
-                                            title: "Delete page",
-                                            onclick: move |_| on_action.call(PageAction::Delete(id)),
-                                            "Delete"
-                                        }
-                                    }
-                                    div { class: "page-geometry-grid",
-                                        label { class: "prop-label", "X" }
-                                        input {
-                                            r#type: "number",
-                                            class: "prop-input",
-                                            value: "{page.x}",
-                                            step: "1",
-                                            onchange: move |evt: Event<FormData>| {
-                                                if let Ok(value) = evt.value().parse::<f64>() {
-                                                    on_action.call(PageAction::SetX(id, value));
-                                                }
-                                            },
-                                        }
-                                        label { class: "prop-label", "Y" }
-                                        input {
-                                            r#type: "number",
-                                            class: "prop-input",
-                                            value: "{page.y}",
-                                            step: "1",
-                                            onchange: move |evt: Event<FormData>| {
-                                                if let Ok(value) = evt.value().parse::<f64>() {
-                                                    on_action.call(PageAction::SetY(id, value));
-                                                }
-                                            },
-                                        }
-                                        label { class: "prop-label", "W" }
-                                        input {
-                                            r#type: "number",
-                                            class: "prop-input",
-                                            value: "{page.width}",
-                                            min: "1",
-                                            step: "1",
-                                            onchange: move |evt: Event<FormData>| {
-                                                if let Ok(value) = evt.value().parse::<f64>() {
-                                                    on_action.call(PageAction::SetWidth(id, value));
-                                                }
-                                            },
-                                        }
-                                        label { class: "prop-label", "H" }
-                                        input {
-                                            r#type: "number",
-                                            class: "prop-input",
-                                            value: "{page.height}",
-                                            min: "1",
-                                            step: "1",
-                                            onchange: move |evt: Event<FormData>| {
-                                                if let Ok(value) = evt.value().parse::<f64>() {
-                                                    on_action.call(PageAction::SetHeight(id, value));
-                                                }
-                                            },
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            })?;
         }
+        if self.pages.is_empty() {
+            text()
+                .content("No pages. Add a page to get started.")
+                .show_in(&scope)?;
+        }
+        Ok(())
     }
 }
 
@@ -297,5 +244,45 @@ mod tests {
             page_overlay_class(true, true),
             "page-overlay active page-tool-overlay"
         );
+    }
+}
+
+#[cfg(test)]
+mod semantic_tests {
+    use super::*;
+    use glory::render::Props;
+    use std::{cell::RefCell, rc::Rc};
+
+    #[test]
+    fn template_add_uses_owner_scoped_choice_and_dispatches_action() {
+        let actions = Rc::new(RefCell::new(Vec::new()));
+        let captured = actions.clone();
+        let app = App::memory();
+        app.mount(PagesPanel {
+            pages: vec![],
+            on_action: crate::Callback::new(move |a| captured.borrow_mut().push(a)),
+        })
+        .unwrap();
+        let tree = app.tree();
+        let mut nodes = tree.roots().to_vec();
+        let mut button = None;
+        while let Some(id) = nodes.pop() {
+            let node = tree.node(id).unwrap();
+            if matches!(node.descriptor.view().props, Props::Button(props) if props.label == "Add template page")
+            {
+                button = Some(id);
+                break;
+            }
+            nodes.extend(node.children.iter().copied());
+        }
+        drop(tree);
+        app.dispatch(button.expect("template action"), Event::Activate)
+            .unwrap();
+        assert!(matches!(
+            actions.borrow().as_slice(),
+            [PageAction::AddTemplate(PageTemplate::CurrentDocument)]
+        ));
+        app.clear().unwrap();
+        assert_eq!(app.stats().nodes, 0);
     }
 }

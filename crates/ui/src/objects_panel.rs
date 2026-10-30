@@ -1,8 +1,109 @@
-﻿//! Objects panel component showing the full object tree with visibility,
+//! Objects panel component showing the full object tree with visibility,
 //! lock, type icons, selection, and rename support.
 
-use dioxus::prelude::*;
+use crate::controls::{action_button, panel};
+use crate::layers_panel::{tree_button, tree_row};
+use glory::prelude::*;
 use sivgo_dom::NodeId;
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
+
+type DropTargets = Rc<RefCell<Vec<(Option<NodeId>, glory::render::NodeId)>>>;
+
+fn object_drag_handle(
+    scope: &Scope,
+    id: NodeId,
+    label: &str,
+    row_node: glory::render::NodeId,
+    targets: DropTargets,
+    serial: Rc<Cell<u64>>,
+    callback: crate::Callback<ObjectAction>,
+) -> Result {
+    use glory::render::{DragCapture, DragPhase, EventKind, Query, QueryValue, Semantics};
+    let owner = scope.downgrade();
+    let destinations = targets.clone();
+    view()
+        .name(format!("Move object {label}"))
+        .class("object-drag-handle")
+        .style(Style::new().padding(glory::style::Edges::all(6.0)))
+        .semantics(Some(Box::new(Semantics {
+            drag_capture: Some(DragCapture::Press),
+            ..Default::default()
+        })))
+        .fill(text().content("⠿"))
+        .on(EventKind::Drag, move |event| {
+            let Event::Drag { phase, x, y, .. } = event else {
+                return;
+            };
+            if matches!(phase, DragPhase::Start | DragPhase::Cancel) {
+                serial.set(serial.get().wrapping_add(1));
+            }
+            if phase != DragPhase::Drop {
+                return;
+            }
+            let Some(scope) = owner.upgrade() else {
+                return;
+            };
+            let stamp = serial.get();
+            let targets = destinations.borrow().clone();
+            let pending = Rc::new(RefCell::new((
+                targets.len(),
+                None::<(usize, Option<NodeId>)>,
+            )));
+            for (index, (destination, target)) in targets.into_iter().enumerate() {
+                let callback = callback.clone();
+                let pending = pending.clone();
+                let serial = serial.clone();
+                let result = scope.request(Query::Bounds(target), move |reply| {
+                    if serial.get() != stamp {
+                        return;
+                    }
+                    let mut pending = pending.borrow_mut();
+                    if let Ok(QueryValue::Bounds(bounds)) = reply {
+                        if bounds.width > 0.0
+                            && bounds.height > 0.0
+                            && x >= bounds.x
+                            && y >= bounds.y
+                            && x <= bounds.x + bounds.width
+                            && y <= bounds.y + bounds.height
+                            && pending
+                                .1
+                                .as_ref()
+                                .is_none_or(|(previous, _)| index > *previous)
+                        {
+                            pending.1 = Some((index, destination));
+                        }
+                    }
+                    pending.0 -= 1;
+                    if pending.0 == 0 {
+                        let destination = pending.1;
+                        drop(pending);
+                        if let Some((_, destination)) = destination {
+                            if destination == Some(id) {
+                                return;
+                            }
+                            // Publish the complete operation after the gesture,
+                            // so row snapshots cannot retire the pointer owner.
+                            callback.call(ObjectAction::BeginDrag(id));
+                            callback.call(match destination {
+                                Some(target) => ObjectAction::DropOn(target),
+                                None => ObjectAction::DropToRoot,
+                            });
+                            callback.call(ObjectAction::EndDrag);
+                        }
+                    }
+                });
+                if let Err(error) = result {
+                    scope.report_error(error);
+                }
+            }
+        })
+        .show_in(scope)?;
+    targets.borrow_mut().push((Some(id), row_node));
+    Ok(())
+}
 
 /// Represents a single object in the tree hierarchy.
 #[derive(Debug, Clone, PartialEq)]
@@ -73,145 +174,163 @@ fn type_icon(type_name: &str) -> &'static str {
 ///
 /// Each row displays: type icon, visibility toggle, lock toggle, and label.
 /// Single-click selects; double-click begins renaming.
-#[component]
-pub fn ObjectsPanel(
-    objects: Vec<ObjectEntry>,
-    editing_id: Option<NodeId>,
-    edit_value: String,
-    selected_details: Option<ObjectDetails>,
-    xml_id_edit_value: String,
-    on_action: EventHandler<ObjectAction>,
-    on_edit_change: EventHandler<String>,
-    on_xml_id_change: EventHandler<String>,
-) -> Element {
-    rsx! {
-        div { class: "objects-panel",
-            div { class: "panel-header", "Objects" }
-            div {
-                class: "object-root-drop",
-                ondragover: move |evt| evt.prevent_default(),
-                ondrop: move |evt| {
-                    evt.prevent_default();
-                    on_action.call(ObjectAction::DropToRoot);
-                },
-                "Root level"
-            }
-            if let Some(details) = selected_details.as_ref() {
-                {
-                    let details_id = details.id;
-                    let key_xml_id = xml_id_edit_value.clone();
-                    let blur_xml_id = xml_id_edit_value.clone();
-                    rsx! {
-                        div { class: "prop-section object-properties",
-                            div { class: "prop-section-header", "Properties" }
-                            div { class: "prop-row",
-                                span { class: "prop-label", "Type" }
-                                span { class: "prop-value", "{details.type_name}" }
-                                span { class: "prop-unit", "" }
-                            }
-                            div { class: "prop-row",
-                                span { class: "prop-label", "Label" }
-                                span { class: "prop-value", "{details.label}" }
-                                span { class: "prop-unit", "" }
-                            }
-                            div { class: "prop-row",
-                                span { class: "prop-label", "ID" }
-                                input {
-                                    r#type: "text",
-                                    class: "prop-input",
-                                    value: "{xml_id_edit_value}",
-                                    oninput: move |evt: Event<FormData>| {
-                                        on_xml_id_change.call(evt.value().to_string());
-                                    },
-                                    onkeydown: move |evt: Event<KeyboardData>| {
-                                        if evt.key() == Key::Enter {
-                                            on_action.call(ObjectAction::SetXmlId(details_id, key_xml_id.clone()));
-                                        }
-                                    },
-                                    onblur: move |_| {
-                                        on_action.call(ObjectAction::SetXmlId(details_id, blur_xml_id.clone()));
-                                    },
-                                }
-                                span { class: "prop-unit", "" }
-                            }
+#[derive(Clone)]
+pub struct ObjectsPanel {
+    pub objects: Vec<ObjectEntry>,
+    pub editing_id: Option<NodeId>,
+    pub edit_value: String,
+    pub selected_details: Option<ObjectDetails>,
+    pub xml_id_edit_value: String,
+    pub on_action: crate::Callback<ObjectAction>,
+    pub on_edit_change: crate::Callback<String>,
+    pub on_xml_id_change: crate::Callback<String>,
+}
+
+impl Widget for ObjectsPanel {
+    fn build(&mut self, scope: &Scope) -> Result {
+        let scope = panel(scope, "objects-panel", "Objects")?;
+        let targets: DropTargets = Rc::new(RefCell::new(Vec::new()));
+        let drag_serial = Rc::new(Cell::new(0));
+        let root_target = scope.cage(None);
+        view()
+            .name("Root level drop target")
+            .class("object-root-drop")
+            .node_ref(root_target)
+            .style(Style::new().padding(glory::style::Edges::all(8.0)))
+            .fill(text().content("Drop here to move to document root"))
+            .show_in(&scope)?;
+        targets
+            .borrow_mut()
+            .push((None, root_target.get().ok_or(glory::ui::Error::Gone)?));
+        if let Some(details) = &self.selected_details {
+            text()
+                .content(format!("{} — {}", details.type_name, details.label))
+                .show_in(&scope)?;
+            let id = details.id;
+            let callback = self.on_action.clone();
+            let changed = self.on_xml_id_change.clone();
+            sapid::text_field()
+                .theme(crate::controls::editor_theme())
+                .size(sapid::Size::ExtraSmall)
+                .name("SVG object ID")
+                .default_value(self.xml_id_edit_value.clone())
+                .on_value_change(move |value| changed.call(value))
+                .on_commit(move |value| callback.call(ObjectAction::SetXmlId(id, value)))
+                .show_in(&scope)?;
+        }
+
+        let mut ancestors: Vec<(usize, Cage<bool>)> = Vec::new();
+        for (index, entry) in self.objects.iter().enumerate() {
+            ancestors.retain(|(depth, _)| *depth < entry.depth);
+            let parents: Vec<_> = ancestors.iter().map(|(_, open)| *open).collect();
+            let visible = scope.bond(move || parents.iter().all(|open| open.get()));
+            let (row, row_node) = tree_row(&scope, entry.depth, visible, entry.selected)?;
+            if self
+                .objects
+                .get(index + 1)
+                .is_some_and(|next| next.depth > entry.depth)
+            {
+                let open = scope.cage(true);
+                tree_button("", format!("Expand or collapse {}", entry.label), false)
+                    .label(open.map(|open| {
+                        if *open {
+                            "▾".to_owned()
+                        } else {
+                            "▸".to_owned()
                         }
-                    }
-                }
+                    }))
+                    .on_press(move || open.revise(|value| *value = !*value))
+                    .show_in(&row)?;
+                ancestors.push((entry.depth, open));
             }
-            div { class: "objects-tree",
-                for entry in objects.iter() {
-                    {
-                        let entry_id = entry.id;
-                        let indent = entry.depth * 16;
-                        let icon = type_icon(&entry.type_name);
-                        let is_editing = editing_id == Some(entry.id);
-                        let current_edit = edit_value.clone();
-                        let style_str = format!("padding-left: {}px;", indent);
-                        rsx! {
-                            div {
-                                key: "{entry_id}",
-                                class: if entry.selected { "object-row selected" } else { "object-row" },
-                                style: "{style_str}",
-                                draggable: "true",
-                                ondragstart: move |_| on_action.call(ObjectAction::BeginDrag(entry_id)),
-                                ondragend: move |_| on_action.call(ObjectAction::EndDrag),
-                                ondragover: move |evt| evt.prevent_default(),
-                                ondrop: move |evt| {
-                                    evt.prevent_default();
-                                    on_action.call(ObjectAction::DropOn(entry_id));
-                                },
-
-                                // Type icon
-                                span { class: "object-type-icon", "{icon}" }
-
-                                // Visibility toggle
-                                button {
-                                    class: "object-btn",
-                                    title: if entry.visible { "Hide" } else { "Show" },
-                                    onclick: move |_| on_action.call(ObjectAction::ToggleVisibility(entry_id)),
-                                    if entry.visible { "👁" } else { "—" }
-                                }
-
-                                // Lock toggle
-                                button {
-                                    class: "object-btn",
-                                    title: if entry.locked { "Unlock" } else { "Lock" },
-                                    onclick: move |_| on_action.call(ObjectAction::ToggleLock(entry_id)),
-                                    if entry.locked { "🔒" } else { "🔓" }
-                                }
-
-                                // Label or rename input
-                                if is_editing {
-                                    input {
-                                        r#type: "text",
-                                        class: "object-rename-input",
-                                        value: "{current_edit}",
-                                        autofocus: true,
-                                        oninput: move |evt: Event<FormData>| {
-                                            on_edit_change.call(evt.value().to_string());
-                                        },
-                                        onkeydown: move |evt: Event<KeyboardData>| {
-                                            if evt.key() == Key::Enter {
-                                                on_action.call(ObjectAction::Rename(entry_id, current_edit.clone()));
-                                            }
-                                        },
-                                    }
-                                } else {
-                                    span {
-                                        class: "object-label",
-                                        onclick: move |_| on_action.call(ObjectAction::Select(entry_id)),
-                                        ondoubleclick: move |_| on_action.call(ObjectAction::BeginRename(entry_id)),
-                                        "{entry.label}"
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                if objects.is_empty() {
-                    div { class: "object-empty", "No objects" }
-                }
+            let id = entry.id;
+            object_drag_handle(
+                &row,
+                id,
+                &entry.label,
+                row_node,
+                targets.clone(),
+                drag_serial.clone(),
+                self.on_action.clone(),
+            )?;
+            let callback = self.on_action.clone();
+            let mut name_style = Style::new().min_width(Length::Px(0.0));
+            name_style.grow = Some(1.0);
+            tree_button(
+                format!("{} {}", type_icon(&entry.type_name), entry.label),
+                format!("Select object {}", entry.label),
+                entry.selected,
+            )
+            .style(name_style)
+            .on_press(move || callback.call(ObjectAction::Select(id)))
+            .show_in(&row)?;
+            let callback = self.on_action.clone();
+            tree_button(
+                if entry.visible { "●" } else { "○" },
+                format!(
+                    "{} object {}",
+                    if entry.visible { "Hide" } else { "Show" },
+                    entry.label
+                ),
+                false,
+            )
+            .on_press(move || callback.call(ObjectAction::ToggleVisibility(id)))
+            .show_in(&row)?;
+            let callback = self.on_action.clone();
+            tree_button(
+                if entry.locked { "🔒" } else { "◇" },
+                format!(
+                    "{} object {}",
+                    if entry.locked { "Unlock" } else { "Lock" },
+                    entry.label
+                ),
+                entry.locked,
+            )
+            .on_press(move || callback.call(ObjectAction::ToggleLock(id)))
+            .show_in(&row)?;
+        }
+        let focused = self
+            .objects
+            .iter()
+            .find(|entry| self.editing_id == Some(entry.id))
+            .or_else(|| self.objects.iter().find(|entry| entry.selected));
+        if let Some(entry) = focused {
+            let id = entry.id;
+            let detail = panel(&scope, "object-details", &entry.label)?;
+            let callback = self.on_action.clone();
+            action_button(
+                &detail,
+                "Rename object",
+                self.editing_id == Some(id),
+                move || callback.call(ObjectAction::BeginRename(id)),
+            )?;
+            if self.editing_id == Some(id) {
+                let callback = self.on_action.clone();
+                let changed = self.on_edit_change.clone();
+                sapid::text_field()
+                    .theme(crate::controls::editor_theme())
+                    .size(sapid::Size::ExtraSmall)
+                    .name("Object name")
+                    .default_value(self.edit_value.clone())
+                    .on_value_change(move |value| changed.call(value))
+                    .on_commit(move |value| callback.call(ObjectAction::Rename(id, value)))
+                    .show_in(&detail)?;
+            }
+            // Keyboard-accessible alternatives to the drag handle, shown only
+            // after selecting the object to move or its destination.
+            for (label, action) in [
+                ("Move this object", ObjectAction::BeginDrag(id)),
+                ("Move dragged object here", ObjectAction::DropOn(id)),
+                ("Move dragged object to root", ObjectAction::DropToRoot),
+                ("Cancel object move", ObjectAction::EndDrag),
+            ] {
+                let callback = self.on_action.clone();
+                action_button(&detail, label, false, move || callback.call(action.clone()))?;
             }
         }
+        if self.objects.is_empty() {
+            text().content("No objects").show_in(&scope)?;
+        }
+        Ok(())
     }
 }

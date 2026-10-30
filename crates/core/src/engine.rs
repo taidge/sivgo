@@ -278,6 +278,7 @@ impl EditorEngine {
     pub fn undo(&mut self) {
         if self.history.undo(&mut self.document) {
             self.validate_active_layer();
+            self.remove_missing_selection();
             self.events.emit(EditorEvent::DocumentModified);
             self.events.emit(EditorEvent::UndoRedoChanged);
         }
@@ -287,6 +288,8 @@ impl EditorEngine {
     pub fn redo(&mut self) {
         if self.history.redo(&mut self.document) {
             self.validate_active_layer();
+            self.remove_missing_selection();
+            self.select_created_nodes();
             self.events.emit(EditorEvent::DocumentModified);
             self.events.emit(EditorEvent::UndoRedoChanged);
         }
@@ -302,9 +305,50 @@ impl EditorEngine {
         }
     }
 
+    fn remove_missing_selection(&mut self) {
+        let missing: Vec<_> = self
+            .selection
+            .selected()
+            .iter()
+            .copied()
+            .filter(|id| self.document.get_node(*id).is_none())
+            .collect();
+        if !missing.is_empty() {
+            for id in missing {
+                self.selection.remove(id);
+            }
+            self.events.emit(EditorEvent::SelectionChanged);
+        }
+    }
+
+    fn select_created_nodes(&mut self) {
+        let created: Vec<_> = self
+            .history
+            .created_selection()
+            .into_iter()
+            .filter(|id| self.is_selectable_object(*id))
+            .collect();
+        if !created.is_empty() {
+            self.selection.clear();
+            for id in created {
+                self.selection.add(id);
+            }
+            self.events.emit(EditorEvent::SelectionChanged);
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Input dispatch
     // -----------------------------------------------------------------------
+
+    /// Cancel the active tool's unfinished gesture without changing tools,
+    /// selection, settings, or already committed document edits.
+    pub fn cancel_tool_interaction(&mut self) {
+        let tool = self.tools.active_tool_mut();
+        tool.on_deactivate();
+        tool.on_activate();
+        self.last_snap_indicator = None;
+    }
 
     /// Dispatch a mouse-down event to the active tool.
     pub fn on_mouse_down(&mut self, event: MouseEvent) {
@@ -409,6 +453,11 @@ impl EditorEngine {
                     cmd
                 };
                 self.execute(command);
+                // Spray reads its source objects from the current selection
+                // on every move, so keep those sources throughout the gesture.
+                if self.tools.active_id() != ToolId::Spray {
+                    self.select_created_nodes();
+                }
             }
             ToolResponse::Handled | ToolResponse::None => {}
         }

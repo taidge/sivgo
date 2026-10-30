@@ -1,10 +1,10 @@
-﻿//! Command trait and undo/redo history.
+//! Command trait and undo/redo history.
 //!
 //! Every editing operation is wrapped in a [`Command`] so that it can be
 //! undone and redone.  The [`CommandHistory`] manages two stacks (undo and
 //! redo) and enforces a maximum depth.
 
-use sivgo_dom::SvgDocument;
+use sivgo_dom::{NodeId, SvgDocument};
 
 /// A reversible editing command.
 pub trait Command: std::fmt::Debug {
@@ -16,6 +16,12 @@ pub trait Command: std::fmt::Debug {
 
     /// A short, human-readable description (shown in Edit menu).
     fn description(&self) -> &str;
+
+    /// Nodes created by this command that should become the tool's selection.
+    /// Commands that only modify existing nodes or resources leave this empty.
+    fn created_selection(&self) -> Vec<NodeId> {
+        Vec::new()
+    }
 }
 
 /// Manages the undo and redo stacks.
@@ -46,6 +52,14 @@ impl CommandHistory {
     /// Execute a command, push it onto the undo stack, and clear the redo
     /// stack.
     pub fn execute(&mut self, mut cmd: Box<dyn Command>, doc: &mut SvgDocument) {
+        // A new branch discards the redo path to a saved state ahead of us.
+        // Equal stack depths on the new branch do not mean equal documents.
+        if self
+            .saved_depth
+            .is_some_and(|depth| depth > self.undo_stack.len())
+        {
+            self.saved_depth = None;
+        }
         cmd.execute(doc);
         self.undo_stack.push(cmd);
         self.redo_stack.clear();
@@ -113,6 +127,14 @@ impl CommandHistory {
     /// Description of the command that would be undone next.
     pub fn undo_description(&self) -> Option<&str> {
         self.undo_stack.last().map(|cmd| cmd.description())
+    }
+
+    /// Selection reported by the most recently executed command.
+    pub fn created_selection(&self) -> Vec<NodeId> {
+        self.undo_stack
+            .last()
+            .map(|cmd| cmd.created_selection())
+            .unwrap_or_default()
     }
 
     /// Description of the command that would be redone next.

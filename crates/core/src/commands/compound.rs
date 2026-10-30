@@ -1,6 +1,6 @@
-﻿//! Command: compound (batch) command.
+//! Command: compound (batch) command.
 
-use sivgo_dom::SvgDocument;
+use sivgo_dom::{NodeId, SvgDocument};
 
 use crate::command::Command;
 
@@ -37,5 +37,12 @@ impl Command for CompoundCommand {
 
     fn description(&self) -> &str {
         &self.desc
+    }
+
+    fn created_selection(&self) -> Vec<NodeId> {
+        self.commands
+            .iter()
+            .flat_map(|cmd| cmd.created_selection())
+            .collect()
     }
 }

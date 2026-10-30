@@ -1,4 +1,4 @@
-//! `sivgo-ui` -- Shared Dioxus UI components for the Sivgo SVG editor.
+//! `sivgo-ui` -- Shared Glory and Sapid UI components for the Sivgo SVG editor.
 //!
 //! Provides the reusable components used by the desktop editor:
 //!
@@ -26,6 +26,7 @@
 pub mod align_panel;
 pub mod canvas;
 pub mod color_bar;
+pub(crate) mod controls;
 pub mod doc_properties;
 pub mod filter_editor;
 pub mod layers_panel;
@@ -44,8 +45,33 @@ pub mod tool_controls;
 pub mod toolbar;
 pub mod transform_panel;
 
+/// Cloneable event callback shared by the semantic editor widgets.
+pub struct Callback<T>(std::rc::Rc<dyn Fn(T)>);
+
+impl<T> Callback<T> {
+    pub fn new(handler: impl Fn(T) + 'static) -> Self {
+        Self(std::rc::Rc::new(handler))
+    }
+
+    pub fn call(&self, value: T) {
+        (self.0)(value);
+    }
+}
+
+impl<T> Clone for Callback<T> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl<T> Default for Callback<T> {
+    fn default() -> Self {
+        Self::new(|_| {})
+    }
+}
+
 // ---------------------------------------------------------------------------
-// Re-exports: Dioxus components
+// Re-exports: Glory widgets
 // ---------------------------------------------------------------------------
 pub use align_panel::AlignPanel;
 pub use canvas::render_to_data_uri;

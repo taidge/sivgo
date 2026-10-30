@@ -21,7 +21,7 @@ members = [
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-rust-version = "1.89"
+rust-version = "1.94"
 
 [workspace.dependencies]
 # Internal crates
@@ -51,8 +51,8 @@ env_logger = "0.11"
 clap = { version = "4", features = ["derive"] }
 png = "0.18"
 tempfile = "3"
-dioxus = "0.7"
-dioxus-desktop = "0.7"
+glory = { path = "../../glory-rs/glory/crates/glory", default-features = false }
+sapid = { path = "../../glory-rs/sapid" }
 rfd = "0.17"
 base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "tiff", "webp"] }

@@ -1,0 +1,6 @@
+[build]
+target-dir = "D:/BuildCache/sivgo-glory/target"
+
+[env]
+TMP = { value = "D:/BuildCache/sivgo-glory/tmp", force = true }
+TEMP = { value = "D:/BuildCache/sivgo-glory/tmp", force = true }
