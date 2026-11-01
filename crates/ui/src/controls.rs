@@ -212,8 +212,8 @@ pub(crate) fn choice_field(
     choice_options(scope, label, selected, choices, handler)
 }
 
-/// A compact choice control built from portable buttons. Glory's current
-/// native host does not implement HTML Select or combobox semantics.
+/// A compact choice control built from portable buttons, keeping the same
+/// selection behavior across the editor's semantic renderers.
 pub(crate) fn choice_options(
     scope: &Scope,
     label: &str,

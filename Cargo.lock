@@ -20,9 +20,9 @@ checksum = "366ffbaa4442f4684d91e2cd7c5ea7c4ed8add41959a31447066e279e432b618"
 
 [[package]]
 name = "accesskit"
-version = "0.25.1"
+version = "0.25.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ad442f58ee04714aaa0ba0a2768c1ea1935b29507bb22ddece8cbbc76db02932"
+checksum = "4e883d1d28c5fd5568c79ed2d2bd48d9f2fd3945c8974ed0f53690ceddb051be"
 dependencies = [
  "uuid",
 ]
@@ -91,6 +91,12 @@ checksum = "0e76a019e91224d279006ff972f1e984179a6e9feb050adba6ce8274aef23195"
 dependencies = [
  "alloc-no-stdlib",
 ]
+
+[[package]]
+name = "allocator-api2"
+version = "0.2.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
 name = "android-activity"
@@ -197,13 +203,118 @@ dependencies = [
  "anyrender",
  "bytemuck",
  "color",
- "debug_timer 0.1.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "debug_timer",
  "glifo",
  "kurbo",
  "peniko",
  "vello_common",
  "vello_cpu",
 ]
+
+[[package]]
+name = "apace-dom"
+version = "0.3.0"
+source = "git+https://github.com/glory-rs/apace?branch=main#191c48adf6d7deb120c9d3ee1b098d7dc020891f"
+dependencies = [
+ "accesskit",
+ "anyrender",
+ "apace-traits",
+ "apace_debug_timer",
+ "app_units",
+ "atomic_refcell",
+ "bitflags 2.13.2",
+ "color",
+ "cssparser",
+ "cursor-icon",
+ "euclid",
+ "html-escape",
+ "icu_locale_core",
+ "icu_properties",
+ "icu_segmenter",
+ "image",
+ "keyboard-types",
+ "kurbo",
+ "linebender_resource_handle",
+ "markup5ever",
+ "objc2",
+ "parley",
+ "percent-encoding",
+ "rayon",
+ "selectors",
+ "skrifa 0.44.0",
+ "slotmap",
+ "smallvec",
+ "stylo",
+ "stylo_dom",
+ "stylo_static_prefs",
+ "stylo_takia",
+ "stylo_traits",
+ "takia",
+ "thin-vec",
+ "thread_local",
+ "url",
+ "web-time",
+]
+
+[[package]]
+name = "apace-paint"
+version = "0.3.0"
+source = "git+https://github.com/glory-rs/apace?branch=main#191c48adf6d7deb120c9d3ee1b098d7dc020891f"
+dependencies = [
+ "anyrender",
+ "apace-dom",
+ "apace-traits",
+ "bytemuck",
+ "color",
+ "euclid",
+ "kurbo",
+ "parley",
+ "peniko",
+ "skrifa 0.44.0",
+ "smallvec",
+ "stylo",
+ "takia",
+]
+
+[[package]]
+name = "apace-shell"
+version = "0.3.0"
+source = "git+https://github.com/glory-rs/apace?branch=main#191c48adf6d7deb120c9d3ee1b098d7dc020891f"
+dependencies = [
+ "android-activity",
+ "anyrender",
+ "apace-dom",
+ "apace-paint",
+ "apace-traits",
+ "atomic_refcell",
+ "futures-util",
+ "keyboard-types",
+ "wasm-bindgen",
+ "web-sys",
+ "web-time",
+ "wingy",
+]
+
+[[package]]
+name = "apace-traits"
+version = "0.3.0"
+source = "git+https://github.com/glory-rs/apace?branch=main#191c48adf6d7deb120c9d3ee1b098d7dc020891f"
+dependencies = [
+ "atomic_refcell",
+ "bitflags 2.13.2",
+ "bytes",
+ "cursor-icon",
+ "http",
+ "keyboard-types",
+ "serde",
+ "smol_str",
+ "url",
+]
+
+[[package]]
+name = "apace_debug_timer"
+version = "0.1.4"
+source = "git+https://github.com/glory-rs/apace?branch=main#191c48adf6d7deb120c9d3ee1b098d7dc020891f"
 
 [[package]]
 name = "app_units"
@@ -406,106 +517,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "blitz-dom"
-version = "0.3.0-beta.4"
-source = "git+https://github.com/glory-rs/blitz?rev=ee125981e0e5a217e758be5c470df23cdd9e2fc3#ee125981e0e5a217e758be5c470df23cdd9e2fc3"
-dependencies = [
- "accesskit",
- "anyrender",
- "app_units",
- "atomic_refcell",
- "bitflags 2.13.2",
- "blitz-traits",
- "color",
- "cssparser",
- "cursor-icon",
- "debug_timer 0.1.3 (git+https://github.com/glory-rs/blitz?rev=ee125981e0e5a217e758be5c470df23cdd9e2fc3)",
- "euclid",
- "html-escape",
- "icu_locale_core",
- "icu_properties",
- "icu_segmenter",
- "image",
- "keyboard-types",
- "kurbo",
- "linebender_resource_handle",
- "markup5ever",
- "objc2",
- "parley",
- "percent-encoding",
- "rayon",
- "selectors",
- "skrifa 0.44.0",
- "slotmap",
- "smallvec",
- "stylo",
- "stylo_dom",
- "stylo_static_prefs",
- "stylo_taffy",
- "stylo_traits",
- "taffy",
- "thin-vec",
- "thread_local",
- "url",
- "web-time",
-]
-
-[[package]]
-name = "blitz-paint"
-version = "0.3.0-beta.4"
-source = "git+https://github.com/glory-rs/blitz?rev=ee125981e0e5a217e758be5c470df23cdd9e2fc3#ee125981e0e5a217e758be5c470df23cdd9e2fc3"
-dependencies = [
- "anyrender",
- "blitz-dom",
- "blitz-traits",
- "bytemuck",
- "color",
- "euclid",
- "kurbo",
- "parley",
- "peniko",
- "skrifa 0.44.0",
- "smallvec",
- "stylo",
- "taffy",
-]
-
-[[package]]
-name = "blitz-shell"
-version = "0.3.0-beta.4"
-source = "git+https://github.com/glory-rs/blitz?rev=ee125981e0e5a217e758be5c470df23cdd9e2fc3#ee125981e0e5a217e758be5c470df23cdd9e2fc3"
-dependencies = [
- "android-activity",
- "anyrender",
- "atomic_refcell",
- "blitz-dom",
- "blitz-paint",
- "blitz-traits",
- "futures-util",
- "keyboard-types",
- "wasm-bindgen",
- "web-sys",
- "web-time",
- "winit",
-]
-
-[[package]]
-name = "blitz-traits"
-version = "0.3.0-beta.4"
-source = "git+https://github.com/glory-rs/blitz?rev=ee125981e0e5a217e758be5c470df23cdd9e2fc3#ee125981e0e5a217e758be5c470df23cdd9e2fc3"
-dependencies = [
- "atomic_refcell",
- "bitflags 2.13.2",
- "bytes",
- "cursor-icon",
- "http",
- "keyboard-types",
- "serde",
- "smol_str",
- "url",
-]
-
-[[package]]
 name = "block-buffer"
 version = "0.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -606,7 +617,7 @@ checksum = "43b32313e937c8721c9d17ee9bf60699a6402b4b7c2cb6ac1bee0ffcaa4b4e5e"
 dependencies = [
  "bitflags 2.13.2",
  "polling",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "tracing",
 ]
 
@@ -617,7 +628,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "138efcf0940a02ebf0cc8d1eff41a1682a46b431630f4c52450d6265876021fa"
 dependencies = [
  "calloop",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "wayland-backend",
  "wayland-client",
 ]
@@ -1036,11 +1047,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da220af51a1a335e9a930beaaef53d261e41ea9eecfb3d973a3ddae1a7284b9c"
 
 [[package]]
-name = "debug_timer"
-version = "0.1.3"
-source = "git+https://github.com/glory-rs/blitz?rev=ee125981e0e5a217e758be5c470df23cdd9e2fc3#ee125981e0e5a217e758be5c470df23cdd9e2fc3"
-
-[[package]]
 name = "defmt"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1193,11 +1199,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 
 [[package]]
-name = "dpi"
-version = "0.1.2"
-source = "git+https://github.com/glory-rs/winit?rev=3b6f5a09697acb936567af64e53c915b0b1a2af9#3b6f5a09697acb936567af64e53c915b0b1a2af9"
-
-[[package]]
 name = "drm"
 version = "0.14.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1218,7 +1219,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "51a91c9b32ac4e8105dec255e849e0d66e27d7c34d184364fb93e469db08f690"
 dependencies = [
  "drm-sys",
- "rustix 1.1.5",
+ "rustix 1.1.6",
 ]
 
 [[package]]
@@ -1613,7 +1614,7 @@ version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1bd49230192a3797a9a4d6abe9b3eed6f7fa4c8a8a4947977c6f80025f92cbd8"
 dependencies = [
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "windows-link",
 ]
 
@@ -1705,9 +1706,10 @@ dependencies = [
 
 [[package]]
 name = "glory"
-version = "0.3.1"
+version = "0.6.1"
+source = "git+https://github.com/glory-rs/glory?branch=main#e6f58e9e881216a1d2e205bfd49bf53c2525775b"
 dependencies = [
- "glory-blitz",
+ "glory-apace",
  "glory-core",
  "glory-html",
  "glory-render",
@@ -1716,15 +1718,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "glory-blitz"
-version = "0.3.1"
+name = "glory-apace"
+version = "0.6.1"
+source = "git+https://github.com/glory-rs/glory?branch=main#e6f58e9e881216a1d2e205bfd49bf53c2525775b"
 dependencies = [
  "anyrender",
  "anyrender_vello_cpu",
- "blitz-dom",
- "blitz-paint",
- "blitz-shell",
- "blitz-traits",
+ "apace-dom",
+ "apace-paint",
+ "apace-shell",
+ "apace-traits",
  "fontique",
  "glory-core",
  "glory-html",
@@ -1736,19 +1739,21 @@ dependencies = [
  "peniko",
  "softbuffer_window_renderer",
  "stylo",
- "winit",
+ "wingy",
 ]
 
 [[package]]
 name = "glory-core"
-version = "0.3.1"
+version = "0.6.1"
+source = "git+https://github.com/glory-rs/glory?branch=main#e6f58e9e881216a1d2e205bfd49bf53c2525775b"
 dependencies = [
  "glory-render",
 ]
 
 [[package]]
 name = "glory-html"
-version = "0.3.1"
+version = "0.6.1"
+source = "git+https://github.com/glory-rs/glory?branch=main#e6f58e9e881216a1d2e205bfd49bf53c2525775b"
 dependencies = [
  "glory-render",
  "glory-style",
@@ -1756,18 +1761,21 @@ dependencies = [
 
 [[package]]
 name = "glory-render"
-version = "0.3.1"
+version = "0.6.1"
+source = "git+https://github.com/glory-rs/glory?branch=main#e6f58e9e881216a1d2e205bfd49bf53c2525775b"
 dependencies = [
  "glory-style",
 ]
 
 [[package]]
 name = "glory-style"
-version = "0.3.1"
+version = "0.6.1"
+source = "git+https://github.com/glory-rs/glory?branch=main#e6f58e9e881216a1d2e205bfd49bf53c2525775b"
 
 [[package]]
 name = "glory-ui"
-version = "0.3.1"
+version = "0.6.1"
+source = "git+https://github.com/glory-rs/glory?branch=main#e6f58e9e881216a1d2e205bfd49bf53c2525775b"
 dependencies = [
  "glory-core",
  "glory-render",
@@ -1894,6 +1902,8 @@ version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 dependencies = [
+ "allocator-api2",
+ "equivalent",
  "foldhash 0.2.0",
 ]
 
@@ -1944,9 +1954,9 @@ dependencies = [
 
 [[package]]
 name = "html-escape"
-version = "0.2.15"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c9356095b4b41197bba32173600e1582792cda618f65d12f68e2e77d273413c5"
+checksum = "491194d601b4fa9fac3c9571e014070a0ad1bc3392d1bc10419695196a8b3cc3"
 
 [[package]]
 name = "http"
@@ -2479,9 +2489,9 @@ checksum = "a0370574b86f7eca156b9f298392b5e69a23f8c86f3f865add60bbc2e79467a6"
 
 [[package]]
 name = "js-sys"
-version = "0.3.106"
+version = "0.3.107"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7883d941dae510fb2d978fc3fe018c71c9e2892fd38854de3e8b92c2e5ad9cc5"
+checksum = "8dc09d2154098bbf4ef54eab6b117a3c24cbbffe94046b16ee6d6d4510584d3a"
 dependencies = [
  "cfg-if",
  "futures-util",
@@ -2558,6 +2568,18 @@ name = "libredox"
 version = "0.1.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "61ff90caf6077a803a240f62fdbe88645a890bbca49ef8174c3cb0404362171d"
+dependencies = [
+ "bitflags 2.13.2",
+ "libc",
+ "plain",
+ "redox_syscall 0.9.5",
+]
+
+[[package]]
+name = "libredox"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "482919959e69f0d67493e9220edb433ffc42ae98e59ceba4ed58697eb49b9bf8"
 dependencies = [
  "bitflags 2.13.2",
  "libc",
@@ -3074,7 +3096,7 @@ version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "01f140a738f180203d7912dfd369936fff2fb0ad6f426c0aa007ed3e2b443e6b"
 dependencies = [
- "libredox",
+ "libredox 0.1.25",
 ]
 
 [[package]]
@@ -3332,7 +3354,7 @@ dependencies = [
  "concurrent-queue",
  "hermit-abi",
  "pin-project-lite",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "windows-sys 0.61.2",
 ]
 
@@ -3683,12 +3705,12 @@ dependencies = [
 
 [[package]]
 name = "redox_event"
-version = "0.4.8"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c5018d583d6d2f5499352aea8d177e9067d1eb03ab17c78169d5ba7a30001b15"
+checksum = "19d5e82d50f9c0baa461ece6d4e4cb87efe7b666a9a5c9461fafcae46429e21e"
 dependencies = [
  "bitflags 2.13.2",
- "libredox",
+ "libredox 0.2.0",
 ]
 
 [[package]]
@@ -3914,9 +3936,9 @@ dependencies = [
 
 [[package]]
 name = "rustix"
-version = "1.1.5"
+version = "1.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "891efababe418670775f199f0d233d84843c227a0949a883ce15b37c78d6629d"
+checksum = "e5e76742e5294153d4dde1207dbec5bdd81eef6fabdc0d2118babadabfd858aa"
 dependencies = [
  "bitflags 2.13.2",
  "errno",
@@ -4212,7 +4234,8 @@ dependencies = [
 
 [[package]]
 name = "sapid"
-version = "0.1.0"
+version = "0.6.1"
+source = "git+https://github.com/sapid-ui/sapid?branch=main#ec8f74828565264091a31c5c39f703918206e987"
 dependencies = [
  "glory",
 ]
@@ -4277,12 +4300,12 @@ dependencies = [
 [[package]]
 name = "selectors"
 version = "0.41.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8322aebea94a6cc288ff884e8a49bdbceef60206c400c6c46d22e62fc4fd91a6"
+source = "git+https://github.com/nicoburns/stylo?rev=78734bf554bb40af9dc11c0eedbe724f6055697c#78734bf554bb40af9dc11c0eedbe724f6055697c"
 dependencies = [
  "bitflags 2.13.2",
  "cssparser",
  "derive_more",
+ "hashbrown 0.17.1",
  "log",
  "new_debug_unreachable",
  "precomputed-hash",
@@ -4384,8 +4407,7 @@ dependencies = [
 [[package]]
 name = "servo_arc"
 version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b4eceb519ec34d8290aaf6e46f435102f2bfa63f22b05a144fb16ab266d3b198"
+source = "git+https://github.com/nicoburns/stylo?rev=78734bf554bb40af9dc11c0eedbe724f6055697c#78734bf554bb40af9dc11c0eedbe724f6055697c"
 dependencies = [
  "serde",
  "stable_deref_trait",
@@ -4486,11 +4508,11 @@ dependencies = [
 name = "sivgo-desktop"
 version = "0.1.0"
 dependencies = [
+ "apace-dom",
+ "apace-shell",
+ "apace-traits",
  "arboard",
  "base64 0.22.1",
- "blitz-dom",
- "blitz-shell",
- "blitz-traits",
  "clap",
  "env_logger",
  "glory",
@@ -4511,7 +4533,7 @@ dependencies = [
  "sivgo-style",
  "sivgo-ui",
  "tokio",
- "winit",
+ "wingy",
 ]
 
 [[package]]
@@ -4718,7 +4740,7 @@ dependencies = [
  "cursor-icon",
  "log",
  "memmap2",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "thiserror 2.0.21",
  "wayland-client",
  "wayland-csd-frame",
@@ -4771,7 +4793,7 @@ dependencies = [
  "objc2-quartz-core",
  "raw-window-handle",
  "redox_syscall 0.5.18",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "tiny-xlib",
  "tracing",
  "wasm-bindgen",
@@ -4790,7 +4812,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "809f260e686014e0222158362d571a7813cd836a27b7e51ed7e1dcf39ce08378"
 dependencies = [
  "anyrender",
- "debug_timer 0.1.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "debug_timer",
  "kurbo",
  "peniko",
  "softbuffer",
@@ -4878,8 +4900,7 @@ dependencies = [
 [[package]]
 name = "stylo"
 version = "0.22.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7a255e46af2478628c48daab3774090caabd7812b1dd3ca98801c2b9c53491ed"
+source = "git+https://github.com/nicoburns/stylo?rev=78734bf554bb40af9dc11c0eedbe724f6055697c#78734bf554bb40af9dc11c0eedbe724f6055697c"
 dependencies = [
  "app_units",
  "arrayvec",
@@ -4890,6 +4911,7 @@ dependencies = [
  "derive_more",
  "encoding_rs",
  "euclid",
+ "hashbrown 0.17.1",
  "icu_segmenter",
  "indexmap",
  "itertools",
@@ -4904,6 +4926,7 @@ dependencies = [
  "num_cpus",
  "parking_lot",
  "precomputed-hash",
+ "rand 0.8.8",
  "rayon",
  "rayon-core",
  "rustc-hash",
@@ -4935,8 +4958,7 @@ dependencies = [
 [[package]]
 name = "stylo_atoms"
 version = "0.22.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ee1771588fd747ef16f8b1990061b6f37c7d3251a0f9b74f405a44c0c5fb8966"
+source = "git+https://github.com/nicoburns/stylo?rev=78734bf554bb40af9dc11c0eedbe724f6055697c#78734bf554bb40af9dc11c0eedbe724f6055697c"
 dependencies = [
  "string_cache",
  "string_cache_codegen",
@@ -4945,8 +4967,7 @@ dependencies = [
 [[package]]
 name = "stylo_derive"
 version = "0.22.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ee5c550c2e00a0b3c046bef84a9ee217e04e7c014142eeb96f9e48781c5cfd3"
+source = "git+https://github.com/nicoburns/stylo?rev=78734bf554bb40af9dc11c0eedbe724f6055697c#78734bf554bb40af9dc11c0eedbe724f6055697c"
 dependencies = [
  "darling",
  "proc-macro2",
@@ -4958,8 +4979,7 @@ dependencies = [
 [[package]]
 name = "stylo_dom"
 version = "0.22.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9febcb03f2b669ef06b3e8a5209e6280971ed55cecf83fbf3c0562fcf2aa2ec6"
+source = "git+https://github.com/nicoburns/stylo?rev=78734bf554bb40af9dc11c0eedbe724f6055697c#78734bf554bb40af9dc11c0eedbe724f6055697c"
 dependencies = [
  "bitflags 2.13.2",
  "stylo_malloc_size_of",
@@ -4968,12 +4988,12 @@ dependencies = [
 [[package]]
 name = "stylo_malloc_size_of"
 version = "0.22.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "83ed69d55ee907599f093221004a28371925236f09f20961963020abf38bab6a"
+source = "git+https://github.com/nicoburns/stylo?rev=78734bf554bb40af9dc11c0eedbe724f6055697c#78734bf554bb40af9dc11c0eedbe724f6055697c"
 dependencies = [
  "app_units",
  "cssparser",
  "euclid",
+ "hashbrown 0.17.1",
  "parking_lot",
  "selectors",
  "servo_arc",
@@ -4987,28 +5007,26 @@ dependencies = [
 [[package]]
 name = "stylo_static_prefs"
 version = "0.22.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6767c48a1590461db79f8b434ccc5a2d65600a3b716751f7999b35ccead1e024"
+source = "git+https://github.com/nicoburns/stylo?rev=78734bf554bb40af9dc11c0eedbe724f6055697c#78734bf554bb40af9dc11c0eedbe724f6055697c"
 dependencies = [
  "toml",
 ]
 
 [[package]]
-name = "stylo_taffy"
-version = "0.3.0-beta.4"
-source = "git+https://github.com/glory-rs/blitz?rev=ee125981e0e5a217e758be5c470df23cdd9e2fc3#ee125981e0e5a217e758be5c470df23cdd9e2fc3"
+name = "stylo_takia"
+version = "0.3.0"
+source = "git+https://github.com/glory-rs/apace?branch=main#191c48adf6d7deb120c9d3ee1b098d7dc020891f"
 dependencies = [
  "bitflags 2.13.2",
  "stylo",
  "stylo_atoms",
- "taffy",
+ "takia",
 ]
 
 [[package]]
 name = "stylo_traits"
 version = "0.22.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "645d6bfe40eb6e86ebe9f2d2adadcbced41bfa96175de7cb13d4d178d27bc83d"
+source = "git+https://github.com/nicoburns/stylo?rev=78734bf554bb40af9dc11c0eedbe724f6055697c#78734bf554bb40af9dc11c0eedbe724f6055697c"
 dependencies = [
  "app_units",
  "bitflags 2.13.2",
@@ -5106,9 +5124,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "taffy"
-version = "0.15.0"
-source = "git+https://github.com/glory-rs/taffy?rev=dd7914fba2e6e0b5d8a2c8854d764a2ade817efd#dd7914fba2e6e0b5d8a2c8854d764a2ade817efd"
+name = "takia"
+version = "0.15.1"
+source = "git+https://github.com/glory-rs/takia?branch=main#ed436701c22b565baa127f2a5bf543ebbd1b2b90"
 dependencies = [
  "serde",
  "slotmap",
@@ -5124,7 +5142,7 @@ dependencies = [
  "fastrand",
  "getrandom 0.4.3",
  "once_cell",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "windows-sys 0.61.2",
 ]
 
@@ -5142,6 +5160,9 @@ name = "thin-vec"
 version = "0.2.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6a4b9ba8738cb4a4f399d37e266becfd475e75eb73425b87a05a2f2039ba63e"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "thiserror"
@@ -5295,10 +5316,10 @@ checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
 [[package]]
 name = "to_shmem"
 version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bbf077da8dd01cc18453bd7d9bc3a945c262f5f344562e5f6deb3914b4dd6f14"
+source = "git+https://github.com/nicoburns/stylo?rev=78734bf554bb40af9dc11c0eedbe724f6055697c#78734bf554bb40af9dc11c0eedbe724f6055697c"
 dependencies = [
  "cssparser",
+ "hashbrown 0.17.1",
  "servo_arc",
  "smallbitvec",
  "smallvec",
@@ -5309,8 +5330,7 @@ dependencies = [
 [[package]]
 name = "to_shmem_derive"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0f8e91a023810fd2019648410d00eea13a71f21d849e71d6d9ed936fb8061174"
+source = "git+https://github.com/nicoburns/stylo?rev=78734bf554bb40af9dc11c0eedbe724f6055697c#78734bf554bb40af9dc11c0eedbe724f6055697c"
 dependencies = [
  "darling",
  "proc-macro2",
@@ -5736,12 +5756,11 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen"
-version = "0.2.129"
+version = "0.2.130"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9bb54f33acc68fd454578d9820b0bde1a1a3d17aa17bb7b6595806d02886d409"
+checksum = "a0181c14ddd6c7b8b0b0132a5f1ea2f32be0d893cd3ea97b6e3b28886b8a3d1c"
 dependencies = [
  "cfg-if",
- "once_cell",
  "rustversion",
  "wasm-bindgen-macro",
  "wasm-bindgen-shared",
@@ -5749,9 +5768,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-futures"
-version = "0.4.79"
+version = "0.4.80"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3cbab34de2d982e9b48e18d216d04c4a6f641066ff19ffb699980f591ee3610e"
+checksum = "5e14e0327cb5368ad60ccb22d04a9827a693c95a926d8d125e9fa39e0baec501"
 dependencies = [
  "js-sys",
  "tokio",
@@ -5760,9 +5779,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-macro"
-version = "0.2.129"
+version = "0.2.130"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2e29d0c35b16e224a7eeb5cd2d25e3e1968fbd65604117b44d3b789d00ee8535"
+checksum = "6e931a02a39abdbf66966fc35902b5ed58344750a70885bed4ebb3d8eaf28ed9"
 dependencies = [
  "quote",
  "wasm-bindgen-macro-support",
@@ -5770,9 +5789,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-macro-support"
-version = "0.2.129"
+version = "0.2.130"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6f501a8bc3719dba86ef8ae4728879c08001bea749eb1333ac5b91e040e2a6b7"
+checksum = "2ca4b54280e455bd831e33a6b8e734baf432fe63fbc35c42ac14ce67a043a53a"
 dependencies = [
  "bumpalo",
  "proc-macro2",
@@ -5783,9 +5802,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-shared"
-version = "0.2.129"
+version = "0.2.130"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23f0c9c52aa7cd7d77769a4cfe2a9adb1b331f489a41d912ce14513d5ab995c6"
+checksum = "3b1f9c3798725016c6ee5f2f57869ec0831e8bbc0ab0310a86e787e97f41389e"
 dependencies = [
  "unicode-ident",
 ]
@@ -5824,7 +5843,7 @@ checksum = "38a91b4eaddff87b1cd1074985e3713da4af2c49742d1b356b2c01670a67a078"
 dependencies = [
  "cc",
  "downcast-rs",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "scoped-tls",
  "smallvec",
  "wayland-sys",
@@ -5837,7 +5856,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3c36a0f861ad76d0901f2800b46321410d9f73f2ea88aac0650d86c32688073"
 dependencies = [
  "bitflags 2.13.2",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "wayland-backend",
  "wayland-scanner",
 ]
@@ -5859,7 +5878,7 @@ version = "0.31.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4a52d18780be9b1314328a3de5f930b73d2200112e3849ca6cb11822793fb34d"
 dependencies = [
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "wayland-client",
  "xcursor",
 ]
@@ -5953,9 +5972,9 @@ dependencies = [
 
 [[package]]
 name = "web-sys"
-version = "0.3.106"
+version = "0.3.107"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "88261b9deccee56594c11a3460c462c41f58d148598fe70ad77070126a68aba4"
+checksum = "d7d179596ff5ec0f6de4db64d54011bde6289cc49603d3a6e4ce3f329207ab88"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
@@ -6218,55 +6237,54 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
 
 [[package]]
-name = "winit"
-version = "0.31.0-beta.4"
-source = "git+https://github.com/glory-rs/winit?rev=3b6f5a09697acb936567af64e53c915b0b1a2af9#3b6f5a09697acb936567af64e53c915b0b1a2af9"
+name = "wingy"
+version = "0.31.1"
+source = "git+https://github.com/glory-rs/wingy?branch=main#2d1f938cf3c1e257aa85b3fa7301c80ad6c19d6e"
 dependencies = [
  "bitflags 2.13.2",
  "cfg_aliases",
  "cursor-icon",
- "dpi",
  "libc",
  "raw-window-handle",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "smol_str",
  "tracing",
- "winit-android",
- "winit-appkit",
- "winit-common",
- "winit-core",
- "winit-orbital",
- "winit-uikit",
- "winit-wayland",
- "winit-web",
- "winit-win32",
- "winit-x11",
+ "wingy-android",
+ "wingy-appkit",
+ "wingy-common",
+ "wingy-core",
+ "wingy-dpi",
+ "wingy-orbital",
+ "wingy-uikit",
+ "wingy-wayland",
+ "wingy-web",
+ "wingy-win32",
+ "wingy-x11",
 ]
 
 [[package]]
-name = "winit-android"
-version = "0.31.0-beta.4"
-source = "git+https://github.com/glory-rs/winit?rev=3b6f5a09697acb936567af64e53c915b0b1a2af9#3b6f5a09697acb936567af64e53c915b0b1a2af9"
+name = "wingy-android"
+version = "0.31.1"
+source = "git+https://github.com/glory-rs/wingy?branch=main#2d1f938cf3c1e257aa85b3fa7301c80ad6c19d6e"
 dependencies = [
  "android-activity",
  "bitflags 2.13.2",
- "dpi",
  "ndk",
  "raw-window-handle",
  "smol_str",
  "tracing",
- "winit-core",
+ "wingy-core",
+ "wingy-dpi",
 ]
 
 [[package]]
-name = "winit-appkit"
-version = "0.31.0-beta.4"
-source = "git+https://github.com/glory-rs/winit?rev=3b6f5a09697acb936567af64e53c915b0b1a2af9#3b6f5a09697acb936567af64e53c915b0b1a2af9"
+name = "wingy-appkit"
+version = "0.31.1"
+source = "git+https://github.com/glory-rs/wingy?branch=main#2d1f938cf3c1e257aa85b3fa7301c80ad6c19d6e"
 dependencies = [
  "bitflags 2.13.2",
  "block2",
  "dispatch2",
- "dpi",
  "objc2",
  "objc2-app-kit",
  "objc2-core-foundation",
@@ -6276,67 +6294,72 @@ dependencies = [
  "raw-window-handle",
  "smol_str",
  "tracing",
- "winit-common",
- "winit-core",
+ "wingy-common",
+ "wingy-core",
+ "wingy-dpi",
 ]
 
 [[package]]
-name = "winit-common"
-version = "0.31.0-beta.4"
-source = "git+https://github.com/glory-rs/winit?rev=3b6f5a09697acb936567af64e53c915b0b1a2af9#3b6f5a09697acb936567af64e53c915b0b1a2af9"
+name = "wingy-common"
+version = "0.31.1"
+source = "git+https://github.com/glory-rs/wingy?branch=main#2d1f938cf3c1e257aa85b3fa7301c80ad6c19d6e"
 dependencies = [
  "block2",
- "dpi",
  "memmap2",
  "objc2",
  "objc2-core-foundation",
  "objc2-foundation",
  "smol_str",
  "tracing",
- "winit-core",
+ "wingy-core",
+ "wingy-dpi",
  "x11-dl",
  "xkbcommon-dl",
 ]
 
 [[package]]
-name = "winit-core"
-version = "0.31.0-beta.4"
-source = "git+https://github.com/glory-rs/winit?rev=3b6f5a09697acb936567af64e53c915b0b1a2af9#3b6f5a09697acb936567af64e53c915b0b1a2af9"
+name = "wingy-core"
+version = "0.31.1"
+source = "git+https://github.com/glory-rs/wingy?branch=main#2d1f938cf3c1e257aa85b3fa7301c80ad6c19d6e"
 dependencies = [
  "bitflags 2.13.2",
  "cursor-icon",
- "dpi",
  "keyboard-types",
  "raw-window-handle",
  "smol_str",
  "web-time",
+ "wingy-dpi",
 ]
 
 [[package]]
-name = "winit-orbital"
-version = "0.31.0-beta.4"
-source = "git+https://github.com/glory-rs/winit?rev=3b6f5a09697acb936567af64e53c915b0b1a2af9#3b6f5a09697acb936567af64e53c915b0b1a2af9"
+name = "wingy-dpi"
+version = "0.1.3"
+source = "git+https://github.com/glory-rs/wingy?branch=main#2d1f938cf3c1e257aa85b3fa7301c80ad6c19d6e"
+
+[[package]]
+name = "wingy-orbital"
+version = "0.31.1"
+source = "git+https://github.com/glory-rs/wingy?branch=main#2d1f938cf3c1e257aa85b3fa7301c80ad6c19d6e"
 dependencies = [
  "bitflags 2.13.2",
- "dpi",
- "libredox",
+ "libredox 0.2.0",
  "orbclient",
  "raw-window-handle",
  "redox_event",
  "smol_str",
  "tracing",
- "winit-core",
+ "wingy-core",
+ "wingy-dpi",
 ]
 
 [[package]]
-name = "winit-uikit"
-version = "0.31.0-beta.4"
-source = "git+https://github.com/glory-rs/winit?rev=3b6f5a09697acb936567af64e53c915b0b1a2af9#3b6f5a09697acb936567af64e53c915b0b1a2af9"
+name = "wingy-uikit"
+version = "0.31.1"
+source = "git+https://github.com/glory-rs/wingy?branch=main#2d1f938cf3c1e257aa85b3fa7301c80ad6c19d6e"
 dependencies = [
  "bitflags 2.13.2",
  "block2",
  "dispatch2",
- "dpi",
  "objc2",
  "objc2-core-foundation",
  "objc2-foundation",
@@ -6344,25 +6367,25 @@ dependencies = [
  "raw-window-handle",
  "smol_str",
  "tracing",
- "winit-common",
- "winit-core",
+ "wingy-common",
+ "wingy-core",
+ "wingy-dpi",
 ]
 
 [[package]]
-name = "winit-wayland"
-version = "0.31.0-beta.4"
-source = "git+https://github.com/glory-rs/winit?rev=3b6f5a09697acb936567af64e53c915b0b1a2af9#3b6f5a09697acb936567af64e53c915b0b1a2af9"
+name = "wingy-wayland"
+version = "0.31.1"
+source = "git+https://github.com/glory-rs/wingy?branch=main#2d1f938cf3c1e257aa85b3fa7301c80ad6c19d6e"
 dependencies = [
  "bitflags 2.13.2",
  "calloop",
  "cursor-icon",
- "dpi",
  "foldhash 0.2.0",
  "libc",
  "memmap2",
  "percent-encoding",
  "raw-window-handle",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "sctk-adwaita",
  "smithay-client-toolkit",
  "smol_str",
@@ -6371,20 +6394,20 @@ dependencies = [
  "wayland-client",
  "wayland-protocols",
  "wayland-protocols-plasma",
- "winit-common",
- "winit-core",
+ "wingy-common",
+ "wingy-core",
+ "wingy-dpi",
 ]
 
 [[package]]
-name = "winit-web"
-version = "0.31.0-beta.4"
-source = "git+https://github.com/glory-rs/winit?rev=3b6f5a09697acb936567af64e53c915b0b1a2af9#3b6f5a09697acb936567af64e53c915b0b1a2af9"
+name = "wingy-web"
+version = "0.31.1"
+source = "git+https://github.com/glory-rs/wingy?branch=main#2d1f938cf3c1e257aa85b3fa7301c80ad6c19d6e"
 dependencies = [
  "atomic-waker",
  "bitflags 2.13.2",
  "concurrent-queue",
  "cursor-icon",
- "dpi",
  "js-sys",
  "pin-project",
  "raw-window-handle",
@@ -6394,45 +6417,46 @@ dependencies = [
  "wasm-bindgen-futures",
  "web-sys",
  "web-time",
- "winit-core",
+ "wingy-core",
+ "wingy-dpi",
 ]
 
 [[package]]
-name = "winit-win32"
-version = "0.31.0-beta.4"
-source = "git+https://github.com/glory-rs/winit?rev=3b6f5a09697acb936567af64e53c915b0b1a2af9#3b6f5a09697acb936567af64e53c915b0b1a2af9"
+name = "wingy-win32"
+version = "0.31.1"
+source = "git+https://github.com/glory-rs/wingy?branch=main#2d1f938cf3c1e257aa85b3fa7301c80ad6c19d6e"
 dependencies = [
  "bitflags 2.13.2",
  "cursor-icon",
- "dpi",
  "percent-encoding",
  "raw-window-handle",
  "smol_str",
  "tracing",
  "unicode-segmentation",
  "windows-sys 0.61.2",
- "winit-common",
- "winit-core",
+ "wingy-common",
+ "wingy-core",
+ "wingy-dpi",
 ]
 
 [[package]]
-name = "winit-x11"
-version = "0.31.0-beta.4"
-source = "git+https://github.com/glory-rs/winit?rev=3b6f5a09697acb936567af64e53c915b0b1a2af9#3b6f5a09697acb936567af64e53c915b0b1a2af9"
+name = "wingy-x11"
+version = "0.31.1"
+source = "git+https://github.com/glory-rs/wingy?branch=main#2d1f938cf3c1e257aa85b3fa7301c80ad6c19d6e"
 dependencies = [
  "bitflags 2.13.2",
  "bytemuck",
  "calloop",
  "cursor-icon",
- "dpi",
  "libc",
  "percent-encoding",
  "raw-window-handle",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "smol_str",
  "tracing",
- "winit-common",
- "winit-core",
+ "wingy-common",
+ "wingy-core",
+ "wingy-dpi",
  "x11-dl",
  "x11rb 0.14.0",
  "xkbcommon-dl",
@@ -6481,7 +6505,7 @@ dependencies = [
  "libc",
  "libloading",
  "once_cell",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "x11rb-protocol 0.13.2",
 ]
 
@@ -6496,7 +6520,7 @@ dependencies = [
  "libc",
  "libloading",
  "once_cell",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "x11rb-protocol 0.14.0",
  "xcursor",
 ]

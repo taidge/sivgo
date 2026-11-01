@@ -61,20 +61,6 @@ jobs:
           p.write_text(p.read_text().replace('D:/BuildCache/sivgo-glory/tmp', os.environ['TEMP'].replace(chr(92), '/')))
           PY
 
-      - name: Checkout Glory
-        uses: actions/checkout@v4
-        with:
-          repository: glory-rs/glory
-          ref: f046098d795027e2d15e8c6b587188327ea1b7fc
-          path: glory-rs/glory
-
-      - name: Checkout Sapid
-        uses: actions/checkout@v4
-        with:
-          repository: sapid-ui/sapid
-          ref: 0c40831538a37c2467b0a6d0240a69c75e0c8832
-          path: glory-rs/sapid
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -92,21 +78,21 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Build workspace
-        run: cargo build --workspace
+        run: cargo build --workspace --locked
 
       - name: Run tests
-        run: cargo test --workspace
+        run: cargo test --workspace --locked
 
       - name: Check formatting
         run: cargo fmt --all -- --check
 
       - name: Run clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
       - name: Check API documentation
         env:
           RUSTDOCFLAGS: "-D warnings"
-        run: cargo doc --workspace --no-deps
+        run: cargo doc --locked --workspace --no-deps
 
   # Check native windowing, clipboard, and dialogs on each desktop platform.
   cross-platform-check:
@@ -152,20 +138,6 @@ jobs:
           p.write_text(p.read_text().replace('D:/BuildCache/sivgo-glory/tmp', os.environ['TEMP'].replace(chr(92), '/')))
           PY
 
-      - name: Checkout Glory
-        uses: actions/checkout@v4
-        with:
-          repository: glory-rs/glory
-          ref: f046098d795027e2d15e8c6b587188327ea1b7fc
-          path: glory-rs/glory
-
-      - name: Checkout Sapid
-        uses: actions/checkout@v4
-        with:
-          repository: sapid-ui/sapid
-          ref: 0c40831538a37c2467b0a6d0240a69c75e0c8832
-          path: glory-rs/sapid
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
@@ -181,7 +153,7 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Check workspace
-        run: cargo check --workspace --all-targets
+        run: cargo check --workspace --locked --all-targets
 
   # `rust-version` in Cargo.toml is a promise to users; without this job it is
   # never tested and drifts the first time a newer API is used.
@@ -224,20 +196,6 @@ jobs:
           p.write_text(p.read_text().replace('D:/BuildCache/sivgo-glory/tmp', os.environ['TEMP'].replace(chr(92), '/')))
           PY
 
-      - name: Checkout Glory
-        uses: actions/checkout@v4
-        with:
-          repository: glory-rs/glory
-          ref: f046098d795027e2d15e8c6b587188327ea1b7fc
-          path: glory-rs/glory
-
-      - name: Checkout Sapid
-        uses: actions/checkout@v4
-        with:
-          repository: sapid-ui/sapid
-          ref: 0c40831538a37c2467b0a6d0240a69c75e0c8832
-          path: glory-rs/sapid
-
       - name: Read MSRV from Cargo.toml
         id: msrv
         run: |
@@ -251,7 +209,7 @@ jobs:
           toolchain: ${{ steps.msrv.outputs.version }}
 
       - name: Check workspace
-        run: cargo check --workspace
+        run: cargo check --workspace --locked
 
   # The fuzz targets live in their own workspace, so nothing in the main build
   # notices when they stop compiling against a changed API.
@@ -293,20 +251,6 @@ jobs:
           p = Path('.cargo/config.toml')
           p.write_text(p.read_text().replace('D:/BuildCache/sivgo-glory/tmp', os.environ['TEMP'].replace(chr(92), '/')))
           PY
-
-      - name: Checkout Glory
-        uses: actions/checkout@v4
-        with:
-          repository: glory-rs/glory
-          ref: f046098d795027e2d15e8c6b587188327ea1b7fc
-          path: glory-rs/glory
-
-      - name: Checkout Sapid
-        uses: actions/checkout@v4
-        with:
-          repository: sapid-ui/sapid
-          ref: 0c40831538a37c2467b0a6d0240a69c75e0c8832
-          path: glory-rs/sapid
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@nightly

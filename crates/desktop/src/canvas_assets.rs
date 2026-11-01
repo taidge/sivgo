@@ -1,7 +1,7 @@
 //! Bounded PNG data-URI transport for rendered canvas frames and toolbar icons.
 //! No filesystem or network resource is accepted by this provider.
 use base64::Engine;
-use glory::blitz::assets::{Bytes, Method, NetHandler, NetProvider, Request};
+use glory::apace::assets::{Bytes, Method, NetHandler, NetProvider, Request};
 use std::{
     collections::VecDeque,
     io,
@@ -223,7 +223,7 @@ async fn run(inner: Arc<Inner>) {
             continue;
         };
         let url = job.request.url.to_string();
-        // Blitz caps response metadata URLs at 4096 bytes. A data URI can be
+        // Apace caps response metadata URLs at 4096 bytes. A data URI can be
         // much larger; return a unique bounded alias as a redirected resource.
         // The engine matches the request ID and caches under the original URL,
         // which also remains our cancellation identity.
@@ -272,7 +272,7 @@ async fn run(inner: Arc<Inner>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use glory::blitz::assets::{NetReady, Url};
+    use glory::apace::assets::{NetReady, Url};
     use std::sync::mpsc;
     type Reply = Result<(bool, Vec<u8>), String>;
     struct Handler {
@@ -387,7 +387,7 @@ mod tests {
     fn window_app_decodes_canvas_data_uri_and_paints_actual_red_pixels() {
         use glory::prelude::*;
         let provider = CanvasImageProvider::new().unwrap();
-        let app = glory::blitz::shell::WindowApp::with_config(glory::blitz::Config {
+        let app = glory::apace::shell::WindowApp::with_config(glory::apace::Config {
             provider: Some(Arc::new(provider)),
             ..Default::default()
         });
@@ -414,11 +414,11 @@ mod tests {
         let stats = app.renderer().resource_stats();
         assert_eq!(
             stats.cached_images, 1,
-            "PNG must reach the real Blitz decode/cache path: {stats:?}"
+            "PNG must reach the real Apace decode/cache path: {stats:?}"
         );
         assert_eq!(stats.failures, 0);
         assert_eq!(stats.pending_images, 0);
-        let mut raster = glory::blitz::Raster::new();
+        let mut raster = glory::apace::Raster::new();
         raster.draw(app.renderer()).unwrap();
         let red = raster
             .pixels()
@@ -439,7 +439,7 @@ mod tests {
     fn startup_burst_loads_twenty_six_images_without_queue_rejection() {
         use glory::prelude::*;
         let provider = Arc::new(CanvasImageProvider::new().unwrap());
-        let app = glory::blitz::shell::WindowApp::with_config(glory::blitz::Config {
+        let app = glory::apace::shell::WindowApp::with_config(glory::apace::Config {
             provider: Some(provider.clone()),
             ..Default::default()
         });
@@ -507,7 +507,7 @@ mod tests {
             &[255, 0, 0, 255],
             "document source must contain red rectangle"
         );
-        let app = glory::blitz::shell::WindowApp::with_config(glory::blitz::Config {
+        let app = glory::apace::shell::WindowApp::with_config(glory::apace::Config {
             provider: Some(Arc::new(CanvasImageProvider::new().unwrap())),
             ..Default::default()
         });
@@ -560,7 +560,7 @@ mod tests {
             source.get().len()
         );
         assert_eq!(stats.cached_images, 1);
-        let mut raster = glory::blitz::Raster::new();
+        let mut raster = glory::apace::Raster::new();
         raster.draw(app.renderer()).unwrap();
         let white = raster
             .pixels()

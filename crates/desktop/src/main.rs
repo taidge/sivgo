@@ -238,12 +238,10 @@ fn editor_part(state: AppState, part: EditorPart) -> impl Widget {
             *previous.borrow_mut() = key.clone();
             vec![key]
         });
-        each(
-            keys,
-            |key| key.clone(),
-            move |_, _| widget(move |scope| build_editor_part(scope, state, part)),
-        )
-        .show_in(scope)
+        each(keys)
+            .key(|key| key.clone())
+            .seed(move |_| widget(move |scope| build_editor_part(scope, state, part)))
+            .show_in(scope)
     })
 }
 
@@ -458,10 +456,9 @@ fn inspector(state: AppState) -> impl Widget {
                 state.engine.peek().selection.is_empty(),
             )]
         });
-        each(
-            panel,
-            |key| *key,
-            move |_, _| {
+        each(panel)
+            .key(|key| *key)
+            .seed(move |_| {
                 col()
                     .class("inspector-content")
                     .style(
@@ -491,9 +488,8 @@ fn inspector(state: AppState) -> impl Widget {
                         }
                         Ok(())
                     }))
-            },
-        )
-        .show_in(scope)
+            })
+            .show_in(scope)
     })
 }
 
@@ -735,7 +731,7 @@ fn launch_glory() -> Result<(), Box<dyn std::error::Error>> {
         log::info!("Available plugin: {id} ({name})");
     }
     let desktop = DesktopContext::new();
-    let app = glory::blitz::shell::WindowApp::with_config(glory::blitz::Config {
+    let app = glory::apace::shell::WindowApp::with_config(glory::apace::Config {
         provider: Some(std::sync::Arc::new(
             canvas_assets::CanvasImageProvider::new()?,
         )),
@@ -992,10 +988,9 @@ fn canvas_text_editor(state: AppState) -> impl Widget {
                 Vec::new()
             }
         });
-        each(
-            selected,
-            |id| *id,
-            move |_, _| {
+        each(selected)
+            .key(|id| *id)
+            .seed(move |_| {
                 glory::ui::input()
                     .name("Edit selected canvas text")
                     .multiline(true)
@@ -1028,9 +1023,8 @@ fn canvas_text_editor(state: AppState) -> impl Widget {
                             }
                         }
                     })
-            },
-        )
-        .show_in(scope)
+            })
+            .show_in(scope)
     })
 }
 
@@ -1539,7 +1533,7 @@ mod glory_migration_tests {
             EditorPart::PreferencesDialog,
             EditorPart::StatusBar,
         ] {
-            let app = glory::blitz::shell::WindowApp::new();
+            let app = glory::apace::shell::WindowApp::new();
             app.renderer().set_viewport(800, 600, 1.0).unwrap();
             let state = state(app.app());
             let document=sivgo_dom::parse_svg(r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" width="800" height="600"><g id="layer" inkscape:groupmode="layer" inkscape:label="Layer 1"><path id="shape" d="M10 10L100 10L100 80Z"/><text id="label" x="20" y="120">Editable text</text></g></svg>"#).unwrap();
@@ -1689,8 +1683,8 @@ mod glory_migration_tests {
     }
 
     #[test]
-    fn canvas_layout_is_measured_in_a_real_blitz_document() {
-        let app = glory::blitz::shell::WindowApp::new();
+    fn canvas_layout_is_measured_in_a_real_apace_document() {
+        let app = glory::apace::shell::WindowApp::new();
         app.renderer().set_viewport(1440, 900, 1.0).unwrap();
         app.renderer().set_css(&format!("{CSS}\n{HOST_CSS}"));
         let state = AppState::new(app.app().scope(), DesktopContext::new());

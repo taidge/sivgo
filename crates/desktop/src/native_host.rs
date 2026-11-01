@@ -1,9 +1,9 @@
-//! Native Blitz event host for the editor canvas and window commands.
+//! Native Apace event host for the editor canvas and window commands.
 //! Canvas input uses viewport logical pixels; widgets retain Glory's semantic input.
-use blitz_dom::{DocGuard, DocGuardMut, Document};
-use blitz_shell::{BlitzApplication, BlitzShellEvent, BlitzShellProxy, WindowConfig};
-use blitz_traits::events::{BlitzWheelDelta, MouseEventButton, UiEvent};
-use glory::blitz::shell::{CpuRenderer, WindowApp};
+use apace_dom::{DocGuard, DocGuardMut, Document};
+use apace_shell::{ApaceApplication, ApaceShellEvent, ApaceShellProxy, WindowConfig};
+use apace_traits::events::{ApaceWheelDelta, MouseEventButton, UiEvent};
+use glory::apace::shell::{CpuRenderer, WindowApp};
 use keyboard_types::{Key, Modifiers};
 use sivgo_core::MouseButton;
 use std::{
@@ -13,7 +13,7 @@ use std::{
     task::Context,
     time::{Duration, Instant},
 };
-use winit::{
+use wingy::{
     application::ApplicationHandler,
     event::WindowEvent,
     event_loop::{ActiveEventLoop, EventLoop},
@@ -75,7 +75,7 @@ enum Command {
 struct WindowState {
     commands: RefCell<VecDeque<Command>>,
     size: Cell<(f64, f64)>,
-    proxy: RefCell<Option<BlitzShellProxy>>,
+    proxy: RefCell<Option<ApaceShellProxy>>,
 }
 #[derive(Clone)]
 pub struct DesktopContext(Rc<WindowState>);
@@ -139,7 +139,7 @@ impl EditorDocument {
                     element.name.local.as_ref(),
                     "input" | "textarea" | "select" | "button" | "a"
                 ) || element
-                    .attr(blitz_dom::LocalName::from("contenteditable"))
+                    .attr(apace_dom::LocalName::from("contenteditable"))
                     .is_some_and(|v| v != "false")
             })
     }
@@ -153,7 +153,7 @@ impl EditorDocument {
                     element.name.local.as_ref(),
                     "input" | "textarea" | "select" | "button" | "a"
                 ) || element
-                    .attr(blitz_dom::LocalName::from("role"))
+                    .attr(apace_dom::LocalName::from("role"))
                     .is_some_and(|role| {
                         matches!(
                             role,
@@ -173,7 +173,7 @@ impl EditorDocument {
                         )
                     })
                     || element
-                        .attr(blitz_dom::LocalName::from("contenteditable"))
+                        .attr(apace_dom::LocalName::from("contenteditable"))
                         .is_some_and(|value| value != "false")
             }) {
                 return true;
@@ -263,8 +263,8 @@ impl Document for EditorDocument {
             UiEvent::PointerCancel(_) => Some(NativeInput::PointerCancel),
             UiEvent::Wheel(e) => {
                 let (dx, dy) = match e.delta {
-                    BlitzWheelDelta::Lines(x, y) => (x * 40.0, y * 40.0),
-                    BlitzWheelDelta::Pixels(x, y) => (x, y),
+                    ApaceWheelDelta::Lines(x, y) => (x * 40.0, y * 40.0),
+                    ApaceWheelDelta::Pixels(x, y) => (x, y),
                 };
                 Some(NativeInput::Wheel {
                     x: e.client_x().into(),
@@ -313,14 +313,14 @@ impl Document for EditorDocument {
 }
 
 struct EditorShell {
-    inner: BlitzApplication<CpuRenderer>,
+    inner: ApaceApplication<CpuRenderer>,
     desktop: DesktopContext,
     input: InputHandler,
     close: Box<dyn FnMut() -> bool>,
     error: Rc<RefCell<Option<String>>>,
 }
 impl EditorShell {
-    fn prepare(view: &mut blitz_shell::View<CpuRenderer>) {
+    fn prepare(view: &mut apace_shell::View<CpuRenderer>) {
         let time = view.current_animation_time();
         let doc = view.downcast_doc_mut::<EditorDocument>();
         if let Err(error) = doc.inner.renderer().advance_time(time) {
@@ -420,7 +420,7 @@ impl ApplicationHandler for EditorShell {
             let Ok(event) = self.inner.event_queue.try_recv() else {
                 break;
             };
-            if let BlitzShellEvent::Poll { window_id } = &event {
+            if let ApaceShellEvent::Poll { window_id } = &event {
                 if !polled.insert(*window_id) {
                     self.inner.proxy.send_event(event);
                     break;
@@ -429,10 +429,10 @@ impl ApplicationHandler for EditorShell {
                     Self::prepare(view);
                 }
             }
-            if matches!(event, BlitzShellEvent::CloseWindow { .. }) && !(self.close)() {
+            if matches!(event, ApaceShellEvent::CloseWindow { .. }) && !(self.close)() {
                 continue;
             }
-            if let BlitzShellEvent::RequestRedraw { doc_id } = &event {
+            if let ApaceShellEvent::RequestRedraw { doc_id } = &event {
                 for view in self
                     .inner
                     .windows
@@ -445,8 +445,8 @@ impl ApplicationHandler for EditorShell {
                         .invalidate();
                 }
             }
-            let resumed = matches!(event, BlitzShellEvent::ResumeReady { .. });
-            self.inner.handle_blitz_shell_event(event_loop, event);
+            let resumed = matches!(event, ApaceShellEvent::ResumeReady { .. });
+            self.inner.handle_apace_shell_event(event_loop, event);
             if resumed {
                 for view in self.inner.windows.values_mut() {
                     Self::prepare(view);
@@ -472,7 +472,7 @@ pub fn run(
     close: impl FnMut() -> bool + 'static,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let event_loop = EventLoop::builder().build()?;
-    let (proxy, queue) = BlitzShellProxy::new(event_loop.create_proxy());
+    let (proxy, queue) = ApaceShellProxy::new(event_loop.create_proxy());
     *desktop.0.proxy.borrow_mut() = Some(proxy.clone());
     let input: InputHandler = Rc::new(RefCell::new(Box::new(input)));
     let error = Rc::new(RefCell::new(None));
@@ -483,13 +483,13 @@ pub fn run(
         last_click: None,
         pointer_owner: None,
     };
-    let mut inner = BlitzApplication::new(proxy, queue);
+    let mut inner = ApaceApplication::new(proxy, queue);
     inner.add_window(WindowConfig::with_attributes(
         Box::new(doc),
         CpuRenderer::new(),
         WindowAttributes::default()
             .with_title("Sivgo")
-            .with_surface_size(winit::dpi::LogicalSize::new(1440.0, 900.0)),
+            .with_surface_size(wingy::dpi::LogicalSize::new(1440.0, 900.0)),
     ));
     let shell = EditorShell {
         inner,
@@ -509,7 +509,7 @@ pub fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use blitz_traits::events::{BlitzKeyEvent, KeyState};
+    use apace_traits::events::{ApaceKeyEvent, KeyState};
     use glory::ui::events::value_changed;
     use keyboard_types::{Code, Location};
 
@@ -562,7 +562,7 @@ mod tests {
             input.unwrap()
         };
         assert!(doc.inner_mut().set_focus_to(node));
-        doc.handle_ui_event(UiEvent::KeyDown(BlitzKeyEvent {
+        doc.handle_ui_event(UiEvent::KeyDown(ApaceKeyEvent {
             key: Key::Character("x".into()),
             code: Code::KeyX,
             modifiers: Modifiers::empty(),
@@ -624,7 +624,7 @@ mod tests {
             input.unwrap()
         };
         assert!(doc.inner_mut().set_focus_to(node));
-        doc.handle_ui_event(UiEvent::KeyDown(BlitzKeyEvent {
+        doc.handle_ui_event(UiEvent::KeyDown(ApaceKeyEvent {
             key: Key::Character("s".into()),
             code: Code::KeyS,
             modifiers: Modifiers::CONTROL,
@@ -637,10 +637,10 @@ mod tests {
         doc.inner.app().settle(8).unwrap();
         assert!(value.borrow().is_empty());
     }
-    fn pointer(x: f32, y: f32) -> blitz_traits::events::BlitzPointerEvent {
-        use blitz_traits::events::*;
-        BlitzPointerEvent {
-            id: BlitzPointerId::Mouse,
+    fn pointer(x: f32, y: f32) -> apace_traits::events::ApacePointerEvent {
+        use apace_traits::events::*;
+        ApacePointerEvent {
+            id: ApacePointerId::Mouse,
             is_primary: true,
             coords: PointerCoords {
                 page_x: x,
@@ -687,7 +687,7 @@ mod tests {
         assert!(doc.editable());
         doc.handle_ui_event(UiEvent::PointerDown(pointer(300.0, 300.0)));
         assert!(!doc.editable());
-        doc.handle_ui_event(UiEvent::KeyDown(BlitzKeyEvent {
+        doc.handle_ui_event(UiEvent::KeyDown(ApaceKeyEvent {
             key: Key::Character("r".into()),
             code: Code::KeyR,
             modifiers: Modifiers::empty(),
@@ -788,7 +788,7 @@ mod tests {
             while let Some(id) = queue.pop() {
                 let node = dom.get_node(id).unwrap();
                 if node.element_data().is_some_and(|element| {
-                    element.attr(blitz_dom::LocalName::from(attribute)) == Some(expected)
+                    element.attr(apace_dom::LocalName::from(attribute)) == Some(expected)
                 }) {
                     return id;
                 }
@@ -815,11 +815,11 @@ mod tests {
             )
         };
         let mut hover = pointer(x, y);
-        hover.buttons = blitz_traits::events::MouseEventButtons::empty();
+        hover.buttons = apace_traits::events::MouseEventButtons::empty();
         doc.handle_ui_event(UiEvent::PointerMove(hover));
         doc.handle_ui_event(UiEvent::PointerDown(pointer(x, y)));
         let mut release = pointer(x, y);
-        release.buttons = blitz_traits::events::MouseEventButtons::empty();
+        release.buttons = apace_traits::events::MouseEventButtons::empty();
         doc.handle_ui_event(UiEvent::PointerUp(release));
         doc.inner.app().settle(16).unwrap();
         assert_eq!(

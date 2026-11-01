@@ -1,6 +1,6 @@
 # Sivgo
 
-Sivgo is a Rust SVG vector graphics editor prototype inspired by Inkscape. The current workspace provides a native Glory/Blitz desktop application with Sapid widgets and a Salvo REST API backend; a Web/WASM client is not present in this worktree.
+Sivgo is a Rust SVG vector graphics editor prototype inspired by Inkscape. The current workspace provides a native Glory/Apace desktop application with Sapid widgets and a Salvo REST API backend; a Web/WASM client is not present in this worktree.
 
 ## Architecture
 
@@ -20,7 +20,7 @@ Sivgo is organized as a Cargo workspace with 14 crates:
 | `sivgo-core` | Editor engine: tools, commands, undo/redo, snapping, selection |
 | `sivgo-plugin` | Plugin manifests and a permission model. Modules are validated with `wasmparser` and run on a small built-in interpreter that covers numeric functions only; the scripting layer is a restricted expression DSL, not a Lua runtime |
 | `sivgo-ui` | Glory semantic UI components and Sapid controls used by the desktop app |
-| `sivgo-desktop` | Desktop application binary (Glory Blitz desktop host) |
+| `sivgo-desktop` | Desktop application binary (Glory Apace desktop host) |
 | `sivgo-web` | Salvo REST API backend for documents, assets, export, preferences, and plugins |
 
 Each crate depends only on what it actually uses:
@@ -44,21 +44,20 @@ sivgo-web     dom + render
 
 ## Prerequisites
 
-- **Rust** 1.94+ (install via [rustup](https://rustup.rs))
+- **Rust** 1.95+ (install via [rustup](https://rustup.rs))
 - **just** command runner (install via `cargo install just`)
 
-The `glory` branch uses sibling source checkouts:
+The default `main` branch uses Glory and Sapid from their GitHub `main` branches:
 
-```text
-D:/Works/glory-rs/glory
-D:/Works/glory-rs/sapid
-D:/Works/taidge/sivgo
-```
+- [Glory](https://github.com/glory-rs/glory)
+- [Sapid](https://github.com/sapid-ui/sapid)
 
-Workspace dependencies resolve these paths relative to Sivgo's root. Glory is
-loaded from `../../glory-rs/glory/crates/glory`, and Sapid from
-`../../glory-rs/sapid`. Keep these repositories in that relative layout.
-The desktop host renders through Blitz; it does not require a WebView.
+Cargo downloads these sources; sibling checkouts are not required. The native
+Apace/Wingy backend is resolved from the coordinated GitHub sources as well.
+`Cargo.lock` records the exact revisions used by builds and CI. Use
+`./scripts/cargo.ps1 update -p glory -p sapid` to pull newer upstream commits,
+then run the workspace tests before committing the updated lockfile.
+The previous Dioxus application is preserved on `old-dioxus`.
 
 On Windows the checked-in Cargo configuration places build output in
 `D:/BuildCache/sivgo-glory/target` and compiler temporary files in

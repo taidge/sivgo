@@ -16,14 +16,14 @@ sivgo-math = { workspace = true }
 sivgo-core = { workspace = true }
 sivgo-plugin = { workspace = true }
 sivgo-ui = { workspace = true }
-glory = { workspace = true, features = ["blitz-shell"] }
+glory = { workspace = true, features = ["apace-shell"] }
 sapid = { workspace = true }
 parking_lot = { version = "0.12", features = ["arc_lock"] }
 keyboard-types = "0.8"
-blitz-dom = { git = "https://github.com/glory-rs/blitz", rev = "ee125981e0e5a217e758be5c470df23cdd9e2fc3", version = "=0.3.0-beta.4", default-features = false }
-blitz-traits = { git = "https://github.com/glory-rs/blitz", rev = "ee125981e0e5a217e758be5c470df23cdd9e2fc3", version = "=0.3.0-beta.4", default-features = false }
-blitz-shell = { git = "https://github.com/glory-rs/blitz", rev = "ee125981e0e5a217e758be5c470df23cdd9e2fc3", version = "=0.3.0-beta.4", default-features = false }
-winit = { git = "https://github.com/glory-rs/winit", rev = "3b6f5a09697acb936567af64e53c915b0b1a2af9", version = "=0.31.0-beta.4" }
+apace-dom = { version = "=0.3.0", default-features = false }
+apace-traits = { version = "=0.3.0", default-features = false }
+apace-shell = { version = "=0.3.0", default-features = false }
+wingy = "=0.31.1"
 tokio = { workspace = true }
 rfd = { workspace = true }
 clap = { workspace = true }
@@ -36,4 +36,4 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
-glory = { workspace = true, features = ["blitz-raster"] }
+glory = { workspace = true, features = ["apace-raster"] }

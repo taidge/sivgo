@@ -68,7 +68,7 @@ sivgo-trace               ── Bitmap-to-vector tracing
 | **sivgo-core** | Editor engine: tools (select, pen, pencil, shapes, text, etc.), the command pattern for undo/redo, live path effects (LPEs), snap system, viewport management, and keyboard shortcuts. |
 | **sivgo-plugin** | Plugin system allowing extensions to register tools and commands. |
 | **sivgo-ui** | Glory / Sapid UI layer for the desktop app: canvas widget, toolbox, property panels, layer panel. |
-| **sivgo-desktop** | Desktop application entry point. Integrates Glory's Blitz host and Sapid widgets, file dialogs (`rfd`), clipboard (`arboard`), and CLI argument parsing (`clap`). |
+| **sivgo-desktop** | Desktop application entry point. Integrates Glory's Apace host and Sapid widgets, file dialogs (`rfd`), clipboard (`arboard`), and CLI argument parsing (`clap`). |
 | **sivgo-web** | Web backend using Salvo. Exposes REST APIs for server-side SVG editing, rendering, export, assets, preferences, and plugins. Current storage is in-memory. |
 
 ## Key Design Decisions
@@ -121,6 +121,6 @@ uses guarded access that notifies dependent bindings when an edit completes.
 wheel, and keyboard events to the existing editor tools. Editable controls keep
 their own keyboard handling. Window close requests use the unsaved-changes check.
 
-`canvas_assets.rs` supplies PNG data URIs to Blitz through a bounded worker; it
+`canvas_assets.rs` supplies PNG data URIs to Apace through a bounded worker; it
 does not fetch network or filesystem resources. Document pixels still come from
-Sivgo’s tiny-skia renderer. Native UI layout and painting use Blitz.
+Sivgo’s tiny-skia renderer. Native UI layout and painting use Apace.

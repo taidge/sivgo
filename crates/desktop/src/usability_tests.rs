@@ -199,7 +199,7 @@ fn toolbar_history_actions_track_available_undo_and_redo() {
 #[test]
 fn compact_shell_keeps_canvas_visible_at_smaller_window_sizes() {
     for (width, height) in [(960, 640), (1440, 900)] {
-        let app = glory::blitz::shell::WindowApp::new();
+        let app = glory::apace::shell::WindowApp::new();
         app.renderer().set_viewport(width, height, 1.0).unwrap();
         app.renderer().set_css(&format!("{CSS}\n{HOST_CSS}"));
         let state = AppState::new(app.app().scope(), DesktopContext::new());
