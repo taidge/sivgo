@@ -1,5 +1,7 @@
 //! Serialize an [`SvgDocument`] back to SVG XML.
 
+use std::collections::BTreeMap;
+
 use xmlwriter::XmlWriter;
 
 use crate::document::SvgDocument;
@@ -13,23 +15,29 @@ pub fn serialize_svg(doc: &SvgDocument) -> String {
         ..Default::default()
     });
 
-    // Check if any node in the document uses xlink:href -- if so, we need to
-    // declare the xlink namespace on the root element.
-    let needs_xlink = doc_needs_xlink(doc);
-
     if let Some(root_id) = doc.root() {
-        serialize_node(doc, root_id, &mut w, true, needs_xlink);
+        let namespaces = BTreeMap::from([(
+            "xml".to_owned(),
+            "http://www.w3.org/XML/1998/namespace".to_owned(),
+        )]);
+        serialize_node(doc, root_id, &mut w, true, &namespaces);
     }
 
     w.end_document()
 }
 
-/// Check whether any node has an href that came through xlink.
-/// We detect this by looking for gradient/pattern/use/image/textPath/feImage/anchor href fields.
-fn doc_needs_xlink(_doc: &SvgDocument) -> bool {
-    // For simplicity, we never emit xlink:href -- we always emit the modern `href`.
-    // If users need xlink:href they can rely on the round-tripped extra attributes.
-    false
+/// Conventional prefixes also occur on nodes created by the editor, whose
+/// namespace map has never passed through the parser.
+fn conventional_namespace(prefix: &str) -> Option<&'static str> {
+    match prefix {
+        "inkscape" => Some("http://www.inkscape.org/namespaces/inkscape"),
+        "sodipodi" => Some("http://sodipodi.sourceforge.net/DTD/sodipodi-0.0.dtd"),
+        "xlink" => Some("http://www.w3.org/1999/xlink"),
+        "rdf" => Some("http://www.w3.org/1999/02/22-rdf-syntax-ns#"),
+        "cc" => Some("http://creativecommons.org/ns#"),
+        "dc" => Some("http://purl.org/dc/elements/1.1/"),
+        _ => None,
+    }
 }
 
 /// Writes attributes for a single element, dropping duplicates.
@@ -42,18 +50,60 @@ fn doc_needs_xlink(_doc: &SvgDocument) -> bool {
 /// later ones are skipped.
 struct AttrWriter<'a> {
     inner: &'a mut XmlWriter,
+    namespaces: &'a mut BTreeMap<String, String>,
     written: Vec<String>,
 }
 
 impl<'a> AttrWriter<'a> {
-    fn new(inner: &'a mut XmlWriter) -> Self {
+    fn new(inner: &'a mut XmlWriter, namespaces: &'a mut BTreeMap<String, String>) -> Self {
         AttrWriter {
             inner,
+            namespaces,
             written: Vec::new(),
         }
     }
 
+    fn declare_namespace(&mut self, prefix: &str, uri: &str) {
+        if self
+            .namespaces
+            .get(prefix)
+            .is_some_and(|current| current == uri)
+        {
+            return;
+        }
+        let name = if prefix.is_empty() {
+            "xmlns".to_owned()
+        } else {
+            format!("xmlns:{prefix}")
+        };
+        if self.written.contains(&name) {
+            return;
+        }
+        self.written.push(name.clone());
+        self.namespaces.insert(prefix.to_owned(), uri.to_owned());
+        self.inner.write_attribute(&name, uri);
+    }
+
+    fn ensure_namespace(&mut self, name: &str) {
+        if let Some((prefix, _)) = name.split_once(':') {
+            if !self.namespaces.contains_key(prefix) {
+                if let Some(uri) = conventional_namespace(prefix) {
+                    self.declare_namespace(prefix, uri);
+                }
+            }
+        }
+    }
+
     fn write_attribute(&mut self, name: &str, value: &str) {
+        if name == "xmlns" {
+            self.declare_namespace("", value);
+            return;
+        }
+        if let Some(prefix) = name.strip_prefix("xmlns:") {
+            self.declare_namespace(prefix, value);
+            return;
+        }
+        self.ensure_namespace(name);
         if self.written.iter().any(|n| n == name) {
             return;
         }
@@ -67,13 +117,14 @@ fn serialize_node(
     id: NodeId,
     w: &mut XmlWriter,
     is_root: bool,
-    needs_xlink: bool,
+    inherited_namespaces: &BTreeMap<String, String>,
 ) {
     let node = match doc.get_node(id) {
         Some(n) => n,
         None => return,
     };
 
+    let mut namespaces = inherited_namespaces.clone();
     let tag = node.element.tag_name();
     w.start_element(tag);
 
@@ -82,39 +133,35 @@ fn serialize_node(
         // name that has already been emitted. Without it, attributes reachable
         // from two sources (font properties, `inkscape:path-effect`, ...) would
         // be written twice and the output would fail to re-parse.
-        let mut aw = AttrWriter::new(w);
+        let mut aw = AttrWriter::new(w, &mut namespaces);
 
-        // SVG namespace on root element.
+        // The parser records in-scope bindings on each node. Emit only changes
+        // relative to its parent, retaining local declarations and shadowing.
         if is_root {
-            aw.write_attribute("xmlns", "http://www.w3.org/2000/svg");
-            if needs_xlink {
-                aw.write_attribute("xmlns:xlink", "http://www.w3.org/1999/xlink");
-            }
+            let default_uri = node
+                .namespaces
+                .get("")
+                .or_else(|| node.attributes.get("xmlns"))
+                .map(String::as_str)
+                .unwrap_or("http://www.w3.org/2000/svg");
+            aw.declare_namespace("", default_uri);
         }
-
-        // Namespace declarations from the original document (for round-tripping).
-        // Only emit on the root element to avoid duplicates — child nodes may
-        // report inherited namespace declarations from the parser.
-        if is_root {
-            let mut ns_keys: Vec<&String> = node.namespaces.keys().collect();
-            ns_keys.sort();
-            for prefix in ns_keys {
-                if let Some(uri) = node.namespaces.get(prefix) {
-                    if prefix.is_empty() {
-                        // Default namespace — already written above for root.
-                        if uri != "http://www.w3.org/2000/svg" {
-                            aw.write_attribute("xmlns", uri);
-                        }
-                    } else {
-                        // Skip xlink if already written above.
-                        if !(needs_xlink && prefix == "xlink") {
-                            let attr_name = format!("xmlns:{prefix}");
-                            aw.write_attribute(&attr_name, uri);
-                        }
-                    }
-                }
-            }
+        let mut ns_keys: Vec<_> = node.namespaces.keys().collect();
+        ns_keys.sort();
+        for prefix in ns_keys {
+            aw.declare_namespace(prefix, &node.namespaces[prefix]);
         }
+        // Programmatically created nodes may keep declarations in extras.
+        let mut extra_ns: Vec<_> = node
+            .attributes
+            .iter()
+            .filter(|(key, _)| key.as_str() == "xmlns" || key.starts_with("xmlns:"))
+            .collect();
+        extra_ns.sort_by_key(|(key, _)| *key);
+        for (key, value) in extra_ns {
+            aw.write_attribute(key, value);
+        }
+        aw.ensure_namespace(tag);
 
         // xml_id as the `id` attribute.
         if let Some(ref xml_id) = node.xml_id {
@@ -162,7 +209,7 @@ fn serialize_node(
             }
         }
         for &child_id in children {
-            serialize_node(doc, child_id, w, false, needs_xlink);
+            serialize_node(doc, child_id, w, false, &namespaces);
         }
         w.end_element();
     }
@@ -1215,5 +1262,127 @@ fn write_presentation_attrs(p: &PresentationAttrs, w: &mut AttrWriter) {
     // Vector effect
     if let Some(ref ve) = p.vector_effect {
         w.write_attribute("vector-effect", ve);
+    }
+}
+
+#[cfg(test)]
+mod namespace_tests {
+    use super::*;
+    use crate::parse_svg;
+
+    #[test]
+    fn newly_created_namedview_layers_and_links_can_be_reopened() {
+        let mut doc =
+            parse_svg(r#"<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600"/>"#)
+                .unwrap();
+        let root = doc.root().unwrap();
+        let namedview = doc.add_node(SvgElement::SodipodiNamedView(NamedViewAttrs {
+            page_color: Some("#ffffff".into()),
+            inkscape_zoom: Some("1.25".into()),
+            ..Default::default()
+        }));
+        doc.append_child(root, namedview);
+        let page = doc.add_node(SvgElement::InkscapePage(InkscapePageAttrs {
+            width: Some("800".into()),
+            height: Some("600".into()),
+            ..Default::default()
+        }));
+        doc.append_child(namedview, page);
+        let layer = doc.add_node(SvgElement::Group(GroupAttrs {
+            inkscape_groupmode: Some("layer".into()),
+            inkscape_label: Some("Drawing".into()),
+        }));
+        doc.get_node_mut(layer)
+            .unwrap()
+            .attributes
+            .insert("xlink:href".into(), "#source".into());
+        doc.append_child(root, layer);
+        let serialized = serialize_svg(&doc);
+        let reopened = parse_svg(&serialized).expect("saved editor document must reopen");
+        assert_eq!(reopened.len(), doc.len());
+        assert!(reopened.nodes().any(|(_, node)| matches!(&node.element, SvgElement::SodipodiNamedView(attrs) if attrs.page_color.as_deref() == Some("#ffffff") && attrs.inkscape_zoom.as_deref() == Some("1.25"))));
+        let xml = roxmltree::Document::parse(&serialized).unwrap();
+        assert!(xml.descendants().any(|node| {
+            node.has_tag_name((conventional_namespace("sodipodi").unwrap(), "namedview"))
+        }));
+        assert!(xml.descendants().any(|node| {
+            node.attribute((conventional_namespace("xlink").unwrap(), "href")) == Some("#source")
+        }));
+    }
+
+    #[test]
+    fn local_custom_namespaces_and_shadowing_survive_two_roundtrips() {
+        let original = r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:custom="urn:outer">
+            <custom:widget custom:flag="outer"/>
+            <g xmlns:custom="urn:inner"><custom:widget custom:flag="inner"/></g>
+            <custom:widget custom:flag="outer-again"/>
+            <g xmlns:local="urn:local"><local:widget local:flag="local"/></g>
+            <foreignObject><foreign xmlns="urn:foreign"><svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1"/></svg></foreign></foreignObject>
+        </svg>"#;
+        let first = serialize_svg(&parse_svg(original).unwrap());
+        let second = serialize_svg(&parse_svg(&first).unwrap());
+        let xml = roxmltree::Document::parse(&second).unwrap();
+        let widgets: Vec<_> = xml
+            .descendants()
+            .filter(|node| node.is_element() && node.tag_name().name() == "widget")
+            .map(|node| {
+                (
+                    node.tag_name().namespace().unwrap(),
+                    node.attributes()
+                        .find(|attr| attr.name() == "flag")
+                        .unwrap()
+                        .namespace()
+                        .unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            widgets,
+            vec![
+                ("urn:outer", "urn:outer"),
+                ("urn:inner", "urn:inner"),
+                ("urn:outer", "urn:outer"),
+                ("urn:local", "urn:local")
+            ]
+        );
+        assert_eq!(second.matches("xmlns:custom=").count(), 2);
+        assert_eq!(second.matches("xmlns:local=").count(), 1);
+        assert!(xml
+            .descendants()
+            .any(|node| node.has_tag_name(("urn:foreign", "foreign"))));
+        assert!(xml
+            .descendants()
+            .any(|node| node.has_tag_name(("http://www.w3.org/2000/svg", "rect"))));
+    }
+
+    #[test]
+    fn explicit_bindings_are_not_replaced_by_conventional_prefixes() {
+        let mut doc = parse_svg(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:inkscape="urn:custom-inkscape"/>"#,
+        )
+        .unwrap();
+        let root = doc.root().unwrap();
+        let node = doc.add_node(SvgElement::Unknown(UnknownAttrs {
+            qualified_name: "inkscape:custom".into(),
+            text_content: String::new(),
+        }));
+        doc.get_node_mut(node)
+            .unwrap()
+            .attributes
+            .insert("inkscape:flag".into(), "preserved".into());
+        doc.append_child(root, node);
+        let serialized = serialize_svg(&doc);
+        let reparsed = parse_svg(&serialized).unwrap();
+        let saved_again = serialize_svg(&reparsed);
+        let xml = roxmltree::Document::parse(&saved_again).unwrap();
+        let custom = xml
+            .descendants()
+            .find(|node| node.has_tag_name(("urn:custom-inkscape", "custom")))
+            .unwrap();
+        assert_eq!(
+            custom.attribute(("urn:custom-inkscape", "flag")),
+            Some("preserved")
+        );
+        assert_eq!(saved_again.matches("xmlns:inkscape=").count(), 1);
     }
 }

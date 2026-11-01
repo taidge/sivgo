@@ -324,6 +324,11 @@ fn parse_element_shallow(xml_node: &XmlNode, doc: &mut SvgDocument) -> NodeId {
             let qualified_name = match name.namespace() {
                 Some(ns) => {
                     let prefix = ns_uri_to_prefix(ns);
+                    let prefix = if prefix.is_empty() {
+                        xml_node.lookup_prefix(ns).unwrap_or("")
+                    } else {
+                        prefix
+                    };
                     if prefix.is_empty() {
                         name.name().to_string()
                     } else {
@@ -1515,6 +1520,11 @@ fn collect_extra_attrs(n: &XmlNode, tag: &str) -> HashMap<String, String> {
         let qualified_name = match attr.namespace() {
             Some(ns) => {
                 let prefix = ns_uri_to_prefix(ns);
+                let prefix = if prefix.is_empty() {
+                    n.lookup_prefix(ns).unwrap_or("")
+                } else {
+                    prefix
+                };
                 if prefix.is_empty() {
                     local_name.to_string()
                 } else {
@@ -1538,10 +1548,8 @@ fn collect_namespace_decls(n: &XmlNode) -> HashMap<String, String> {
     for ns in n.namespaces() {
         let prefix = ns.name().unwrap_or("").to_string();
         let uri = ns.uri().to_string();
-        // Skip the default SVG namespace if it's the standard one.
-        if prefix.is_empty() && uri == "http://www.w3.org/2000/svg" {
-            continue;
-        }
+        // Retain default bindings too: a nested SVG can reset a foreign
+        // default namespace inherited from its parent.
         map.insert(prefix, uri);
     }
     map

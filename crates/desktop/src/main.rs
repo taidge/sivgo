@@ -1009,12 +1009,21 @@ fn canvas_text_editor(state: AppState) -> impl Widget {
                             .bounding_box(&engine.document)
                             .unwrap_or(Rect::new(0.0, 0.0, 120.0, 32.0));
                         let zoom = engine.viewport.zoom;
-                        UiStyle::new()
-                            .position(Position::Absolute)
-                            .left(UiLength::Px(bounds.x0 * zoom + engine.viewport.pan.x))
-                            .top(UiLength::Px(bounds.y0 * zoom + engine.viewport.pan.y))
-                            .width(UiLength::Px((bounds.width() * zoom).max(120.0)))
-                            .height(UiLength::Px((bounds.height() * zoom).max(48.0)))
+                        let font_size = engine
+                            .selected_text_state()
+                            .map(|text| text.font_size)
+                            .unwrap_or(16.0);
+                        UiStyle {
+                            color: Some(glory::style::Color(17, 24, 39, 255)),
+                            background: Some(glory::style::Color(255, 255, 255, 245)),
+                            font_size: Some((font_size * zoom).clamp(8.0, 96.0)),
+                            ..UiStyle::new().padding(Edges::all(2.0))
+                        }
+                        .position(Position::Absolute)
+                        .left(UiLength::Px(bounds.x0 * zoom + engine.viewport.pan.x))
+                        .top(UiLength::Px(bounds.y0 * zoom + engine.viewport.pan.y))
+                        .width(UiLength::Px((bounds.width() * zoom).max(120.0)))
+                        .height(UiLength::Px((bounds.height() * zoom).max(48.0)))
                     }))
                     .on(glory::ui::events::value_changed, move |event| {
                         if let UiEvent::ValueChanged { value, .. } = event {
@@ -1152,6 +1161,9 @@ fn handle_native_input(state: AppState, input: NativeInput) -> bool {
             if let sivgo_core::Action::SwitchTool(tool) = action {
                 state.engine.write().tools.switch_to(tool);
                 state.active_tool.set(state.engine.peek().tools.active_id());
+                if let Some(panel) = inspector_panel_for_tool(tool) {
+                    state.inspector_panel.set(panel);
+                }
                 cancel_canvas_input(state);
                 bump_render(state.render_version);
                 return true;

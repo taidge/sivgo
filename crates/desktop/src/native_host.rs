@@ -135,12 +135,102 @@ impl EditorDocument {
             .and_then(|id| doc.get_node(id))
             .and_then(|node| node.element_data())
             .is_some_and(|element| {
+                &*element.name.local == "textarea"
+                    || (&*element.name.local == "input"
+                        && !matches!(
+                            element.attr(apace_dom::LocalName::from("type")),
+                            Some(
+                                "button"
+                                    | "submit"
+                                    | "reset"
+                                    | "checkbox"
+                                    | "radio"
+                                    | "range"
+                                    | "color"
+                                    | "file"
+                                    | "hidden"
+                            )
+                        ))
+                    || element
+                        .attr(apace_dom::LocalName::from("contenteditable"))
+                        .is_some_and(|v| v != "false")
+            })
+    }
+    // Focused controls own their activation and navigation keys, but do not
+    // suppress unrelated editor shortcuts such as S and Ctrl+Z.
+    fn focused_control_owns_key(&self, key: &Key) -> bool {
+        if self.editable() {
+            return false;
+        }
+        let navigation = matches!(
+            key,
+            Key::Named(
+                keyboard_types::NamedKey::Enter
+                    | keyboard_types::NamedKey::Tab
+                    | keyboard_types::NamedKey::Escape
+                    | keyboard_types::NamedKey::ArrowUp
+                    | keyboard_types::NamedKey::ArrowDown
+                    | keyboard_types::NamedKey::ArrowLeft
+                    | keyboard_types::NamedKey::ArrowRight
+                    | keyboard_types::NamedKey::Home
+                    | keyboard_types::NamedKey::End
+                    | keyboard_types::NamedKey::PageUp
+                    | keyboard_types::NamedKey::PageDown
+            )
+        ) || matches!(key, Key::Character(value) if value == " ");
+        if !navigation {
+            return false;
+        }
+        let doc = self.inner.inner();
+        if key == &Key::Named(keyboard_types::NamedKey::Escape) {
+            let mut ancestor = doc.get_focussed_node_id();
+            while let Some(id) = ancestor {
+                let Some(node) = doc.get_node(id) else { break };
+                // These editor menus are controlled by AppState rather than
+                // Glory layers. Their Escape handler must reach the editor.
+                if node.element_data().is_some_and(|element| {
+                    element
+                        .attr(apace_dom::LocalName::from("class"))
+                        .is_some_and(|classes| {
+                            classes
+                                .split_ascii_whitespace()
+                                .any(|class| matches!(class, "glory-menu-bar" | "glory-menu-popup"))
+                        })
+                }) {
+                    return false;
+                }
+                ancestor = node.parent.or(node.layout_parent.get());
+            }
+        }
+        doc.get_focussed_node_id()
+            .and_then(|id| doc.get_node(id))
+            .and_then(|node| node.element_data())
+            .is_some_and(|element| {
                 matches!(
                     element.name.local.as_ref(),
-                    "input" | "textarea" | "select" | "button" | "a"
+                    "input" | "button" | "a" | "select"
                 ) || element
-                    .attr(apace_dom::LocalName::from("contenteditable"))
-                    .is_some_and(|v| v != "false")
+                    .attr(apace_dom::LocalName::from("role"))
+                    .is_some_and(|role| {
+                        matches!(
+                            role,
+                            "button"
+                                | "link"
+                                | "menuitem"
+                                | "menuitemcheckbox"
+                                | "menuitemradio"
+                                | "listbox"
+                                | "combobox"
+                                | "slider"
+                                | "spinbutton"
+                                | "option"
+                                | "tab"
+                                | "treeitem"
+                                | "checkbox"
+                                | "radio"
+                                | "switch"
+                        )
+                    })
             })
     }
     fn interactive_target(&self, x: f32, y: f32) -> bool {
@@ -193,7 +283,32 @@ impl Document for EditorDocument {
     fn inner_mut(&mut self) -> DocGuardMut<'_> {
         self.inner.inner_mut()
     }
-    fn handle_ui_event(&mut self, event: UiEvent) {
+    fn handle_ui_event(&mut self, mut event: UiEvent) {
+        // Windows Unicode injection (VK_PACKET) has no logical key, but Wingy
+        // supplies its committed text. Apace currently inserts Character keys
+        // only. Limit this bridge to text editors so injected text cannot become
+        // an editor shortcut, and leave IME and modified keys untouched.
+        if let UiEvent::KeyDown(key) = &mut event {
+            if self.editable()
+                && key.key == Key::Named(keyboard_types::NamedKey::Unidentified)
+                && !key.is_composing
+                && !key.modifiers.intersects(
+                    Modifiers::CONTROL | Modifiers::ALT | Modifiers::META | Modifiers::SHIFT,
+                )
+            {
+                if let Some(text) = key
+                    .text
+                    .as_ref()
+                    .filter(|text| !text.is_empty() && !text.chars().any(char::is_control))
+                {
+                    key.key = Key::Character(text.to_string());
+                }
+            }
+        }
+        if matches!(&event, UiEvent::KeyDown(key) if self.focused_control_owns_key(&key.key)) {
+            self.inner.handle_ui_event(event);
+            return;
+        }
         let terminal = matches!(event, UiEvent::PointerUp(_) | UiEvent::PointerCancel(_));
         let widget_gesture = self.pointer_owner == Some(false)
             && matches!(
@@ -750,6 +865,409 @@ mod tests {
         doc.inner.app().settle(8).unwrap();
         assert_eq!(calls.get(), 0);
         assert_eq!(pressed.get(), 1);
+    }
+
+    #[test]
+    fn focused_button_preserves_activation_and_editor_shortcuts() {
+        let inner = WindowApp::new();
+        let state = crate::AppState::new(inner.app().scope(), DesktopContext::new());
+        {
+            let mut engine = state.engine.write();
+            engine.tools.switch_to(sivgo_core::ToolId::Rect);
+            let pointer = |x, y| sivgo_core::MouseEvent {
+                x,
+                y,
+                button: MouseButton::Left,
+                modifiers: sivgo_core::Modifiers::none(),
+            };
+            engine.on_mouse_down(pointer(20.0, 20.0));
+            engine.on_mouse_up(pointer(100.0, 100.0));
+        }
+        state.active_tool.set(sivgo_core::ToolId::Rect);
+        let count = state.engine.peek().document.len();
+        let presses = Rc::new(Cell::new(0));
+        let pressed = presses.clone();
+        inner
+            .mount(
+                sapid::button()
+                    .label("Close picker")
+                    .on_press(move || pressed.set(pressed.get() + 1)),
+            )
+            .unwrap();
+        inner.app().settle(8).unwrap();
+        let calls = Rc::new(Cell::new(0));
+        let raw = calls.clone();
+        let input: InputHandler = Rc::new(RefCell::new(Box::new(move |event| {
+            raw.set(raw.get() + 1);
+            crate::handle_native_input(state, event)
+        })));
+        let mut doc = EditorDocument {
+            inner,
+            input,
+            error: Rc::default(),
+            last_click: None,
+            pointer_owner: None,
+        };
+        let button = {
+            let dom = doc.inner();
+            let mut queue = vec![dom.root_node().id];
+            let mut button = None;
+            while let Some(id) = queue.pop() {
+                let node = dom.get_node(id).unwrap();
+                if node
+                    .element_data()
+                    .is_some_and(|element| &*element.name.local == "button")
+                {
+                    button = Some(id);
+                    break;
+                }
+                queue.extend(node.children.iter().copied());
+            }
+            button.unwrap()
+        };
+        assert!(doc.inner_mut().set_focus_to(button));
+        assert!(!doc.editable(), "a focused button is not a text editor");
+        let key = |key, code, modifiers| {
+            UiEvent::KeyDown(ApaceKeyEvent {
+                key,
+                code,
+                modifiers,
+                location: Location::Standard,
+                is_auto_repeating: false,
+                is_composing: false,
+                state: KeyState::Pressed,
+                text: None,
+            })
+        };
+        doc.handle_ui_event(key(
+            Key::Named(keyboard_types::NamedKey::Enter),
+            Code::Enter,
+            Modifiers::empty(),
+        ));
+        doc.inner.app().settle(8).unwrap();
+        assert_eq!(presses.get(), 1, "Enter must activate the semantic button");
+        for (value, code) in [
+            (Key::Character(" ".into()), Code::Space),
+            (
+                Key::Named(keyboard_types::NamedKey::ArrowDown),
+                Code::ArrowDown,
+            ),
+            (Key::Named(keyboard_types::NamedKey::Tab), Code::Tab),
+        ] {
+            doc.handle_ui_event(key(value.clone(), code, Modifiers::empty()));
+            if let UiEvent::KeyDown(mut release) = key(value, code, Modifiers::empty()) {
+                release.state = KeyState::Released;
+                doc.handle_ui_event(UiEvent::KeyUp(release));
+            }
+            doc.inner.app().settle(8).unwrap();
+            doc.inner_mut().set_focus_to(button);
+        }
+        assert_eq!(
+            calls.get(),
+            0,
+            "control navigation must not enter the canvas handler"
+        );
+        assert_eq!(
+            presses.get(),
+            2,
+            "Space must activate the button on release"
+        );
+        for modifiers in [Modifiers::CONTROL, Modifiers::ALT, Modifiers::META] {
+            doc.handle_ui_event(key(
+                Key::Named(keyboard_types::NamedKey::ArrowLeft),
+                Code::ArrowLeft,
+                modifiers,
+            ));
+        }
+        doc.handle_ui_event(key(
+            Key::Named(keyboard_types::NamedKey::Tab),
+            Code::Tab,
+            Modifiers::SHIFT,
+        ));
+        doc.inner_mut().set_focus_to(button);
+        assert_eq!(calls.get(), 0, "modified control navigation stays native");
+        doc.handle_ui_event(key(
+            Key::Character("s".into()),
+            Code::KeyS,
+            Modifiers::empty(),
+        ));
+        assert_eq!(
+            state.engine.peek().tools.active_id(),
+            sivgo_core::ToolId::Select
+        );
+        doc.handle_ui_event(key(
+            Key::Character("z".into()),
+            Code::KeyZ,
+            Modifiers::CONTROL,
+        ));
+        assert_eq!(
+            state.engine.peek().document.len(),
+            count - 1,
+            "Ctrl+Z must undo the drawing after a button click"
+        );
+    }
+
+    fn button_named(doc: &EditorDocument, label: &str) -> apace_dom::NodeId {
+        let dom = doc.inner();
+        let mut queue = vec![dom.root_node().id];
+        while let Some(id) = queue.pop() {
+            let node = dom.get_node(id).unwrap();
+            if node
+                .element_data()
+                .is_some_and(|element| &*element.name.local == "button")
+                && node.text_content() == label
+            {
+                return id;
+            }
+            queue.extend(node.children.iter().copied());
+        }
+        panic!("missing button {label}");
+    }
+
+    fn click_button(doc: &mut EditorDocument, label: &str) {
+        let button = button_named(doc, label);
+        let (x, y) = {
+            let dom = doc.inner();
+            let node = dom.get_node(button).unwrap();
+            let position = node.absolute_position(0.0, 0.0);
+            (
+                position.x + node.final_layout().size.width / 2.0,
+                position.y + node.final_layout().size.height / 2.0,
+            )
+        };
+        let mut hover = pointer(x, y);
+        hover.buttons = apace_traits::events::MouseEventButtons::empty();
+        doc.handle_ui_event(UiEvent::PointerMove(hover));
+        doc.handle_ui_event(UiEvent::PointerDown(pointer(x, y)));
+        let mut release = pointer(x, y);
+        release.buttons = apace_traits::events::MouseEventButtons::empty();
+        doc.handle_ui_event(UiEvent::PointerUp(release));
+        doc.inner.app().settle(16).unwrap();
+    }
+
+    fn escape(doc: &mut EditorDocument) {
+        doc.handle_ui_event(UiEvent::KeyDown(ApaceKeyEvent {
+            key: Key::Named(keyboard_types::NamedKey::Escape),
+            code: Code::Escape,
+            modifiers: Modifiers::empty(),
+            location: Location::Standard,
+            is_auto_repeating: false,
+            is_composing: false,
+            state: KeyState::Pressed,
+            text: None,
+        }));
+        doc.inner.app().settle(16).unwrap();
+    }
+
+    #[test]
+    fn file_menu_pointer_activation_can_be_dismissed_with_escape() {
+        let inner = WindowApp::new();
+        inner.renderer().set_viewport(1440, 900, 1.0).unwrap();
+        inner
+            .renderer()
+            .set_css(&format!("{}\n{}", crate::CSS, crate::HOST_CSS));
+        let state = crate::AppState::new(inner.app().scope(), DesktopContext::new());
+        inner.mount(crate::editor_app(state)).unwrap();
+        inner.app().settle(16).unwrap();
+        let input: InputHandler = Rc::new(RefCell::new(Box::new(move |event| {
+            crate::handle_native_input(state, event)
+        })));
+        let mut doc = EditorDocument {
+            inner,
+            input,
+            error: Rc::default(),
+            last_click: None,
+            pointer_owner: None,
+        };
+        click_button(&mut doc, "File");
+        assert_eq!(state.menu_open.get(), Some(0));
+        escape(&mut doc);
+        assert_eq!(state.menu_open.get(), None);
+    }
+
+    #[test]
+    fn color_popup_escape_remains_owned_by_glory() {
+        let inner = WindowApp::new();
+        inner.renderer().set_viewport(800, 700, 1.0).unwrap();
+        let opened = Rc::new(Cell::new(false));
+        let changed = opened.clone();
+        inner
+            .mount(
+                sapid::color_input("escape-color")
+                    .default_value("#336699")
+                    .on_open_change(move |value| changed.set(value)),
+            )
+            .unwrap();
+        inner.app().settle(16).unwrap();
+        let calls = Rc::new(Cell::new(0));
+        let raw = calls.clone();
+        let input: InputHandler = Rc::new(RefCell::new(Box::new(move |_| {
+            raw.set(raw.get() + 1);
+            true
+        })));
+        let mut doc = EditorDocument {
+            inner,
+            input,
+            error: Rc::default(),
+            last_click: None,
+            pointer_owner: None,
+        };
+        click_button(&mut doc, "Choose color");
+        assert!(opened.get(), "fixture must open the actual color popup");
+        let close = button_named(&doc, "Close");
+        assert!(doc.inner_mut().set_focus_to(close));
+        escape(&mut doc);
+        assert!(!opened.get(), "Glory must dismiss its own color layer");
+        assert_eq!(calls.get(), 0, "popup Escape must not enter the canvas");
+    }
+
+    #[test]
+    fn selected_canvas_text_accepts_native_typing_and_select_all_paste() {
+        let inner = WindowApp::new();
+        inner.renderer().set_viewport(1440, 900, 1.0).unwrap();
+        inner
+            .renderer()
+            .set_css(&format!("{}\n{}", crate::CSS, crate::HOST_CSS));
+        let state = crate::AppState::new(inner.app().scope(), DesktopContext::new());
+        state
+            .engine
+            .write()
+            .tools
+            .switch_to(sivgo_core::ToolId::Text);
+        state.active_tool.set(sivgo_core::ToolId::Text);
+        inner.mount(crate::editor_app(state)).unwrap();
+        crate::refresh_canvas_bounds(inner.app().scope(), state);
+        inner.app().settle(16).unwrap();
+        let input: InputHandler = Rc::new(RefCell::new(Box::new(move |event| {
+            crate::handle_native_input(state, event)
+        })));
+        let mut doc = EditorDocument {
+            inner,
+            input,
+            error: Rc::default(),
+            last_click: None,
+            pointer_owner: None,
+        };
+        let canvas = state.canvas_bounds.get().expect("mounted canvas bounds");
+        let (create_x, create_y) = ((canvas.x + 100.0) as f32, (canvas.y + 100.0) as f32);
+        doc.handle_ui_event(UiEvent::PointerDown(pointer(create_x, create_y)));
+        let mut release = pointer(create_x, create_y);
+        release.buttons = apace_traits::events::MouseEventButtons::empty();
+        doc.handle_ui_event(UiEvent::PointerUp(release));
+        doc.inner.app().settle(16).unwrap();
+        assert_eq!(
+            state.engine.peek().selected_text_state().unwrap().content,
+            "Text"
+        );
+        let (editor, x, y) = {
+            let dom = doc.inner();
+            let mut queue = vec![dom.root_node().id];
+            let mut found = None;
+            while let Some(id) = queue.pop() {
+                let node = dom.get_node(id).unwrap();
+                if node.element_data().is_some_and(|element| {
+                    element.attr(apace_dom::LocalName::from("aria-label"))
+                        == Some("Edit selected canvas text")
+                }) {
+                    let position = node.absolute_position(0.0, 0.0);
+                    found = Some((
+                        id,
+                        position.x + node.final_layout().size.width / 2.0,
+                        position.y + node.final_layout().size.height / 2.0,
+                    ));
+                    break;
+                }
+                queue.extend(node.children.iter().copied());
+            }
+            found.expect("selected Text tool mounts the canvas editor")
+        };
+        doc.handle_ui_event(UiEvent::PointerDown(pointer(x, y)));
+        let mut release = pointer(x, y);
+        release.buttons = apace_traits::events::MouseEventButtons::empty();
+        doc.handle_ui_event(UiEvent::PointerUp(release));
+        doc.inner.app().settle(16).unwrap();
+        assert_eq!(doc.inner().get_focussed_node_id(), Some(editor));
+        assert!(doc.editable());
+        let key = |text: &str, code, modifiers| {
+            UiEvent::KeyDown(ApaceKeyEvent {
+                key: Key::Character(text.into()),
+                code,
+                modifiers,
+                location: Location::Standard,
+                is_auto_repeating: false,
+                is_composing: false,
+                state: KeyState::Pressed,
+                text: Some(text.into()),
+            })
+        };
+        doc.handle_ui_event(key("a", Code::KeyA, Modifiers::CONTROL));
+        doc.handle_ui_event(key("x", Code::KeyX, Modifiers::empty()));
+        doc.inner.app().settle(16).unwrap();
+        assert_eq!(
+            state.engine.peek().selected_text_state().unwrap().content,
+            "x"
+        );
+        assert_eq!(doc.inner().get_focussed_node_id(), Some(editor));
+        doc.handle_ui_event(key("a", Code::KeyA, Modifiers::CONTROL));
+        doc.handle_ui_event(UiEvent::Paste("Sivgo UI check".into()));
+        doc.inner.app().settle(16).unwrap();
+        assert_eq!(
+            state.engine.peek().selected_text_state().unwrap().content,
+            "Sivgo UI check"
+        );
+        doc.handle_ui_event(key("!", Code::Digit1, Modifiers::SHIFT));
+        doc.inner.app().settle(16).unwrap();
+        assert_eq!(
+            state.engine.peek().selected_text_state().unwrap().content,
+            "Sivgo UI check!"
+        );
+        let packet = |text: &str, modifiers, is_composing| {
+            UiEvent::KeyDown(ApaceKeyEvent {
+                key: Key::Named(keyboard_types::NamedKey::Unidentified),
+                code: Code::Unidentified,
+                modifiers,
+                location: Location::Standard,
+                is_auto_repeating: false,
+                is_composing,
+                state: KeyState::Pressed,
+                text: Some(text.into()),
+            })
+        };
+        for text in ["中文", "Sivgo 中文🙂 e\u{301}"] {
+            doc.handle_ui_event(key("a", Code::KeyA, Modifiers::CONTROL));
+            doc.handle_ui_event(packet(text, Modifiers::empty(), false));
+            doc.inner.app().settle(16).unwrap();
+            assert_eq!(
+                state.engine.peek().selected_text_state().unwrap().content,
+                text,
+                "unidentified Windows keys must insert their Unicode text"
+            );
+        }
+        for (text, modifiers, composing) in [
+            ("", Modifiers::empty(), false),
+            ("\n", Modifiers::empty(), false),
+            ("text\u{7}", Modifiers::empty(), false),
+            ("预编辑", Modifiers::empty(), true),
+            ("z", Modifiers::CONTROL, false),
+            ("x", Modifiers::ALT, false),
+            ("s", Modifiers::META, false),
+            ("X", Modifiers::SHIFT, false),
+        ] {
+            doc.handle_ui_event(packet(text, modifiers, composing));
+            doc.inner.app().settle(16).unwrap();
+            assert_eq!(
+                state.engine.peek().selected_text_state().unwrap().content,
+                "Sivgo 中文🙂 e\u{301}",
+                "non-text packets and IME preedit must remain untouched"
+            );
+        }
+        doc.inner_mut().clear_focus();
+        doc.handle_ui_event(packet("s", Modifiers::empty(), false));
+        assert_eq!(
+            state.engine.peek().tools.active_id(),
+            sivgo_core::ToolId::Text,
+            "unfocused Unicode packets must not become editor shortcuts"
+        );
     }
 
     #[test]

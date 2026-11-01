@@ -1,4 +1,4 @@
-﻿//! Text-to-path conversion.
+//! Text-to-path conversion.
 //!
 //! Converts shaped text into `BezPath` outlines by extracting glyph contours
 //! from the underlying font via `swash`.
@@ -177,31 +177,26 @@ fn outline_glyph(
 
     let outline = scaler.scale_outline(glyph_id)?;
 
-    // Convert swash outline to BezPath.
+    // Font outlines use Y-up coordinates; SVG user space uses Y-down.
+    // Reflect each point around the glyph baseline before positioning it.
     let mut path = BezPath::new();
+    let position = |p: swash::zeno::Point| Point::new(offset_x + p.x as f64, offset_y - p.y as f64);
 
     use swash::zeno::PathData;
     for cmd in outline.path().commands() {
         use swash::zeno::Command;
         match cmd {
             Command::MoveTo(p) => {
-                path.move_to(Point::new(p.x as f64 + offset_x, p.y as f64 + offset_y));
+                path.move_to(position(p));
             }
             Command::LineTo(p) => {
-                path.line_to(Point::new(p.x as f64 + offset_x, p.y as f64 + offset_y));
+                path.line_to(position(p));
             }
             Command::QuadTo(cp, end) => {
-                path.quad_to(
-                    Point::new(cp.x as f64 + offset_x, cp.y as f64 + offset_y),
-                    Point::new(end.x as f64 + offset_x, end.y as f64 + offset_y),
-                );
+                path.quad_to(position(cp), position(end));
             }
             Command::CurveTo(cp1, cp2, end) => {
-                path.curve_to(
-                    Point::new(cp1.x as f64 + offset_x, cp1.y as f64 + offset_y),
-                    Point::new(cp2.x as f64 + offset_x, cp2.y as f64 + offset_y),
-                    Point::new(end.x as f64 + offset_x, end.y as f64 + offset_y),
-                );
+                path.curve_to(position(cp1), position(cp2), position(end));
             }
             Command::Close => {
                 path.close();

@@ -31,6 +31,7 @@ fn saving_a_copy_preserves_original_unsaved_changes() {
     );
     let saved = std::fs::read_to_string(&path).unwrap();
     assert!(saved.contains("<rect"));
+    sivgo_dom::parse_svg(&saved).expect("saved editor document must reopen with its namedview");
     assert!(save_svg_document(state.engine, &path, true));
     assert!(!state.engine.peek().is_dirty());
     std::fs::remove_file(path).unwrap();
@@ -220,4 +221,20 @@ fn compact_shell_keeps_canvas_visible_at_smaller_window_sizes() {
             "canvas outside window: {bounds:?}"
         );
     }
+}
+
+#[test]
+fn keyboard_text_tool_opens_its_properties_like_the_toolbar() {
+    let app = glory::App::memory();
+    let state = AppState::new(app.scope(), DesktopContext::new());
+    assert!(handle_native_input(
+        state,
+        NativeInput::KeyDown {
+            key: keyboard_types::Key::Character("t".into()),
+            modifiers: keyboard_types::Modifiers::empty(),
+            editable: false,
+        }
+    ));
+    assert_eq!(*state.active_tool.peek(), ToolId::Text);
+    assert_eq!(*state.inspector_panel.peek(), InspectorPanel::Text);
 }
