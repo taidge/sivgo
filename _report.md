@@ -304,7 +304,7 @@ SVG/PNG/JPEG/PDF/EPS/DXF 等路径存在，基础测试也较多；但 PDF impor
 
 发布：
 
-- MIT/Apache-2.0 license 文件已存在。
+- Apache-2.0 license 文件已存在。
 - 没有 CHANGELOG、installer、签名、公证、release workflow、版本策略或 SBOM。
 
 - [ ] 建立容量/交互性能基线和阈值。

@@ -3,6 +3,7 @@ name = "sivgo-dom"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 
 [dependencies]
 sivgo-math = { workspace = true }
