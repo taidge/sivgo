@@ -16,13 +16,14 @@ use std::{
 use wingy::{
     application::ApplicationHandler,
     event::WindowEvent,
-    event_loop::{ActiveEventLoop, EventLoop},
+    event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
     monitor::Fullscreen,
     window::{WindowAttributes, WindowId},
 };
 
 #[derive(Debug, Clone)]
 pub enum NativeInput {
+    BackgroundReady,
     PointerDown {
         x: f64,
         y: f64,
@@ -96,6 +97,14 @@ impl DesktopContext {
         self.0.commands.borrow_mut().push_back(command);
         if let Some(proxy) = self.0.proxy.borrow().as_ref() {
             proxy.wake_up();
+        }
+    }
+    pub fn background_waker(&self) -> impl FnOnce() + Send + 'static {
+        let proxy = self.0.proxy.borrow().clone();
+        move || {
+            if let Some(proxy) = proxy {
+                proxy.wake_up();
+            }
         }
     }
     pub fn set_title(&self, title: &str) {
@@ -182,26 +191,6 @@ impl EditorDocument {
             return false;
         }
         let doc = self.inner.inner();
-        if key == &Key::Named(keyboard_types::NamedKey::Escape) {
-            let mut ancestor = doc.get_focussed_node_id();
-            while let Some(id) = ancestor {
-                let Some(node) = doc.get_node(id) else { break };
-                // These editor menus are controlled by AppState rather than
-                // Glory layers. Their Escape handler must reach the editor.
-                if node.element_data().is_some_and(|element| {
-                    element
-                        .attr(apace_dom::LocalName::from("class"))
-                        .is_some_and(|classes| {
-                            classes
-                                .split_ascii_whitespace()
-                                .any(|class| matches!(class, "glory-menu-bar" | "glory-menu-popup"))
-                        })
-                }) {
-                    return false;
-                }
-                ancestor = node.parent.or(node.layout_parent.get());
-            }
-        }
         doc.get_focussed_node_id()
             .and_then(|id| doc.get_node(id))
             .and_then(|node| node.element_data())
@@ -433,6 +422,7 @@ struct EditorShell {
     input: InputHandler,
     close: Box<dyn FnMut() -> bool>,
     error: Rc<RefCell<Option<String>>>,
+    idle: Box<dyn FnMut() -> Option<Instant>>,
 }
 impl EditorShell {
     fn prepare(view: &mut apace_shell::View<CpuRenderer>) {
@@ -530,6 +520,13 @@ impl ApplicationHandler for EditorShell {
         self.commands(event_loop);
     }
     fn proxy_wake_up(&mut self, event_loop: &dyn ActiveEventLoop) {
+        if (self.input.borrow_mut())(NativeInput::BackgroundReady) {
+            for view in self.inner.windows.values_mut() {
+                Self::prepare(view);
+                view.poll();
+                view.request_redraw();
+            }
+        }
         let mut polled = std::collections::HashSet::new();
         for index in 0..64 {
             let Ok(event) = self.inner.event_queue.try_recv() else {
@@ -577,6 +574,10 @@ impl ApplicationHandler for EditorShell {
     }
     fn about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
         self.commands(event_loop);
+        if !self.inner.windows.is_empty() && !event_loop.exiting() {
+            let next = (self.idle)().map_or(ControlFlow::Wait, ControlFlow::WaitUntil);
+            event_loop.set_control_flow(next);
+        }
     }
 }
 
@@ -585,6 +586,7 @@ pub fn run(
     desktop: DesktopContext,
     input: impl FnMut(NativeInput) -> bool + 'static,
     close: impl FnMut() -> bool + 'static,
+    idle: impl FnMut() -> Option<Instant> + 'static,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let event_loop = EventLoop::builder().build()?;
     let (proxy, queue) = ApaceShellProxy::new(event_loop.create_proxy());
@@ -611,6 +613,7 @@ pub fn run(
         desktop: desktop.clone(),
         input,
         close: Box::new(close),
+        idle: Box::new(idle),
         error: error.clone(),
     };
     event_loop.run_app(shell)?;
@@ -1007,25 +1010,24 @@ mod tests {
         );
     }
 
-    fn button_named(doc: &EditorDocument, label: &str) -> apace_dom::NodeId {
+    fn control_named(doc: &EditorDocument, label: &str) -> apace_dom::NodeId {
         let dom = doc.inner();
         let mut queue = vec![dom.root_node().id];
         while let Some(id) = queue.pop() {
             let node = dom.get_node(id).unwrap();
-            if node
-                .element_data()
-                .is_some_and(|element| &*element.name.local == "button")
-                && node.text_content() == label
-            {
+            if node.element_data().is_some_and(|element| {
+                element.attr(apace_dom::LocalName::from("aria-label")) == Some(label)
+                    || (&*element.name.local == "button" && node.text_content() == label)
+            }) {
                 return id;
             }
             queue.extend(node.children.iter().copied());
         }
-        panic!("missing button {label}");
+        panic!("missing control {label}");
     }
 
     fn click_button(doc: &mut EditorDocument, label: &str) {
-        let button = button_named(doc, label);
+        let button = control_named(doc, label);
         let (x, y) = {
             let dom = doc.inner();
             let node = dom.get_node(button).unwrap();
@@ -1112,10 +1114,10 @@ mod tests {
             last_click: None,
             pointer_owner: None,
         };
-        click_button(&mut doc, "Choose color");
+        click_button(&mut doc, "Open color picker");
         assert!(opened.get(), "fixture must open the actual color popup");
-        let close = button_named(&doc, "Close");
-        assert!(doc.inner_mut().set_focus_to(close));
+        let hue = control_named(&doc, "Hue");
+        assert!(doc.inner_mut().set_focus_to(hue));
         escape(&mut doc);
         assert!(!opened.get(), "Glory must dismiss its own color layer");
         assert_eq!(calls.get(), 0, "popup Escape must not enter the canvas");

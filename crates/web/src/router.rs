@@ -43,6 +43,7 @@ use crate::store::Store;
 ///                             DELETE(auth)
 ///       versions              GET   (auth)
 ///   export                    POST  (public)
+///   agent/suggest             POST  (auth, opt-in)
 ///   shared/{token}            GET   (public, rate-limited)
 ///   assets/                   GET   (auth)
 ///                             POST  (auth)
@@ -108,6 +109,12 @@ pub fn create_router(store: Store, config: &ServerConfig) -> Service {
         .hoop(auth::auth_guard)
         // Registration is open, so authenticated traffic needs a ceiling too.
         .hoop(user_rate_limit)
+        .push(
+            Router::with_path("agent/suggest")
+                .hoop(max_size(2 * 1024 * 1024))
+                .hoop(SecureMaxSize(2 * 1024 * 1024))
+                .post(handlers::agent::suggest),
+        )
         .push(
             Router::with_path("documents")
                 .get(handlers::documents::list_documents)
@@ -175,6 +182,7 @@ pub fn create_router(store: Store, config: &ServerConfig) -> Service {
                 .inject(prefs_store)
                 .inject(plugin_registry)
                 .inject(audit_log)
+                .inject(handlers::agent::AgentService::from_env())
                 .inject(public_rate_limiter)
                 .inject(UserRateLimiter::default()),
         )

@@ -29,6 +29,7 @@ pub mod color_bar;
 pub(crate) mod controls;
 pub mod doc_properties;
 pub mod filter_editor;
+pub mod icons;
 pub mod layers_panel;
 pub mod lpe_panel;
 pub mod menu_model;

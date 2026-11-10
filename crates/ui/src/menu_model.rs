@@ -133,6 +133,8 @@ pub fn is_action_wired(action: &str) -> bool {
         action,
         "file.new"
             | "file.open"
+            | "file.open_recent"
+            | "file.recover_draft"
             | "file.save"
             | "file.save_as"
             | "file.save_copy"
@@ -259,6 +261,7 @@ pub fn default_menu_bar_with_state(
                 sep(),
                 item("Open...", "file.open", "Ctrl+O"),
                 item("Open Recent", "file.open_recent", ""),
+                item("Recover Draft...", "file.recover_draft", ""),
                 sep(),
                 item("Save", "file.save", "Ctrl+S"),
                 item("Save As...", "file.save_as", "Ctrl+Shift+S"),

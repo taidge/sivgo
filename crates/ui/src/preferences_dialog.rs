@@ -155,7 +155,28 @@ pub struct PreferencesDialog {
 
 impl Widget for PreferencesDialog {
     fn build(&mut self, scope: &Scope) -> Result {
-        let scope = panel(scope, "preferences-dialog", "Preferences")?;
+        let scope = panel(scope, "preferences-dialog", "")?;
+        let callback = self.on_action.clone();
+        row()
+            .style(Style {
+                align: Some(glory::style::Align::Center),
+                ..Style::new()
+            })
+            .fill((
+                text()
+                    .class("panel-header")
+                    .content("Preferences")
+                    .style(Style {
+                        grow: Some(1.0),
+                        ..Style::new()
+                    }),
+                sapid::close_button()
+                    .theme(crate::controls::editor_theme())
+                    .size(sapid::Size::ExtraSmall)
+                    .name("Close preferences")
+                    .on_press(move || callback.call(PreferencesAction::Close)),
+            ))
+            .show_in(&scope)?;
         for section in PreferencesSection::all() {
             let next = section.clone();
             let callback = self.on_action.clone();
@@ -217,7 +238,7 @@ impl Widget for PreferencesDialog {
                 let callback = self.on_action.clone();
                 sapid::checkbox()
                     .theme(crate::controls::editor_theme())
-                    .label("Auto save")
+                    .label("Automatically save recovery drafts")
                     .default_checked(self.state.auto_save)
                     .on_checked_change(move |value| {
                         callback.call(PreferencesAction::SetAutoSave(value))
@@ -226,7 +247,7 @@ impl Widget for PreferencesDialog {
                 let callback = self.on_action.clone();
                 number_field(
                     &scope,
-                    "Auto save interval (seconds)",
+                    "Recovery interval (seconds)",
                     self.state.auto_save_interval_secs as f64,
                     move |value| {
                         callback.call(PreferencesAction::SetAutoSaveInterval(
@@ -394,10 +415,6 @@ impl Widget for PreferencesDialog {
                 )?;
             }
         }
-        let callback = self.on_action.clone();
-        action_button(&scope, "Close preferences", false, move || {
-            callback.call(PreferencesAction::Close)
-        })?;
         Ok(())
     }
 }

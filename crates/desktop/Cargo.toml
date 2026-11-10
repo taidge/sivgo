@@ -2,6 +2,7 @@
 name = "sivgo-desktop"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 
 [[bin]]
 name = "sivgo"
@@ -16,6 +17,7 @@ sivgo-math = { workspace = true }
 sivgo-core = { workspace = true }
 sivgo-plugin = { workspace = true }
 sivgo-ui = { workspace = true }
+sivgo-agent = { workspace = true }
 glory = { workspace = true, features = ["apace-shell"] }
 sapid = { workspace = true }
 parking_lot = { version = "0.12", features = ["arc_lock"] }
@@ -34,6 +36,7 @@ png = { workspace = true }
 arboard = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+tempfile = { workspace = true }
 
 [dev-dependencies]
 glory = { workspace = true, features = ["apace-raster"] }

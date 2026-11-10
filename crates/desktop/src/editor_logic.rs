@@ -55,6 +55,7 @@ enum InspectorPanel {
     Resources,
     Document,
     Preferences,
+    Agent,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -3674,7 +3675,9 @@ fn save_desktop_settings(settings: &DesktopSettings) {
         }
     };
 
-    if let Err(err) = fs::write(&path, json) {
+    if let Err(err) = sivgo_io::write_atomic(&path, |file| {
+        std::io::Write::write_all(file, json.as_bytes())
+    }) {
         log::warn!(
             "Failed to write desktop settings at {}: {}",
             path.display(),
@@ -4858,11 +4861,11 @@ fn save_svg_document(
     path: &std::path::Path,
     mark_saved: bool,
 ) -> bool {
-    let xml = {
+    let saved = {
         let eng = engine.read();
-        sivgo_dom::serialize_svg(&eng.document)
+        sivgo_io::save_svg(&eng.document, path)
     };
-    match fs::write(path, xml.as_bytes()) {
+    match saved {
         Ok(()) => {
             if mark_saved {
                 engine.write().mark_saved();
@@ -5125,30 +5128,27 @@ fn menu_action_for_shortcut(action: &sivgo_core::Action) -> Option<&'static str>
 /// was reachable before: the Import menu item had no handler, so the bitmap
 /// tracer and the bitmap importer had no way in at all.
 fn import_file_into_document(engine: Signal<EditorEngine>, path: &Path, trace: bool) {
-    let Ok(bytes) = std::fs::read(path) else {
-        log::error!("Failed to read {}", path.display());
-        return;
-    };
-
     let extension = path
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("")
         .to_ascii_lowercase();
 
-    if extension == "svg" {
-        match String::from_utf8(bytes)
-            .ok()
-            .and_then(|text| sivgo_dom::parse_svg(&text).ok())
-        {
-            Some(imported) => {
+    if matches!(extension.as_str(), "svg" | "svgz") {
+        match sivgo_io::load_svg(path) {
+            Ok(imported) => {
                 let count = engine.write().import_document(&imported);
                 info!("Imported {count} elements from {}", path.display());
             }
-            None => log::error!("Failed to parse {}", path.display()),
+            Err(error) => report_error("Could not import the drawing", &error.to_string()),
         }
         return;
     }
+
+    let Ok(bytes) = std::fs::read(path) else {
+        log::error!("Failed to read {}", path.display());
+        return;
+    };
 
     if trace {
         match sivgo_io::trace_bitmap_file(&bytes, &sivgo_io::TraceOptions::default()) {
@@ -5167,10 +5167,18 @@ fn import_file_into_document(engine: Signal<EditorEngine>, path: &Path, trace: b
         "bmp" => "image/bmp",
         _ => "image/png",
     };
-    let mut eng = engine.write();
-    match sivgo_io::import_bitmap(&mut eng.document, &bytes, mime) {
-        Ok(_) => info!("Imported bitmap {}", path.display()),
-        Err(e) => log::error!("Failed to import bitmap: {e}"),
+    let mut imported = sivgo_dom::SvgDocument::new();
+    match sivgo_io::import_bitmap(&mut imported, &bytes, mime) {
+        Ok(id) => {
+            let mut engine = engine.write();
+            if let (Some(root), Some(node)) = (engine.document.root(), imported.get_node(id)) {
+                engine.execute(Box::new(AddNodeCommand::new(
+                    root, node.element.clone(), node.presentation.clone(), None,
+                )));
+                info!("Imported bitmap {}", path.display());
+            }
+        }
+        Err(e) => report_error("Could not import bitmap", &e.to_string()),
     }
 }
 
@@ -5179,7 +5187,6 @@ fn handle_editor_action(
     action: &str,
     engine: Signal<EditorEngine>,
     render_version: Signal<u64>,
-    file_path: Signal<Option<PathBuf>>,
     is_fullscreen: Signal<bool>,
     inspector_panel: Signal<InspectorPanel>,
     document_defaults: Signal<DocumentDefaults>,
@@ -5187,93 +5194,11 @@ fn handle_editor_action(
     desktop: DesktopContext,
 ) {
     match action {
-        "file.new" => {
-            if !confirm_discard_changes(engine, "Start a new drawing") {
-                return;
-            }
-            let defaults = document_defaults.read().clone();
-            let preferences = preferences_state.read().clone();
-            let mut eng = engine.write();
-            eng.new_document(defaults.width_px, defaults.height_px);
-            apply_document_defaults_to_engine(&mut eng, &defaults);
-            apply_preferences_to_engine(&mut eng, &preferences);
-            eng.mark_saved();
-            drop(eng);
-            file_path.set(None);
-            set_window_title(&desktop, None);
-            bump_render(render_version);
-        }
-        "file.open" => {
-            if !confirm_discard_changes(engine, "Open another file") {
-                return;
-            }
-            if let Some(path) = rfd::FileDialog::new()
-                .add_filter("SVG files", &["svg"])
-                .pick_file()
-            {
-                match fs::read_to_string(&path) {
-                    Ok(content) => match sivgo_dom::parse_svg(&content) {
-                        Ok(doc) => {
-                            let preferences = preferences_state.read().clone();
-                            let mut eng = engine.write();
-                            eng.load_document(doc);
-                            apply_preferences_to_engine(&mut eng, &preferences);
-                            // A freshly loaded document has no unsaved edits.
-                            eng.mark_saved();
-                            drop(eng);
-                            file_path.set(Some(path.clone()));
-                            set_window_title(&desktop, Some(&path));
-                            bump_render(render_version);
-                        }
-                        Err(e) => report_error(
-                            "Could not open the file",
-                            &format!("{} is not valid SVG: {e}", path.display()),
-                        ),
-                    },
-                    Err(e) => report_error(
-                        "Could not read the file",
-                        &format!("{}: {e}", path.display()),
-                    ),
-                }
-            }
-        }
-        "file.save" => {
-            let existing_path = file_path.read().clone();
-            let path = if let Some(path) = existing_path {
-                path
-            } else {
-                match rfd::FileDialog::new()
-                    .add_filter("SVG files", &["svg"])
-                    .save_file()
-                {
-                    Some(path) => path,
-                    None => return,
-                }
-            };
-
-            if save_svg_document(engine, &path, true) {
-                file_path.set(Some(path.clone()));
-                set_window_title(&desktop, Some(&path));
-                info!("Saved to {}", path.display());
-            }
-        }
-        "file.save_as" => {
-            if let Some(path) = rfd::FileDialog::new()
-                .add_filter("SVG files", &["svg"])
-                .save_file()
-            {
-                if save_svg_document(engine, &path, true) {
-                    file_path.set(Some(path.clone()));
-                    set_window_title(&desktop, Some(&path));
-                    info!("Saved as {}", path.display());
-                }
-            }
-        }
         "file.import" => {
             let Some(path) = rfd::FileDialog::new()
                 .add_filter(
                     "Images and drawings",
-                    &["svg", "png", "jpg", "jpeg", "gif", "bmp"],
+                    &["svg", "svgz", "png", "jpg", "jpeg", "gif", "bmp"],
                 )
                 .pick_file()
             else {
@@ -5300,9 +5225,11 @@ fn handle_editor_action(
                 // Unlike a normal save, this strips the editor-specific
                 // `inkscape:` and `sodipodi:` markup.
                 let plain = sivgo_io::export_plain_svg(&engine.read().document);
-                match std::fs::write(&path, plain) {
+                match sivgo_io::write_atomic(&path, |file| {
+                    std::io::Write::write_all(file, plain.as_bytes())
+                }) {
                     Ok(()) => info!("Wrote plain SVG to {}", path.display()),
-                    Err(e) => log::error!("Failed to write plain SVG: {e}"),
+                    Err(error) => report_error("Could not export plain SVG", &error.to_string()),
                 }
             }
         }

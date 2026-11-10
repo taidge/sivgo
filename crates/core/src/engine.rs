@@ -192,6 +192,28 @@ pub struct EditorEngine {
     pub active_layer: Option<NodeId>,
 }
 
+struct ReplaceDrawing(SvgDocument);
+
+impl std::fmt::Debug for ReplaceDrawing {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("ReplaceDrawing")
+    }
+}
+
+impl Command for ReplaceDrawing {
+    fn execute(&mut self, doc: &mut SvgDocument) {
+        std::mem::swap(doc, &mut self.0);
+    }
+
+    fn undo(&mut self, doc: &mut SvgDocument) {
+        self.execute(doc);
+    }
+
+    fn description(&self) -> &str {
+        "Apply AI edit"
+    }
+}
+
 impl EditorEngine {
     /// Create a new engine with an empty document and default tools.
     pub fn new(width: f64, height: f64) -> Self {
@@ -272,6 +294,14 @@ impl EditorEngine {
         self.history.execute(cmd, &mut self.document);
         self.events.emit(EditorEvent::DocumentModified);
         self.events.emit(EditorEvent::UndoRedoChanged);
+    }
+
+    /// Apply a reviewed replacement as one undoable edit, preserving viewport and history.
+    pub fn replace_drawing(&mut self, replacement: SvgDocument) {
+        self.execute(Box::new(ReplaceDrawing(replacement)));
+        self.validate_active_layer();
+        self.remove_missing_selection();
+        self.last_snap_indicator = None;
     }
 
     /// Undo the last command.
@@ -5039,11 +5069,16 @@ impl EditorEngine {
             return;
         };
         if let SvgElement::Svg(attrs) = &mut node.element {
-            attrs.width = Some(SvgLength::new(width.max(1.0), LengthUnit::None));
-            attrs.height = Some(SvgLength::new(height.max(1.0), LengthUnit::None));
+            let next_width = Some(SvgLength::new(width.max(1.0), LengthUnit::None));
+            let next_height = Some(SvgLength::new(height.max(1.0), LengthUnit::None));
+            if attrs.width != next_width || attrs.height != next_height {
+                attrs.width = next_width;
+                attrs.height = next_height;
+                self.history.mark_unsaved();
+                self.events.emit(EditorEvent::DocumentModified);
+            }
             self.viewport.width = width.max(1.0);
             self.viewport.height = height.max(1.0);
-            self.events.emit(EditorEvent::DocumentModified);
             self.events.emit(EditorEvent::ViewportChanged);
         }
     }
@@ -5055,8 +5090,12 @@ impl EditorEngine {
         };
         if let Some(node) = self.document.get_node_mut(namedview) {
             if let SvgElement::SodipodiNamedView(attrs) = &mut node.element {
-                attrs.page_color = Some(color.into());
-                self.events.emit(EditorEvent::DocumentModified);
+                let color = Some(color.into());
+                if attrs.page_color != color {
+                    attrs.page_color = color;
+                    self.history.mark_unsaved();
+                    self.events.emit(EditorEvent::DocumentModified);
+                }
             }
         }
     }
@@ -5068,8 +5107,12 @@ impl EditorEngine {
         };
         if let Some(node) = self.document.get_node_mut(namedview) {
             if let SvgElement::SodipodiNamedView(attrs) = &mut node.element {
-                attrs.show_grid = Some(enabled.to_string());
-                self.events.emit(EditorEvent::DocumentModified);
+                let show_grid = Some(enabled.to_string());
+                if attrs.show_grid != show_grid {
+                    attrs.show_grid = show_grid;
+                    self.history.mark_unsaved();
+                    self.events.emit(EditorEvent::DocumentModified);
+                }
             }
         }
     }
@@ -5103,13 +5146,17 @@ impl EditorEngine {
 
         if let Some(id) = existing {
             if let Some(node) = self.document.get_node_mut(id) {
-                match &mut node.element {
-                    SvgElement::Title(attrs) => attrs.text_content = value,
-                    SvgElement::Desc(attrs) => attrs.text_content = value,
-                    SvgElement::Metadata(attrs) => attrs.raw_content = value,
-                    _ => {}
+                let current = match &mut node.element {
+                    SvgElement::Title(attrs) => &mut attrs.text_content,
+                    SvgElement::Desc(attrs) => &mut attrs.text_content,
+                    SvgElement::Metadata(attrs) => &mut attrs.raw_content,
+                    _ => return,
+                };
+                if *current != value {
+                    *current = value;
+                    self.history.mark_unsaved();
+                    self.events.emit(EditorEvent::DocumentModified);
                 }
-                self.events.emit(EditorEvent::DocumentModified);
             }
             return;
         }
@@ -5126,6 +5173,7 @@ impl EditorEngine {
         };
         let id = self.document.add_node(element);
         self.document.append_child(root, id);
+        self.history.mark_unsaved();
         self.events.emit(EditorEvent::DocumentModified);
     }
 

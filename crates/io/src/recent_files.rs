@@ -2,7 +2,7 @@
 //!
 //! Tracks recently opened files with persistence via a simple JSON file.
 
-use std::io;
+use std::io::{self, Write as _};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -74,6 +74,12 @@ impl RecentFiles {
         self.entries.clear();
     }
 
+    /// Keep at most this many entries, discarding the oldest first.
+    pub fn set_capacity(&mut self, max_entries: usize) {
+        self.max_entries = max_entries;
+        self.entries.truncate(max_entries);
+    }
+
     /// Return a slice of all entries, most-recently-opened first.
     pub fn entries(&self) -> &[RecentFileEntry] {
         &self.entries
@@ -82,7 +88,7 @@ impl RecentFiles {
     /// Persist the list to `path` as JSON.
     pub fn save_to_file(&self, path: impl AsRef<Path>) -> io::Result<()> {
         let json = serde_json::to_string_pretty(self).map_err(io::Error::other)?;
-        std::fs::write(path, json)
+        crate::write_atomic(path.as_ref(), |file| file.write_all(json.as_bytes()))
     }
 
     /// Load a previously saved list from `path`.

@@ -69,6 +69,16 @@ async fn health_endpoint_responds() {
 }
 
 #[tokio::test]
+async fn agent_route_requires_authentication_before_contacting_a_provider() {
+    let service = service();
+    let res = TestClient::post(format!("{BASE}/api/v1/agent/suggest"))
+        .json(&json!({"svg": "<svg/>", "prompt": "Add a rectangle"}))
+        .send(&service)
+        .await;
+    assert_eq!(res.status_code, Some(StatusCode::UNAUTHORIZED));
+}
+
+#[tokio::test]
 async fn document_id_route_is_reachable() {
     let service = service();
     let token = register(&service, "doc-route@example.com").await;

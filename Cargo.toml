@@ -1,4 +1,4 @@
-﻿[workspace]
+[workspace]
 resolver = "2"
 members = [
     "crates/math",
@@ -12,6 +12,7 @@ members = [
     "crates/io",
     "crates/core",
     "crates/plugin",
+    "crates/agent",
     "crates/ui",
     "crates/desktop",
     "crates/web",
@@ -21,7 +22,7 @@ members = [
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-rust-version = "1.95"
+rust-version = "1.99"
 
 [workspace.dependencies]
 # Internal crates
@@ -37,6 +38,7 @@ sivgo-io = { path = "crates/io" }
 sivgo-core = { path = "crates/core" }
 sivgo-plugin = { path = "crates/plugin" }
 sivgo-ui = { path = "crates/ui" }
+sivgo-agent = { path = "crates/agent" }
 
 # External dependencies
 kurbo = "0.13"
@@ -51,8 +53,8 @@ env_logger = "0.11"
 clap = { version = "4", features = ["derive"] }
 png = "0.18"
 tempfile = "3"
-glory = { git = "https://github.com/glory-rs/glory", branch = "main", default-features = false }
-sapid = { git = "https://github.com/sapid-ui/sapid", branch = "main" }
+glory = { version = "0.7.0", default-features = false }
+sapid = "0.7.1"
 rfd = "0.17"
 base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "tiff", "webp"] }
@@ -71,30 +73,3 @@ arboard = "3"
 [profile.release]
 opt-level = 3
 lto = "thin"
-
-# Keep Sapid and the native host on the same GitHub development sources.
-[patch.crates-io]
-glory = { git = "https://github.com/glory-rs/glory", branch = "main" }
-apace-dom = { git = "https://github.com/glory-rs/apace", branch = "main" }
-apace-traits = { git = "https://github.com/glory-rs/apace", branch = "main" }
-apace-paint = { git = "https://github.com/glory-rs/apace", branch = "main" }
-apace-shell = { git = "https://github.com/glory-rs/apace", branch = "main" }
-apace_debug_timer = { git = "https://github.com/glory-rs/apace", branch = "main" }
-stylo_takia = { git = "https://github.com/glory-rs/apace", branch = "main" }
-wingy = { git = "https://github.com/glory-rs/wingy", branch = "main" }
-takia = { git = "https://github.com/glory-rs/takia", branch = "main" }
-
-# Upstream manifests use sibling paths; map cross-repository paths for Git builds.
-[patch."https://github.com/sapid-ui/sapid"]
-glory = { git = "https://github.com/glory-rs/glory", branch = "main" }
-
-[patch."https://github.com/glory-rs/glory"]
-apace-dom = { git = "https://github.com/glory-rs/apace", branch = "main" }
-apace-traits = { git = "https://github.com/glory-rs/apace", branch = "main" }
-apace-paint = { git = "https://github.com/glory-rs/apace", branch = "main" }
-apace-shell = { git = "https://github.com/glory-rs/apace", branch = "main" }
-wingy = { git = "https://github.com/glory-rs/wingy", branch = "main" }
-
-[patch."https://github.com/glory-rs/apace"]
-wingy = { git = "https://github.com/glory-rs/wingy", branch = "main" }
-takia = { git = "https://github.com/glory-rs/takia", branch = "main" }

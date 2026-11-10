@@ -32,11 +32,11 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: |
           if [ "$RUNNER_OS" = "Windows" ]; then
-            mkdir -p D:/BuildCache/sivgo-glory/target D:/BuildCache/sivgo-glory/tmp
-            echo "CARGO_HOME=D:/BuildCache/cargo" >> "$GITHUB_ENV"
-            echo "CARGO_TARGET_DIR=D:/BuildCache/sivgo-glory/target" >> "$GITHUB_ENV"
-            echo "TMP=D:/BuildCache/sivgo-glory/tmp" >> "$GITHUB_ENV"
-            echo "TEMP=D:/BuildCache/sivgo-glory/tmp" >> "$GITHUB_ENV"
+            mkdir -p ${{ github.workspace }}/target/verification/sivgo-glory/target ${{ github.workspace }}/target/verification/sivgo-glory/tmp
+            echo "CARGO_HOME=${{ github.workspace }}/target/verification/cargo" >> "$GITHUB_ENV"
+            echo "CARGO_TARGET_DIR=${{ github.workspace }}/target/verification/sivgo-glory/target" >> "$GITHUB_ENV"
+            echo "TMP=${{ github.workspace }}/target/verification/sivgo-glory/tmp" >> "$GITHUB_ENV"
+            echo "TEMP=${{ github.workspace }}/target/verification/sivgo-glory/tmp" >> "$GITHUB_ENV"
           else
             echo "CARGO_HOME=$HOME/.cargo" >> "$GITHUB_ENV"
           fi
@@ -58,7 +58,7 @@ jobs:
           import os
           from pathlib import Path
           p = Path('.cargo/config.toml')
-          p.write_text(p.read_text().replace('D:/BuildCache/sivgo-glory/tmp', os.environ['TEMP'].replace(chr(92), '/')))
+          p.write_text(p.read_text().replace('${{ github.workspace }}/target/verification/sivgo-glory/tmp', os.environ['TEMP'].replace(chr(92), '/')))
           PY
 
       - name: Install Rust toolchain
@@ -109,11 +109,11 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: |
           if [ "$RUNNER_OS" = "Windows" ]; then
-            mkdir -p D:/BuildCache/sivgo-glory/target D:/BuildCache/sivgo-glory/tmp
-            echo "CARGO_HOME=D:/BuildCache/cargo" >> "$GITHUB_ENV"
-            echo "CARGO_TARGET_DIR=D:/BuildCache/sivgo-glory/target" >> "$GITHUB_ENV"
-            echo "TMP=D:/BuildCache/sivgo-glory/tmp" >> "$GITHUB_ENV"
-            echo "TEMP=D:/BuildCache/sivgo-glory/tmp" >> "$GITHUB_ENV"
+            mkdir -p ${{ github.workspace }}/target/verification/sivgo-glory/target ${{ github.workspace }}/target/verification/sivgo-glory/tmp
+            echo "CARGO_HOME=${{ github.workspace }}/target/verification/cargo" >> "$GITHUB_ENV"
+            echo "CARGO_TARGET_DIR=${{ github.workspace }}/target/verification/sivgo-glory/target" >> "$GITHUB_ENV"
+            echo "TMP=${{ github.workspace }}/target/verification/sivgo-glory/tmp" >> "$GITHUB_ENV"
+            echo "TEMP=${{ github.workspace }}/target/verification/sivgo-glory/tmp" >> "$GITHUB_ENV"
           else
             echo "CARGO_HOME=$HOME/.cargo" >> "$GITHUB_ENV"
           fi
@@ -135,7 +135,7 @@ jobs:
           import os
           from pathlib import Path
           p = Path('.cargo/config.toml')
-          p.write_text(p.read_text().replace('D:/BuildCache/sivgo-glory/tmp', os.environ['TEMP'].replace(chr(92), '/')))
+          p.write_text(p.read_text().replace('${{ github.workspace }}/target/verification/sivgo-glory/tmp', os.environ['TEMP'].replace(chr(92), '/')))
           PY
 
       - name: Install Rust toolchain
@@ -167,11 +167,11 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: |
           if [ "$RUNNER_OS" = "Windows" ]; then
-            mkdir -p D:/BuildCache/sivgo-glory/target D:/BuildCache/sivgo-glory/tmp
-            echo "CARGO_HOME=D:/BuildCache/cargo" >> "$GITHUB_ENV"
-            echo "CARGO_TARGET_DIR=D:/BuildCache/sivgo-glory/target" >> "$GITHUB_ENV"
-            echo "TMP=D:/BuildCache/sivgo-glory/tmp" >> "$GITHUB_ENV"
-            echo "TEMP=D:/BuildCache/sivgo-glory/tmp" >> "$GITHUB_ENV"
+            mkdir -p ${{ github.workspace }}/target/verification/sivgo-glory/target ${{ github.workspace }}/target/verification/sivgo-glory/tmp
+            echo "CARGO_HOME=${{ github.workspace }}/target/verification/cargo" >> "$GITHUB_ENV"
+            echo "CARGO_TARGET_DIR=${{ github.workspace }}/target/verification/sivgo-glory/target" >> "$GITHUB_ENV"
+            echo "TMP=${{ github.workspace }}/target/verification/sivgo-glory/tmp" >> "$GITHUB_ENV"
+            echo "TEMP=${{ github.workspace }}/target/verification/sivgo-glory/tmp" >> "$GITHUB_ENV"
           else
             echo "CARGO_HOME=$HOME/.cargo" >> "$GITHUB_ENV"
           fi
@@ -193,7 +193,7 @@ jobs:
           import os
           from pathlib import Path
           p = Path('.cargo/config.toml')
-          p.write_text(p.read_text().replace('D:/BuildCache/sivgo-glory/tmp', os.environ['TEMP'].replace(chr(92), '/')))
+          p.write_text(p.read_text().replace('${{ github.workspace }}/target/verification/sivgo-glory/tmp', os.environ['TEMP'].replace(chr(92), '/')))
           PY
 
       - name: Read MSRV from Cargo.toml
@@ -223,11 +223,11 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: |
           if [ "$RUNNER_OS" = "Windows" ]; then
-            mkdir -p D:/BuildCache/sivgo-glory/target D:/BuildCache/sivgo-glory/tmp
-            echo "CARGO_HOME=D:/BuildCache/cargo" >> "$GITHUB_ENV"
-            echo "CARGO_TARGET_DIR=D:/BuildCache/sivgo-glory/target" >> "$GITHUB_ENV"
-            echo "TMP=D:/BuildCache/sivgo-glory/tmp" >> "$GITHUB_ENV"
-            echo "TEMP=D:/BuildCache/sivgo-glory/tmp" >> "$GITHUB_ENV"
+            mkdir -p ${{ github.workspace }}/target/verification/sivgo-glory/target ${{ github.workspace }}/target/verification/sivgo-glory/tmp
+            echo "CARGO_HOME=${{ github.workspace }}/target/verification/cargo" >> "$GITHUB_ENV"
+            echo "CARGO_TARGET_DIR=${{ github.workspace }}/target/verification/sivgo-glory/target" >> "$GITHUB_ENV"
+            echo "TMP=${{ github.workspace }}/target/verification/sivgo-glory/tmp" >> "$GITHUB_ENV"
+            echo "TEMP=${{ github.workspace }}/target/verification/sivgo-glory/tmp" >> "$GITHUB_ENV"
           else
             echo "CARGO_HOME=$HOME/.cargo" >> "$GITHUB_ENV"
           fi
@@ -249,7 +249,7 @@ jobs:
           import os
           from pathlib import Path
           p = Path('.cargo/config.toml')
-          p.write_text(p.read_text().replace('D:/BuildCache/sivgo-glory/tmp', os.environ['TEMP'].replace(chr(92), '/')))
+          p.write_text(p.read_text().replace('${{ github.workspace }}/target/verification/sivgo-glory/tmp', os.environ['TEMP'].replace(chr(92), '/')))
           PY
 
       - name: Install Rust toolchain

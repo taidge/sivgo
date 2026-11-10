@@ -13,6 +13,7 @@
 //! * [`pdf_import`] -- stub/minimal PDF-to-SVG importer.
 //! * [`recent_files`] -- recent files list manager with JSON persistence.
 
+mod atomic_write;
 pub mod dxf;
 pub mod eps;
 pub mod multi_page_pdf;
@@ -22,6 +23,7 @@ pub mod recent_files;
 pub mod trace_import;
 
 // Re-export the main types/functions from the new export modules.
+pub use atomic_write::write_atomic;
 pub use dxf::{export_dxf, render_dxf, DxfExportOptions};
 pub use eps::{export_eps, render_eps, EpsExportOptions};
 pub use multi_page_pdf::{MultiPagePdfExporter, PdfMetadata, PdfPage};
@@ -34,7 +36,7 @@ use std::io::BufWriter;
 use std::io::{Read as _, Write as _};
 use std::path::Path;
 
-use flate2::read::GzDecoder;
+use flate2::read::MultiGzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use thiserror::Error;
@@ -75,7 +77,13 @@ pub enum IoError {
 // SVG Import
 // ---------------------------------------------------------------------------
 
-/// Load an SVG file from `path` and parse it into an [`sivgo_dom::SvgDocument`].
+fn is_svgz(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("svgz"))
+}
+
+/// Load SVG or SVGZ from `path` and parse it into an [`sivgo_dom::SvgDocument`].
 ///
 /// # Errors
 ///
@@ -83,6 +91,9 @@ pub enum IoError {
 /// the SVG content is malformed.
 pub fn load_svg(path: &Path) -> Result<sivgo_dom::SvgDocument, IoError> {
     log::debug!("Loading SVG from {}", path.display());
+    if is_svgz(path) {
+        return decode_svgz(fs::File::open(path)?);
+    }
     let contents = fs::read_to_string(path)?;
     let doc = sivgo_dom::parse_svg(&contents)?;
     log::info!("Loaded SVG from {} ({} nodes)", path.display(), doc.len());
@@ -93,16 +104,24 @@ pub fn load_svg(path: &Path) -> Result<sivgo_dom::SvgDocument, IoError> {
 // SVG Export
 // ---------------------------------------------------------------------------
 
-/// Serialize an [`sivgo_dom::SvgDocument`] to SVG/XML and write it to `path`.
+/// Replace the drawing at `path` atomically, compressing it for SVGZ.
 ///
 /// # Errors
 ///
 /// Returns [`IoError::Io`] if the file cannot be written.
 pub fn save_svg(doc: &sivgo_dom::SvgDocument, path: &Path) -> Result<(), IoError> {
     log::debug!("Saving SVG to {}", path.display());
-    let xml = sivgo_dom::serialize_svg(doc);
-    fs::write(path, xml.as_bytes())?;
-    log::info!("Saved SVG to {} ({} bytes)", path.display(), xml.len());
+    let bytes = if is_svgz(path) {
+        save_svgz(doc)?
+    } else {
+        sivgo_dom::serialize_svg(doc).into_bytes()
+    };
+    write_atomic(path, |file| file.write_all(&bytes))?;
+    log::info!(
+        "Saved drawing to {} ({} bytes)",
+        path.display(),
+        bytes.len()
+    );
     Ok(())
 }
 
@@ -118,20 +137,21 @@ pub fn save_svg(doc: &sivgo_dom::SvgDocument, path: &Path) -> Result<(), IoError
 /// Returns [`IoError::Gzip`] if the data cannot be decompressed, or
 /// [`IoError::Dom`] if the SVG content is malformed.
 pub fn load_svgz(data: &[u8]) -> Result<sivgo_dom::SvgDocument, IoError> {
-    log::debug!("Loading SVGZ ({} compressed bytes)", data.len());
-    let mut decoder = GzDecoder::new(data);
+    decode_svgz(data)
+}
+
+const MAX_SVGZ_XML_BYTES: usize = 64 * 1024 * 1024;
+
+fn decode_svgz(data: impl std::io::Read) -> Result<sivgo_dom::SvgDocument, IoError> {
+    let mut decoder = MultiGzDecoder::new(data).take(MAX_SVGZ_XML_BYTES as u64 + 1);
     let mut svg_string = String::new();
     decoder
         .read_to_string(&mut svg_string)
         .map_err(|e| IoError::Gzip(format!("decompression failed: {e}")))?;
-    let doc = sivgo_dom::parse_svg(&svg_string)?;
-    log::info!(
-        "Loaded SVGZ ({} compressed -> {} uncompressed bytes, {} nodes)",
-        data.len(),
-        svg_string.len(),
-        doc.len()
-    );
-    Ok(doc)
+    if svg_string.len() > MAX_SVGZ_XML_BYTES {
+        return Err(IoError::Gzip("decompressed SVG exceeds 64 MiB".into()));
+    }
+    Ok(sivgo_dom::parse_svg(&svg_string)?)
 }
 
 /// Serialize an [`sivgo_dom::SvgDocument`] to gzip-compressed SVG (SVGZ).
@@ -141,6 +161,11 @@ pub fn load_svgz(data: &[u8]) -> Result<sivgo_dom::SvgDocument, IoError> {
 /// Returns [`IoError::Gzip`] if compression fails.
 pub fn save_svgz(doc: &sivgo_dom::SvgDocument) -> Result<Vec<u8>, IoError> {
     let xml = sivgo_dom::serialize_svg(doc);
+    if xml.len() > MAX_SVGZ_XML_BYTES {
+        return Err(IoError::Gzip(
+            "SVG exceeds 64 MiB before compression".into(),
+        ));
+    }
     log::debug!("Saving SVGZ ({} uncompressed bytes)", xml.len());
     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
     encoder
@@ -1299,6 +1324,12 @@ mod tests {
         // Re-serialize to verify structural equivalence.
         let raw_xml2 = sivgo_dom::serialize_svg(&doc2);
         assert_eq!(raw_xml, raw_xml2, "SVGZ round-trip produced different SVG");
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("drawing.SVGZ");
+        save_svg(&doc, &path).unwrap();
+        assert!(fs::read(&path).unwrap().starts_with(&[0x1f, 0x8b]));
+        assert_eq!(sivgo_dom::serialize_svg(&load_svg(&path).unwrap()), raw_xml);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 ﻿# Sivgo Architecture
 
 Sivgo is an SVG editor written in Rust, designed as a modern alternative to
-Inkscape. It uses a 14-crate workspace to enforce clean separation of concerns,
+Inkscape. It uses a 15-crate workspace to separate concerns,
 with a Glory / Sapid-based desktop UI and a Salvo-based REST API backend. The current
 worktree does not include a Web/WASM frontend.
 
@@ -28,16 +28,15 @@ sivgo-desktop (binary: sivgo)
   │     ├── sivgo-dom
   │     ├── sivgo-render
   │     └── sivgo-math
+  ├── sivgo-agent       ── Provider client and static SVG proposal validation
   ├── sivgo-dom
   ├── sivgo-render
   └── sivgo-math
 
 sivgo-web (binary: sivgo-server)
-  ├── sivgo-core
   ├── sivgo-dom
   ├── sivgo-render
-  ├── sivgo-io
-  └── sivgo-math
+  └── sivgo-agent
 
 sivgo-plugin              ── Plugin system
   ├── sivgo-core
@@ -59,7 +58,7 @@ sivgo-trace               ── Bitmap-to-vector tracing
 | **sivgo-math** | Geometry primitives: points, rects, transforms, bezier paths. Wraps `kurbo`. |
 | **sivgo-dom** | SVG document tree with typed elements and presentation attributes. Parses with `roxmltree`, serializes with `xmlwriter`. Includes a DOM event/observer system. |
 | **sivgo-style** | CSS cascade and presentation attribute resolution. |
-| **sivgo-render** | Renders the DOM tree to pixels via the `RenderBackend` trait. Includes `TinySkiaBackend` (CPU), with stubs for Vello (GPU) and Canvas2D (WASM). Handles gradients, clip paths, masks, filters, markers, and image decoding. |
+| **sivgo-render** | Renders the DOM tree to pixels via `RenderBackend` and the CPU `TinySkiaBackend`. Handles gradients, clip paths, masks, filters, markers, and image decoding. |
 | **sivgo-text** | Text shaping and layout using `cosmic-text` and `swash`. |
 | **sivgo-filters** | SVG filter effect primitives (blur, color matrix, morphology, lighting, etc.). |
 | **sivgo-trace** | Bitmap-to-vector tracing (potrace-style). |
@@ -69,6 +68,7 @@ sivgo-trace               ── Bitmap-to-vector tracing
 | **sivgo-plugin** | Plugin system allowing extensions to register tools and commands. |
 | **sivgo-ui** | Glory / Sapid UI layer for the desktop app: canvas widget, toolbox, property panels, layer panel. |
 | **sivgo-desktop** | Desktop application entry point. Integrates Glory's Apace host and Sapid widgets, file dialogs (`rfd`), clipboard (`arboard`), and CLI argument parsing (`clap`). |
+| **sivgo-agent** | Conversational SVG proposals via an OpenAI-compatible provider. Validates proposed SVG before returning it to either host. |
 | **sivgo-web** | Web backend using Salvo. Exposes REST APIs for server-side SVG editing, rendering, export, assets, preferences, and plugins. Current storage is in-memory. |
 
 ## Key Design Decisions
@@ -124,3 +124,22 @@ their own keyboard handling. Window close requests use the unsaved-changes check
 `canvas_assets.rs` supplies PNG data URIs to Apace through a bounded worker; it
 does not fetch network or filesystem resources. Document pixels still come from
 Sivgo’s tiny-skia renderer. Native UI layout and painting use Apace.
+
+### Drawing files and recovery
+
+Saving SVG or SVGZ writes and syncs a staged file in the destination directory
+before replacing the existing drawing. The desktop stores recent paths in
+its configuration directory. When an unsaved drawing reaches its recovery
+deadline, the native event loop checkpoints it into a separate per-session
+draft. A file lock keeps active drafts out of the recovery prompt. Restoring
+a draft leaves the file path unset so the next save asks for a destination.
+
+### Conversational SVG editing
+
+The desktop captures the current SVG and recent conversation when the user
+sends an instruction. The provider call and thumbnail render run in a worker.
+The desktop compares the source drawing before showing and again before
+applying a proposal. The apply action swaps the drawing through the existing
+undo history, so undo restores the previous SVG and its internal node IDs.
+The authenticated Salvo endpoint uses the same provider client and returns
+suggestions for the caller to review.

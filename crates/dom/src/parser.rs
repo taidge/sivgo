@@ -84,7 +84,7 @@ fn parse_svg_on_current_stack(xml: &str) -> Result<SvgDocument, DomError> {
 /// is cheap to compute and never underestimates. Comments, CDATA sections,
 /// processing instructions and doctype declarations are skipped, and `<`/`>`
 /// inside attribute values are ignored so they cannot inflate the count.
-fn max_element_depth(xml: &str) -> u32 {
+pub fn max_element_depth(xml: &str) -> u32 {
     let bytes = xml.as_bytes();
     let mut i = 0usize;
     let mut depth: u32 = 0;

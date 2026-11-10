@@ -1,0 +1,13 @@
+[package]
+name = "sivgo-agent"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+reqwest = { workspace = true }
+roxmltree = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sivgo-dom = { workspace = true }
+thiserror = { workspace = true }

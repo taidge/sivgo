@@ -2,6 +2,7 @@
 name = "sivgo-ui"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 
 [dependencies]
 sivgo-core = { workspace = true }

@@ -53,11 +53,15 @@ impl glory::render::Render for BoundsRenderer {
 }
 
 fn find(app: &App, predicate: impl Fn(&Props) -> bool) -> NodeId {
+    find_view(app, |view| predicate(view.props))
+}
+
+fn find_view(app: &App, predicate: impl Fn(glory::render::DescriptorView<'_>) -> bool) -> NodeId {
     let tree = app.tree();
     let mut pending = tree.roots().to_vec();
     while let Some(id) = pending.pop() {
         let node = tree.node(id).unwrap();
-        if predicate(node.descriptor.view().props) {
+        if predicate(node.descriptor.view()) {
             return id;
         }
         pending.extend(node.children.iter().copied());
@@ -463,10 +467,9 @@ fn color_picker_commits_final_document_color_when_closed() {
         }),
     })
     .unwrap();
-    let trigger = find(
-        &app,
-        |props| matches!(props, Props::Button(button) if button.label == "Choose color"),
-    );
+    let trigger = find_view(&app, |view| {
+        view.name.as_deref() == Some("Open color picker")
+    });
     app.dispatch(trigger, Event::Activate).unwrap();
     app.pump().unwrap();
     let (hue, popup) = {
@@ -511,21 +514,11 @@ fn color_picker_commits_final_document_color_when_closed() {
     app.dispatch(popup, Event::Dismiss(glory::render::DismissReason::Escape))
         .unwrap();
     app.pump().unwrap();
-    assert_eq!(&*colors.borrow(), &["#00ff00ff"]);
-    assert_eq!(
-        app.tree()
-            .node(trigger)
-            .unwrap()
-            .descriptor
-            .view()
-            .semantics
-            .as_ref()
-            .and_then(|value| value.expanded),
-        Some(false)
-    );
+    assert_eq!(&*colors.borrow(), &["#00ff00"]);
+    assert!(app.tree().node(popup).unwrap().descriptor.view().hidden());
     let field = find(
         &app,
-        |props| matches!(props, Props::Input(input) if input.value == "#00ff00ff"),
+        |props| matches!(props, Props::Input(input) if input.value == "#00ff00"),
     );
     let revision = match app.tree().node(field).unwrap().descriptor.view().props {
         Props::Input(input) => input.revision,
@@ -556,5 +549,5 @@ fn color_picker_commits_final_document_color_when_closed() {
         },
     )
     .unwrap();
-    assert_eq!(&*colors.borrow(), &["#00ff00ff", "#0000ff"]);
+    assert_eq!(&*colors.borrow(), &["#00ff00", "#0000ff"]);
 }

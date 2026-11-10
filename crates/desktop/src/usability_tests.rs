@@ -146,12 +146,13 @@ fn inspector_colors_follow_svg_defaults_stylesheets_and_inheritance() {
     );
 }
 
-fn find_button(app: &glory::App, label: &str) -> glory::render::NodeId {
+pub(super) fn find_button(app: &glory::App, label: &str) -> glory::render::NodeId {
     let tree = app.tree();
     let mut pending = tree.roots().to_vec();
     while let Some(id) = pending.pop() {
         let node = tree.node(id).unwrap();
-        if matches!(node.descriptor.view().props, glory::render::Props::Button(p) if p.label == label)
+        let view = node.descriptor.view();
+        if matches!(view.props, glory::render::Props::Button(p) if view.name.as_deref() == Some(label) || p.label == label)
         {
             return id;
         }

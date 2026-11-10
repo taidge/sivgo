@@ -2,6 +2,7 @@
 name = "sivgo-web"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 
 [[bin]]
 name = "sivgo-server"
@@ -14,6 +15,7 @@ path = "src/lib.rs"
 [dependencies]
 sivgo-dom = { workspace = true }
 sivgo-render = { workspace = true }
+sivgo-agent = { workspace = true }
 salvo = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

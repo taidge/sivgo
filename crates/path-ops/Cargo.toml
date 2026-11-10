@@ -2,6 +2,7 @@
 name = "sivgo-path-ops"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 
 [dependencies]
 sivgo-math = { workspace = true }

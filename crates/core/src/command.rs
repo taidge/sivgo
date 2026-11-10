@@ -82,6 +82,11 @@ impl CommandHistory {
         self.saved_depth = Some(self.undo_stack.len());
     }
 
+    /// Mark a recovered or externally changed document as requiring a save.
+    pub fn mark_unsaved(&mut self) {
+        self.saved_depth = None;
+    }
+
     /// Whether the document has changed since the last save.
     ///
     /// Compares position in the undo stack rather than tracking a flag, so
@@ -146,6 +151,7 @@ impl CommandHistory {
     pub fn clear(&mut self) {
         self.undo_stack.clear();
         self.redo_stack.clear();
+        self.saved_depth = Some(0);
     }
 }
 

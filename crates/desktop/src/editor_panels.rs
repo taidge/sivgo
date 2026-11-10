@@ -8,7 +8,6 @@ fn build_editor_part(scope: &Scope, state: AppState, part: EditorPart) -> glory:
     let mut canvas_select_preview = state.canvas_select_preview;
     let mut canvas_tool_feedback = state.canvas_tool_feedback;
     let mut canvas_interaction_source_hit = state.canvas_interaction_source_hit;
-    let mut file_path = state.file_path;
     let mut active_tool = state.active_tool;
     let mut is_fullscreen = state.is_fullscreen;
     let mut inspector_panel = state.inspector_panel;
@@ -85,8 +84,7 @@ fn build_editor_part(scope: &Scope, state: AppState, part: EditorPart) -> glory:
     let doc_background = page_color(&eng);
     drop(eng);
 
-    let current_file = file_path.read().clone();
-    let document_name = current_document_name(current_file.as_ref());
+    let document_name = state.files.drawing_name(state);
     let active_tool_id = *active_tool.read();
     let active_tool_name = tool_label(active_tool_id);
     let active_canvas_drag_preview = *canvas_drag_preview.read();
@@ -1382,12 +1380,16 @@ on_action: Callback::new(move |action: sivgo_ui::properties_panel::PropertiesAct
                         return;
                     }
 
+                    let recent_limit_changed = matches!(action, PreferencesAction::SetRecentFilesCount(_));
                     {
                         let mut state = preferences_state.write();
                         update_preferences_state(&mut state, action.clone());
                     }
 
                     let snapshot = preferences_state.read().clone();
+                    if recent_limit_changed {
+                        state.files.set_recent_capacity(snapshot.recent_files_count as usize);
+                    }
                     let mut eng = engine.write();
                     apply_preferences_to_engine(&mut eng, &snapshot);
                     drop(eng);

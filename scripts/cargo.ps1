@@ -1,10 +1,10 @@
+
+. "$PSScriptRoot/local-build-paths.ps1"
 # Run Cargo with all compiler output, downloads, and temporary files on D:.
 # Example: ./scripts/cargo.ps1 test --workspace
 $ErrorActionPreference = 'Stop'
-$env:CARGO_TARGET_DIR = 'D:/BuildCache/sivgo-glory/target'
-$env:CARGO_HOME = 'D:/BuildCache/cargo'
-$env:TMP = 'D:/BuildCache/sivgo-glory/tmp'
-$env:TEMP = $env:TMP
+$env:CARGO_TARGET_DIR = Get-NormalCargoTarget
+
 New-Item -ItemType Directory -Force -Path $env:CARGO_TARGET_DIR, $env:CARGO_HOME, $env:TMP | Out-Null
 Push-Location (Split-Path -Parent $PSScriptRoot)
 try {

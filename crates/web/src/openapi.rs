@@ -23,6 +23,53 @@ pub fn generate_openapi_spec() -> String {
             }
         ],
         "paths": {
+            "/api/v1/agent/suggest": {
+                "post": {
+                    "summary": "Propose an SVG edit from a conversation",
+                    "description": "Sends the SVG and chat to the configured AI provider. Returns a proposal without updating any stored document.",
+                    "operationId": "suggestSvgEdit",
+                    "security": [{ "bearerAuth": [] }],
+                    "requestBody": {
+                        "required": true,
+                        "content": { "application/json": { "schema": {
+                            "type": "object",
+                            "required": ["svg", "prompt"],
+                            "properties": {
+                                "svg": { "type": "string", "maxLength": 262144 },
+                                "prompt": { "type": "string", "maxLength": 4096 },
+                                "selected_ids": { "type": "array", "maxItems": 100, "items": { "type": "string", "maxLength": 256 } },
+                                "history": { "type": "array", "maxItems": 12, "items": {
+                                    "type": "object",
+                                    "required": ["role", "content"],
+                                    "properties": {
+                                        "role": { "type": "string", "enum": ["user", "assistant"] },
+                                        "content": { "type": "string", "maxLength": 4096 }
+                                    }
+                                } }
+                            }
+                        } } }
+                    },
+                    "responses": {
+                        "200": {
+                            "description": "Suggestion, with SVG when an edit was proposed",
+                            "content": { "application/json": { "schema": {
+                                "type": "object",
+                                "required": ["message", "svg"],
+                                "properties": {
+                                    "message": { "type": "string" },
+                                    "svg": { "type": "string", "nullable": true }
+                                }
+                            } } }
+                        },
+                        "400": { "description": "Invalid input" },
+                        "401": { "description": "Unauthorized" },
+                        "429": { "description": "AI request limit reached" },
+                        "502": { "description": "Provider error or rejected proposal" },
+                        "503": { "description": "AI editing is disabled" },
+                        "504": { "description": "Provider timed out" }
+                    }
+                }
+            },
             "/api/v1/health": {
                 "get": {
                     "summary": "Health check",

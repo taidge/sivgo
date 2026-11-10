@@ -65,10 +65,16 @@ use glory::style::{Edges, Length as UiLength, Overflow, Position, Style as UiSty
 use glory::ui::events::{focus_within, resize};
 use glory::ui::{col, each, image, row, text, view, widget, Widget};
 use glory::{Cage, Scope};
+use sivgo_ui::icons::EditorIcon;
 use sivgo_ui::Callback;
+mod agent_panel;
 mod canvas_assets;
+mod file_session;
+mod menu;
 mod native_host;
+mod recovery;
 mod state;
+use menu::editor_menu;
 use native_host::{DesktopContext, NativeInput};
 use state::Signal;
 include!("editor_logic.rs");
@@ -77,6 +83,8 @@ include!("editor_panels.rs");
 #[derive(Clone, Copy)]
 struct AppState {
     engine: Signal<EditorEngine>,
+    agent: agent_panel::AgentState,
+    files: file_session::FileSession,
     render_version: Signal<u64>,
     canvas_pointer_down: Signal<bool>,
     canvas_drag_preview: Signal<Option<CanvasDragPreview>>,
@@ -127,8 +135,15 @@ impl AppState {
         );
         apply_document_defaults_to_engine(&mut engine, &loaded.document_defaults);
         apply_preferences_to_engine(&mut engine, &loaded.preferences);
+        engine.mark_saved();
         Self {
             engine: Signal::new(scope, engine),
+            agent: agent_panel::AgentState::new(scope),
+            files: file_session::FileSession::new(
+                scope,
+                (!cfg!(test)).then(desktop_config_dir),
+                loaded.preferences.recent_files_count as usize,
+            ),
             render_version: Signal::new(scope, 0),
             canvas_pointer_down: Signal::new(scope, false),
             canvas_drag_preview: Signal::new(scope, None),
@@ -169,11 +184,13 @@ impl AppState {
         }
     }
     fn action(self, action: &str) {
+        if self.files.action(self, action) {
+            return;
+        }
         handle_editor_action(
             action,
             self.engine,
             self.render_version,
-            self.file_path,
             self.is_fullscreen,
             self.inspector_panel,
             self.document_defaults,
@@ -265,119 +282,16 @@ fn menu_availability(state: AppState) -> HashMap<String, bool> {
     values
 }
 
-fn show_menu_actions(
-    scope: &Scope,
-    items: &[MenuNode],
+fn action_button(
+    label: &'static str,
+    icon: EditorIcon,
+    action: &'static str,
     state: AppState,
-    availability: glory::Bond<HashMap<String, bool>>,
-    prefix: &str,
-) -> glory::ui::Result {
-    for item in items {
-        if item.separator {
-            continue;
-        }
-        if !item.children.is_empty() {
-            let label = format!("{prefix}{} / ", item.label);
-            show_menu_actions(scope, &item.children, state, availability, &label)?;
-            continue;
-        }
-        let Some(action) = item.action.clone() else {
-            continue;
-        };
-        let enabled_key = action.clone();
-        let enabled = scope.bond(move || {
-            availability.with(|values| values.get(&enabled_key).copied().unwrap_or(false))
-        });
-        let label = format!(
-            "{prefix}{}{}",
-            item.label,
-            item.shortcut
-                .as_ref()
-                .map(|hint| format!("   {hint}"))
-                .unwrap_or_default()
-        );
-        let checked_action = action.clone();
-        let default = item.checked;
-        let label = state.render_version.map(move |_| {
-            let checked = default.map(|default| {
-                let engine = state.engine.peek();
-                match checked_action.as_str() {
-                    "view.toggle_grid" => grid_visible(&engine),
-                    "view.toggle_guides" => engine.snapping.prefs.snap_to_guides,
-                    "view.toggle_snapping" => engine.snapping.prefs.any_enabled(),
-                    _ => default,
-                }
-            });
-            format!("{}{}", if checked == Some(true) { "✓ " } else { "" }, label)
-        });
-        sapid::button()
-            .theme(sapid::Theme::dark())
-            .size(sapid::Size::ExtraSmall)
-            .label(label)
-            .enabled(enabled)
-            .variant(sapid::ButtonVariant::Secondary)
-            .on_press(move || {
-                state.menu_open.revise(|open| *open = None);
-                state.action(&action);
-            })
-            .show_in(scope)?;
-    }
-    Ok(())
-}
-
-fn editor_menu(state: AppState) -> impl Widget {
-    row()
-        .class("glory-menu-bar")
-        .style(row_style().gap(2.0).padding(Edges::all(4.0)))
-        .fill(widget(move |scope| {
-            let availability = state.render_version.map(move |_| menu_availability(state));
-            for (index, item) in default_menu_bar_with_state(true, true, true)
-                .into_iter()
-                .enumerate()
-            {
-                let children = item.children;
-                col()
-                    .style(column_style().position(Position::Relative))
-                    .fill((
-                        sapid::button()
-                            .theme(sapid::Theme::dark())
-                            .size(sapid::Size::ExtraSmall)
-                            .label(item.label)
-                            .variant(sapid::ButtonVariant::Secondary)
-                            .on_press(move || {
-                                state.menu_open.revise(|open| {
-                                    *open = if *open == Some(index) {
-                                        None
-                                    } else {
-                                        Some(index)
-                                    }
-                                })
-                            }),
-                        glory::ui::when(
-                            state.menu_open.map(move |open| *open == Some(index)),
-                            move || {
-                                let children = children.clone();
-                                col()
-                                    .class("glory-menu-popup")
-                                    .role(glory::render::Role::Menu)
-                                    .fill(widget(move |scope| {
-                                        show_menu_actions(scope, &children, state, availability, "")
-                                    }))
-                            },
-                        ),
-                    ))
-                    .show_in(scope)?;
-            }
-            Ok(())
-        }))
-}
-
-fn action_button(label: &'static str, action: &'static str, state: AppState) -> sapid::Button {
-    sapid::button()
+) -> sapid::ActionIcon {
+    sapid::action_icon(label)
         .theme(sapid::Theme::dark())
         .size(sapid::Size::ExtraSmall)
-        .label(label)
-        .variant(sapid::ButtonVariant::Secondary)
+        .icon(icon.widget())
         .enabled(state.render_version.map(move |_| match action {
             "edit.undo" => state.engine.peek().history.can_undo(),
             "edit.redo" => state.engine.peek().history.can_redo(),
@@ -401,71 +315,84 @@ fn inspector(state: AppState) -> impl Widget {
             ("Document", InspectorPanel::Document),
             ("Preferences", InspectorPanel::Preferences),
         ];
-        row()
-            .class("inspector-tabs")
-            .style(UiStyle {
-                ..row_style()
-                    .position(Position::Relative)
-                    .gap(4.0)
-                    .flex_wrap(glory::style::FlexWrap::Wrap)
-            })
-            .fill(widget(move |scope| {
-                for (label, panel) in panels {
-                    sapid::button()
-                        .theme(sapid::Theme::dark())
-                        .size(sapid::Size::ExtraSmall)
-                        .label(label)
-                        .name(format!("Show {label} panel"))
-                        .variant(sapid::ButtonVariant::Secondary)
-                        .style(state.inspector_panel.map(move |active| {
-                            let theme = sapid::Theme::dark();
-                            UiStyle {
-                                background: Some(if *active == panel {
-                                    theme.accent_soft
-                                } else {
-                                    theme.surface
-                                }),
-                                color: Some(if *active == panel {
-                                    theme.accent_text
-                                } else {
-                                    theme.foreground
-                                }),
-                                border_color: Some(if *active == panel {
-                                    theme.accent
-                                } else {
-                                    theme.border
-                                }),
-                                ..UiStyle::default()
-                            }
-                        }))
-                        .on_press(move || {
-                            state.editing.revise(|v| *v = false);
-                            state.inspector_panel.set(panel);
-                        })
-                        .show_in(scope)?;
-                }
-                Ok(())
-            }))
-            .show_in(scope)?;
+        glory::ui::when(
+            state
+                .inspector_panel
+                .map(|panel| *panel != InspectorPanel::Agent),
+            move || {
+                row()
+                    .class("inspector-tabs")
+                    .style(UiStyle {
+                        ..row_style()
+                            .position(Position::Relative)
+                            .gap(4.0)
+                            .flex_wrap(glory::style::FlexWrap::Wrap)
+                    })
+                    .fill(widget(move |scope| {
+                        for (label, panel) in panels {
+                            sapid::button()
+                                .theme(sapid::Theme::dark())
+                                .size(sapid::Size::ExtraSmall)
+                                .label(label)
+                                .name(format!("Show {label} panel"))
+                                .variant(sapid::ButtonVariant::Secondary)
+                                .style(state.inspector_panel.map(move |active| {
+                                    let theme = sapid::Theme::dark();
+                                    UiStyle {
+                                        background: Some(if *active == panel {
+                                            theme.accent_soft
+                                        } else {
+                                            theme.surface
+                                        }),
+                                        color: Some(if *active == panel {
+                                            theme.accent_text
+                                        } else {
+                                            theme.foreground
+                                        }),
+                                        border_color: Some(if *active == panel {
+                                            theme.accent
+                                        } else {
+                                            theme.border
+                                        }),
+                                        ..UiStyle::default()
+                                    }
+                                }))
+                                .on_press(move || {
+                                    state.editing.revise(|v| *v = false);
+                                    state.inspector_panel.set(panel);
+                                })
+                                .show_in(scope)?;
+                        }
+                        Ok(())
+                    }))
+            },
+        )
+        .show_in(scope)?;
         // Each panel owns its scroll viewport. Switching panels or removing
         // the last selection must not retain an out-of-range scroll position.
         let panel = scope.bond(move || {
             let _ = *state.render_version.read();
+            let panel = *state.inspector_panel.read();
             vec![(
-                *state.inspector_panel.read() as u8,
-                state.engine.peek().selection.is_empty(),
+                panel as u8,
+                panel != InspectorPanel::Agent && state.engine.peek().selection.is_empty(),
             )]
         });
         each(panel)
             .key(|key| *key)
-            .seed(move |_| {
+            .seed(move |(panel_id, _)| {
+                let agent_open = panel_id == InspectorPanel::Agent as u8;
                 col()
                     .class("inspector-content")
                     .style(
                         flexible_style()
                             .flex_direction(glory::style::FlexDirection::Column)
                             .min_height(UiLength::Px(0.0))
-                            .overflow_y(Overflow::Auto)
+                            .overflow_y(if agent_open {
+                                Overflow::Hidden
+                            } else {
+                                Overflow::Auto
+                            })
                             .overflow_x(Overflow::Hidden),
                     )
                     .fill(widget(move |scope| {
@@ -481,6 +408,9 @@ fn inspector(state: AppState) -> impl Widget {
                             InspectorPanel::Resources => EditorPart::ResourcesPanel,
                             InspectorPanel::Document => EditorPart::DocPropertiesPanel,
                             InspectorPanel::Preferences => EditorPart::PreferencesDialog,
+                            InspectorPanel::Agent => {
+                                return agent_panel::panel(state).show_in(scope)
+                            }
                         };
                         editor_part(state, part).show_in(scope)?;
                         if *state.inspector_panel.peek() == InspectorPanel::Style {
@@ -584,15 +514,15 @@ fn editor_app(state: AppState) -> impl Widget {
                     )
                     .fill((
                         text().class("brand-title").content("Sivgo"),
-                        action_button("New", "file.new", state),
-                        action_button("Open", "file.open", state),
-                        action_button("Save", "file.save", state),
-                        action_button("Export", "file.export_png", state),
-                        action_button("Undo", "edit.undo", state),
-                        action_button("Redo", "edit.redo", state),
-                        action_button("−", "view.zoom_out", state),
-                        action_button("+", "view.zoom_in", state),
-                        action_button("Fit", "view.zoom_fit", state),
+                        action_button("New drawing", EditorIcon::New, "file.new", state),
+                        action_button("Open drawing", EditorIcon::Open, "file.open", state),
+                        action_button("Save drawing", EditorIcon::Save, "file.save", state),
+                        action_button("Export PNG", EditorIcon::Export, "file.export_png", state),
+                        action_button("Undo", EditorIcon::Undo, "edit.undo", state),
+                        action_button("Redo", EditorIcon::Redo, "edit.redo", state),
+                        action_button("Zoom out", EditorIcon::ZoomOut, "view.zoom_out", state),
+                        action_button("Zoom in", EditorIcon::ZoomIn, "view.zoom_in", state),
+                        action_button("Fit drawing", EditorIcon::Fit, "view.zoom_fit", state),
                     ))
                     .fill(
                         glory::ui::input()
@@ -634,7 +564,7 @@ fn editor_app(state: AppState) -> impl Widget {
                                 let _ = *state.render_version.read();
                                 format!(
                                     "{}{}",
-                                    current_document_name(state.file_path.read().as_ref()),
+                                    state.files.drawing_name(state),
                                     if state.engine.peek().is_dirty() {
                                         " • Unsaved"
                                     } else {
@@ -642,6 +572,27 @@ fn editor_app(state: AppState) -> impl Widget {
                                     }
                                 )
                             })),
+                    )
+                    .fill(glory::ui::when(state.files.recovery_failed(), || {
+                        text()
+                            .class("recovery-warning")
+                            .content("Recovery unavailable")
+                    }))
+                    .fill(
+                        sapid::button()
+                            .theme(sapid::Theme::dark())
+                            .size(sapid::Size::ExtraSmall)
+                            .label("AI Agent")
+                            .variant(sapid::ButtonVariant::Secondary)
+                            .left_section(EditorIcon::Agent.widget())
+                            .style(state.inspector_panel.map(|panel| {
+                                UiStyle {
+                                    background: (*panel == InspectorPanel::Agent)
+                                        .then(|| sapid::Theme::dark().accent_soft),
+                                    ..UiStyle::default()
+                                }
+                            }))
+                            .on_press(move || state.agent.toggle(state)),
                     ),
                 row()
                     .style(flexible_style().min_height(UiLength::Px(0.0)))
@@ -738,18 +689,49 @@ fn launch_glory() -> Result<(), Box<dyn std::error::Error>> {
         ..Default::default()
     });
     let state = AppState::new(app.app().scope(), desktop.clone());
-    app.renderer().set_css(&format!("{CSS}\n{HOST_CSS}"));
+    app.renderer()
+        .set_css(&format!("{CSS}\n{HOST_CSS}\n{AGENT_CSS}"));
     app.mount(editor_app(state))?;
     refresh_canvas_bounds(app.app().scope(), state);
+    let mut offer_recovery = true;
     native_host::run(
         app,
         desktop,
         move |input| handle_native_input(state, input),
-        move || confirm_discard_changes(state.engine, "Close this drawing"),
+        move || state.files.close(state),
+        move || {
+            if std::mem::take(&mut offer_recovery) {
+                state.files.offer_recovery(state, false);
+            }
+            state.files.tick(state, std::time::Instant::now())
+        },
     )
 }
 
-const HOST_CSS: &str = ".inspector-tabs { z-index:2; position:relative; flex-shrink:0; background:#232328; } html,body { margin:0; padding:0; } .sivgo-glory { font-family:sans-serif; font-size:13px; background:var(--bg-1); color:var(--ink-0); } button,input,select { font-size:12px; }  .glory-canvas { user-select:none; } .glory-menu-bar { gap:2px; padding:2px; } .glory-menu-popup { position:absolute; top:100%; left:0; z-index:1000; min-width:260px; max-height:70vh; overflow:auto; background:#2c2c32; color:#e8e8ec; padding:6px; gap:3px; border:1px solid #8c929b; }";
+const HOST_CSS: &str = r#"
+.inspector-tabs { z-index:2; position:relative; flex-shrink:0; background:#232328; } html,body { margin:0; padding:0; } .sivgo-glory { font-family:sans-serif; font-size:13px; background:var(--bg-1); color:var(--ink-0); } button,input,select { font-size:12px; } .glory-canvas { user-select:none; }
+.glory-menu-bar { flex-shrink: 0; background: #24252a; border-bottom: 1px solid #34363e; }
+.glory-menu-bar .sapid-menu-trigger { border-radius: 4px; padding: 4px 10px; }
+.glory-menu-bar .sapid-menu-trigger:hover,
+.glory-menu-bar .sapid-menu-trigger[aria-expanded="true"] { background: #383b44 !important; color: #f4f6fa !important; }
+.sapid-menu { max-height: calc(100vh - 70px); overflow-y: auto; overflow-x: hidden; box-shadow: 0 8px 24px #00000060; }
+.sapid-menu-item { background: transparent !important; border: 0 !important; border-radius: 4px; flex-shrink: 0; text-align: left; }
+.sapid-menu-item-label { text-align: left; }
+.sapid-menu-item:not(:disabled):hover,
+.sapid-menu-item:not(:disabled):focus { background: #354966 !important; color: #ffffff !important; }
+.sapid-menu-item:disabled { color: #777d89 !important; }
+.sapid-menu-separator { flex-shrink: 0; }
+.editor-menu-shortcut { margin-left: 20px; text-align: right; }
+"#;
+const AGENT_CSS: &str = "
+.agent-title { font-size: 15px; font-weight: 600; color: #f1f1f4; }
+.agent-muted { font-size: 12px; line-height: 1.45; color: #b7bcc7; }
+.agent-card { background: #2c2d34; border: 1px solid #424550; border-radius: 6px; }
+.agent-user { background: #29384b; border-color: #40546e; }
+.agent-section { font-size: 12px; font-weight: 600; color: #bdcfff; }
+.agent-message { line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+.recovery-warning { color: #ffd09a; }
+";
 
 fn main() {
     env_logger::init();
@@ -1115,6 +1097,9 @@ fn cancel_canvas_input(state: AppState) {
 }
 
 fn handle_native_input(state: AppState, input: NativeInput) -> bool {
+    if matches!(input, NativeInput::BackgroundReady) {
+        return state.agent.poll(state);
+    }
     if let NativeInput::Resize { width, height } = input {
         state.window_size.set((width, height));
         return false;
@@ -1623,6 +1608,7 @@ mod glory_migration_tests {
             InspectorPanel::Resources,
             InspectorPanel::Document,
             InspectorPanel::Preferences,
+            InspectorPanel::Agent,
             InspectorPanel::Style,
         ] {
             state.inspector_panel.set(panel);
