@@ -57,6 +57,9 @@ environment. Run `cargo metadata --no-deps --format-version 1` in this workspace
 to find its effective `target_directory`. The previous Dioxus app is preserved
 on `old-dioxus`.
 
+Verified against crates.io on 2026-11-12: Glory 0.7.0 and Sapid 0.7.1 are
+the latest stable releases. Both manifest and lockfile already use them.
+
 No external database is required for the current development backend; `sivgo-web` uses in-memory stores.
 
 See the [Inkscape comparison and development history](docs/inkscape-parity.md)
@@ -128,6 +131,13 @@ step. You can ask a follow-up or start a new chat. Suggestions apply to the
 drawing state used for the request. AI editing accepts SVG source up to 256 KiB
 and proposals within the supported static SVG subset.
 
+Attribute-only proposals can target objects by XML ID. The review lists each
+attribute's old and new values. This path retains internal node IDs, selection,
+layers, and unrelated objects. Structural or text changes use a clearly labeled
+full drawing replacement. **Stop AI request** cancels the provider connection
+and restores the instruction for retrying. See the
+[agent protocol and workflow](docs/ai-agent.md) for examples and limits.
+
 The same provider integration is available at authenticated
 `POST /api/v1/agent/suggest`. Set `SIVGO_AI_ENABLE_API=1` and the provider
 environment variables on the server to enable it. Send JSON with `svg`,
@@ -135,6 +145,9 @@ environment variables on the server to enable it. Send JSON with `svg`,
 `selected_ids` (SVG XML IDs). The response contains `message` and nullable
 `svg`. Clients decide how to apply the suggestion. The endpoint shares a
 per-process limit of 10 requests per minute and two concurrent provider calls.
+Object-edit responses also contain optional `operations`, already resolved into
+`svg`. Apply the SVG once, or use operations to retain native object identities;
+do not apply both representations.
 See `/api/v1/openapi.json` for the schema and the
 [OpenAI Chat Completions reference](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)
 for the upstream protocol.

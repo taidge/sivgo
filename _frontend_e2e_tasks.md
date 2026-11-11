@@ -26,6 +26,19 @@ caused the reported regressions.
 
 ## Future Browser/Desktop Driver
 
+2026-11-12 native regression additions:
+
+- [x] Mock provider roundtrip verifies bearer credentials, selection context,
+  three conversation turns, preview, explicit apply, retained object IDs and
+  selection, and undo/redo across full SVG and object attribute proposals.
+- [x] Stop action cancels an in-flight HTTP connection, restores the prompt,
+  leaves the drawing clean and ignores background completion.
+- [x] Native panel mounting and compact tree interactions cover vector
+  disclosure, visibility and lock icons with unchanged accessible action names.
+- [x] Inspect an actual Apace raster of the proposed drawing and attribute
+  before/after review. Set `SIVGO_TEST_SNAPSHOT` to an output PNG path when running
+  the desktop agent preview test to capture it again.
+
 Future expansion: add a Playwright or Windows UI Automation layer once the
 desktop runtime exposes stable selectors or an embedded browser debug port. This
 layer should click the real toolbar, drag the real canvas, and compare

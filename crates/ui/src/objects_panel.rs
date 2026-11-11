@@ -32,7 +32,7 @@ fn object_drag_handle(
             drag_capture: Some(DragCapture::Press),
             ..Default::default()
         })))
-        .fill(text().content("⠿"))
+        .fill(crate::icons::EditorIcon::DragHandle.widget())
         .on(EventKind::Drag, move |event| {
             let Event::Drag { phase, x, y, .. } = event else {
                 return;
@@ -151,23 +151,34 @@ pub enum ObjectAction {
     ToggleLock(NodeId),
 }
 
-/// Returns a short type icon string for common SVG element types.
-fn type_icon(type_name: &str) -> &'static str {
-    match type_name {
-        "rect" => "[R]",
-        "circle" => "[C]",
-        "ellipse" => "[E]",
-        "line" => "[L]",
-        "polyline" => "[PL]",
-        "polygon" => "[PG]",
-        "path" => "[P]",
-        "text" | "tspan" | "textPath" => "[T]",
-        "image" => "[I]",
-        "g" => "[G]",
-        "use" => "[U]",
-        "svg" => "[SVG]",
-        _ => "[?]",
-    }
+/// Reuse the drawing-tool icon set for object types, with explicit resource icons.
+fn type_icon(type_name: &str) -> impl Widget {
+    use crate::icons::EditorIcon;
+    use sivgo_core::ToolId;
+    let kind = type_name.to_owned();
+    widget(move |scope| {
+        let tool = match kind.as_str() {
+            "rect" => ToolId::Rect,
+            "circle" | "ellipse" => ToolId::Ellipse,
+            "line" | "polyline" | "path" => ToolId::Pen,
+            "polygon" => ToolId::Star,
+            "text" | "tspan" | "textPath" => ToolId::Text,
+            _ => {
+                return match kind.as_str() {
+                    "image" => EditorIcon::ObjectImage,
+                    "use" => EditorIcon::ObjectClone,
+                    _ => EditorIcon::ObjectGroup,
+                }
+                .widget()
+                .show_in(scope);
+            }
+        };
+        image()
+            .source(crate::toolbar::tool_icon_uri(tool))
+            .alt(format!("{} object", kind))
+            .style(EditorIcon::style())
+            .show_in(scope)
+    })
 }
 
 /// A panel showing the full object tree of the SVG document.
@@ -232,13 +243,7 @@ impl Widget for ObjectsPanel {
             {
                 let open = scope.cage(true);
                 tree_button("", format!("Expand or collapse {}", entry.label), false)
-                    .label(open.map(|open| {
-                        if *open {
-                            "▾".to_owned()
-                        } else {
-                            "▸".to_owned()
-                        }
-                    }))
+                    .left_section(crate::layers_panel::disclosure_icon(open))
                     .on_press(move || open.revise(|value| *value = !*value))
                     .show_in(&row)?;
                 ancestors.push((entry.depth, open));
@@ -257,16 +262,17 @@ impl Widget for ObjectsPanel {
             let mut name_style = Style::new().min_width(Length::Px(0.0));
             name_style.grow = Some(1.0);
             tree_button(
-                format!("{} {}", type_icon(&entry.type_name), entry.label),
+                entry.label.clone(),
                 format!("Select object {}", entry.label),
                 entry.selected,
             )
+            .left_section(type_icon(&entry.type_name))
             .style(name_style)
             .on_press(move || callback.call(ObjectAction::Select(id)))
             .show_in(&row)?;
             let callback = self.on_action.clone();
             tree_button(
-                if entry.visible { "●" } else { "○" },
+                "",
                 format!(
                     "{} object {}",
                     if entry.visible { "Hide" } else { "Show" },
@@ -274,17 +280,33 @@ impl Widget for ObjectsPanel {
                 ),
                 false,
             )
+            .left_section(
+                if entry.visible {
+                    crate::icons::EditorIcon::Eye
+                } else {
+                    crate::icons::EditorIcon::EyeOff
+                }
+                .widget(),
+            )
             .on_press(move || callback.call(ObjectAction::ToggleVisibility(id)))
             .show_in(&row)?;
             let callback = self.on_action.clone();
             tree_button(
-                if entry.locked { "🔒" } else { "◇" },
+                "",
                 format!(
                     "{} object {}",
                     if entry.locked { "Unlock" } else { "Lock" },
                     entry.label
                 ),
                 entry.locked,
+            )
+            .left_section(
+                if entry.locked {
+                    crate::icons::EditorIcon::Lock
+                } else {
+                    crate::icons::EditorIcon::Unlock
+                }
+                .widget(),
             )
             .on_press(move || callback.call(ObjectAction::ToggleLock(id)))
             .show_in(&row)?;

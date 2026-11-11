@@ -143,3 +143,13 @@ applying a proposal. The apply action swaps the drawing through the existing
 undo history, so undo restores the previous SVG and its internal node IDs.
 The authenticated Salvo endpoint uses the same provider client and returns
 suggestions for the caller to review.
+
+Attribute-only proposals use bounded `ObjectEdit` transactions keyed by XML ID.
+The agent patches only those XML attribute ranges, validates the complete result,
+and returns both resolved SVG and operations to API clients. The desktop maps
+the revised attributes back to the original document nodes, preserving internal
+IDs, selection, hierarchy and untouched data. Structural edits continue to use
+a labeled full-document proposal. Reviews expose before/after attribute values;
+applying either form creates one undo step. A per-request cancellation channel
+drops the HTTP future when the user stops a request or resets the session.
+See [AI Agent protocol](ai-agent.md) for the wire format and limits.

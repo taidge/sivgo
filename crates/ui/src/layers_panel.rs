@@ -1,6 +1,7 @@
 //! Layers panel component with visibility, lock, opacity, and reordering.
 
 use crate::controls::{action_button, choice_field, number_field, panel};
+use crate::icons::EditorIcon;
 use glory::prelude::*;
 use sivgo_dom::NodeId;
 
@@ -117,6 +118,19 @@ pub(crate) fn tree_button(
         })
 }
 
+pub(crate) fn disclosure_icon(open: Cage<bool>) -> impl Widget {
+    glory::ui::graphic()
+        .drawing(open.map(|open| {
+            if *open {
+                EditorIcon::ChevronDown
+            } else {
+                EditorIcon::ChevronRight
+            }
+            .drawing()
+        }))
+        .style(EditorIcon::style())
+}
+
 impl Widget for LayersPanel {
     fn build(&mut self, scope: &Scope) -> Result {
         let scope = panel(scope, "layers-panel", "Layers")?;
@@ -133,13 +147,7 @@ impl Widget for LayersPanel {
             {
                 let open = scope.cage(true);
                 tree_button("", format!("Expand or collapse {}", entry.label), false)
-                    .label(open.map(|open| {
-                        if *open {
-                            "▾".to_owned()
-                        } else {
-                            "▸".to_owned()
-                        }
-                    }))
+                    .left_section(disclosure_icon(open))
                     .on_press(move || open.revise(|value| *value = !*value))
                     .show_in(&row)?;
                 ancestors.push((entry.depth, open));
@@ -158,7 +166,7 @@ impl Widget for LayersPanel {
             .show_in(&row)?;
             let callback = self.on_action.clone();
             tree_button(
-                if entry.visible { "●" } else { "○" },
+                "",
                 format!(
                     "{} layer {}",
                     if entry.visible { "Hide" } else { "Show" },
@@ -166,17 +174,33 @@ impl Widget for LayersPanel {
                 ),
                 false,
             )
+            .left_section(
+                if entry.visible {
+                    EditorIcon::Eye
+                } else {
+                    EditorIcon::EyeOff
+                }
+                .widget(),
+            )
             .on_press(move || callback.call(LayerAction::ToggleVisibility(id)))
             .show_in(&row)?;
             let callback = self.on_action.clone();
             tree_button(
-                if entry.locked { "🔒" } else { "◇" },
+                "",
                 format!(
                     "{} layer {}",
                     if entry.locked { "Unlock" } else { "Lock" },
                     entry.label
                 ),
                 entry.locked,
+            )
+            .left_section(
+                if entry.locked {
+                    EditorIcon::Lock
+                } else {
+                    EditorIcon::Unlock
+                }
+                .widget(),
             )
             .on_press(move || callback.call(LayerAction::ToggleLock(id)))
             .show_in(&row)?;

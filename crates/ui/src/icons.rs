@@ -19,10 +19,35 @@ pub enum EditorIcon {
     Agent,
     Send,
     Settings,
+    Stop,
+    NewChat,
+    Check,
+    Trash,
+    Eye,
+    EyeOff,
+    Lock,
+    Unlock,
+    ChevronDown,
+    ChevronRight,
+    ObjectGroup,
+    ObjectImage,
+    ObjectClone,
+    DragHandle,
 }
 
 impl EditorIcon {
     pub fn widget(self) -> Graphic {
+        graphic().drawing(self.drawing()).style(Self::style())
+    }
+
+    pub fn style() -> Style {
+        Style::new()
+            .width(Length::Px(16.))
+            .height(Length::Px(16.))
+            .pointer_events(PointerEvents::None)
+    }
+
+    pub fn drawing(self) -> GraphicProps {
         let lines: &[&[(f64, f64)]] = match self {
             Self::New => &[
                 &[
@@ -105,8 +130,88 @@ impl EditorIcon {
                 &[(15., 10.), (15., 14.)],
                 &[(8., 16.), (8., 20.)],
             ],
+            Self::Stop => &[&[(6., 6.), (18., 6.), (18., 18.), (6., 18.), (6., 6.)]],
+            Self::NewChat => &[
+                &[
+                    (14., 3.),
+                    (3., 3.),
+                    (3., 18.),
+                    (7., 18.),
+                    (7., 22.),
+                    (12., 18.),
+                    (21., 18.),
+                    (21., 12.),
+                ],
+                &[(19., 2.), (19., 10.)],
+                &[(15., 6.), (23., 6.)],
+            ],
+            Self::Check => &[&[(4., 12.), (9., 17.), (20., 6.)]],
+            Self::Trash => &[
+                &[(3., 6.), (21., 6.)],
+                &[(9., 6.), (9., 3.), (15., 3.), (15., 6.)],
+                &[(5., 6.), (6., 21.), (18., 21.), (19., 6.)],
+                &[(10., 10.), (10., 17.)],
+                &[(14., 10.), (14., 17.)],
+            ],
+            Self::Eye | Self::EyeOff => &[
+                &[
+                    (2., 12.),
+                    (6., 7.),
+                    (12., 5.),
+                    (18., 7.),
+                    (22., 12.),
+                    (18., 17.),
+                    (12., 19.),
+                    (6., 17.),
+                    (2., 12.),
+                ],
+                &[(9., 12.), (12., 9.), (15., 12.), (12., 15.), (9., 12.)],
+            ],
+            Self::Lock => &[
+                &[(5., 10.), (19., 10.), (19., 21.), (5., 21.), (5., 10.)],
+                &[
+                    (8., 10.),
+                    (8., 5.),
+                    (10., 3.),
+                    (14., 3.),
+                    (16., 5.),
+                    (16., 10.),
+                ],
+                &[(12., 14.), (12., 17.)],
+            ],
+            Self::Unlock => &[
+                &[(5., 10.), (19., 10.), (19., 21.), (5., 21.), (5., 10.)],
+                &[(8., 10.), (8., 5.), (10., 3.), (14., 3.), (16., 5.)],
+                &[(12., 14.), (12., 17.)],
+            ],
+            Self::ChevronDown => &[&[(6., 9.), (12., 15.), (18., 9.)]],
+            Self::ChevronRight => &[&[(9., 6.), (15., 12.), (9., 18.)]],
+            Self::ObjectGroup => &[
+                &[(3., 8.), (3., 3.), (8., 3.)],
+                &[(16., 3.), (21., 3.), (21., 8.)],
+                &[(21., 16.), (21., 21.), (16., 21.)],
+                &[(8., 21.), (3., 21.), (3., 16.)],
+                &[(8., 8.), (16., 8.), (16., 16.), (8., 16.), (8., 8.)],
+            ],
+            Self::ObjectImage => &[
+                &[(3., 3.), (21., 3.), (21., 21.), (3., 21.), (3., 3.)],
+                &[(3., 18.), (9., 12.), (13., 16.), (17., 11.), (21., 15.)],
+                &[(7., 7.), (8., 7.), (8., 8.), (7., 8.), (7., 7.)],
+            ],
+            Self::ObjectClone => &[
+                &[(8., 8.), (21., 8.), (21., 21.), (8., 21.), (8., 8.)],
+                &[(16., 5.), (16., 3.), (3., 3.), (3., 16.), (5., 16.)],
+            ],
+            Self::DragHandle => &[
+                &[(8., 5.), (8., 6.)],
+                &[(16., 5.), (16., 6.)],
+                &[(8., 11.), (8., 12.)],
+                &[(16., 11.), (16., 12.)],
+                &[(8., 17.), (8., 18.)],
+                &[(16., 17.), (16., 18.)],
+            ],
         };
-        let commands = lines
+        let mut commands: Vec<_> = lines
             .iter()
             .flat_map(|line| {
                 line.iter().enumerate().map(move |(index, &(x, y))| {
@@ -124,21 +229,20 @@ impl EditorIcon {
                 })
             })
             .collect();
-        graphic()
-            .drawing(GraphicProps {
-                commands,
-                stroke: Some(GraphicStroke {
-                    color: sapid::Theme::dark().foreground,
-                    width: 1.8,
-                    cap: StrokeCap::Round,
-                }),
-                ..Default::default()
-            })
-            .style(
-                Style::new()
-                    .width(Length::Px(16.))
-                    .height(Length::Px(16.))
-                    .pointer_events(PointerEvents::None),
-            )
+        if matches!(self, Self::EyeOff) {
+            commands.extend([
+                PathCommand::Move(GraphicPoint::new(3., 3.)),
+                PathCommand::Line(GraphicPoint::new(21., 21.)),
+            ]);
+        }
+        GraphicProps {
+            commands,
+            stroke: Some(GraphicStroke {
+                color: sapid::Theme::dark().foreground,
+                width: 1.8,
+                cap: StrokeCap::Round,
+            }),
+            ..Default::default()
+        }
     }
 }

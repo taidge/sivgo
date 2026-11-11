@@ -34,11 +34,21 @@ struct Pending {
     source: String,
     prompt: String,
     result: Receiver<WorkerResult>,
+    cancel: Option<tokio::sync::oneshot::Sender<()>>,
+}
+
+impl Drop for Pending {
+    fn drop(&mut self) {
+        if let Some(cancel) = self.cancel.take() {
+            let _ = cancel.send(());
+        }
+    }
 }
 
 struct Candidate {
     document: SvgDocument,
     thumbnail: String,
+    review: Vec<String>,
 }
 
 struct Proposal {
@@ -74,14 +84,22 @@ impl AgentState {
 
     pub(super) fn reset(self) {
         let mut session = self.session.write();
-        // Keep the in-flight slot until the worker finishes. Its result is discarded.
-        if let Some(pending) = session.pending.as_mut() {
-            pending.root = None;
-        }
+        session.pending = None;
         session.history.clear();
         session.proposal = None;
         session.status.clear();
         self.prompt.revise(String::clear);
+    }
+
+    fn cancel(self) {
+        let mut session = self.session.write();
+        if let Some(pending) = session.pending.take() {
+            if self.prompt.get_untracked().is_empty() {
+                self.prompt
+                    .revise(|prompt| *prompt = pending.prompt.clone());
+            }
+            session.status = "Request stopped. Your drawing is unchanged.".into();
+        }
     }
 
     fn send(self, state: AppState) {
@@ -110,6 +128,7 @@ impl AgentState {
             return;
         }
         let (svg, selected_ids) = selection_context(&engine, &source);
+        let original = engine.document.clone();
         drop(engine);
 
         let request = EditRequest {
@@ -119,12 +138,13 @@ impl AgentState {
             selected_ids,
         };
         let (send, result) = mpsc::channel();
+        let (cancel, cancelled) = tokio::sync::oneshot::channel();
         let wake = state.desktop.get().background_waker();
         let started = std::thread::Builder::new()
             .name("sivgo-agent".into())
             .spawn(move || {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    propose(client, request)
+                    propose(client, request, original, cancelled)
                 }))
                 .unwrap_or_else(|_| Err("Could not prepare the proposed drawing.".into()));
                 let _ = send.send(result);
@@ -137,6 +157,7 @@ impl AgentState {
                     source,
                     prompt,
                     result,
+                    cancel: Some(cancel),
                 });
                 session.status = "Waiting for the model…".into();
                 self.prompt.revise(String::clear);
@@ -167,7 +188,8 @@ impl AgentState {
             session.status =
                 "The drawing changed. Send a new instruction to review an edit.".into();
             if self.prompt.get_untracked().is_empty() {
-                self.prompt.revise(|prompt| *prompt = pending.prompt);
+                self.prompt
+                    .revise(|prompt| *prompt = pending.prompt.clone());
             }
             return true;
         }
@@ -175,7 +197,7 @@ impl AgentState {
             Ok((message, candidate)) => {
                 session.history.push(Message {
                     role: Role::User,
-                    content: pending.prompt,
+                    content: pending.prompt.clone(),
                 });
                 session.history.push(Message {
                     role: Role::Assistant,
@@ -186,14 +208,15 @@ impl AgentState {
                 session.status.clear();
                 session.proposal = candidate.map(|candidate| Proposal {
                     root: pending.root,
-                    source: pending.source,
+                    source: pending.source.clone(),
                     candidate,
                 });
             }
             Err(error) => {
                 session.status = error;
                 if self.prompt.get_untracked().is_empty() {
-                    self.prompt.revise(|prompt| *prompt = pending.prompt);
+                    self.prompt
+                        .revise(|prompt| *prompt = pending.prompt.clone());
                 }
             }
         }
@@ -256,31 +279,58 @@ fn selection_context(engine: &EditorEngine, source: &str) -> (String, Vec<String
     (svg, selected_ids)
 }
 
-fn propose(client: AgentClient, request: EditRequest) -> WorkerResult {
+fn propose(
+    client: AgentClient,
+    request: EditRequest,
+    original: SvgDocument,
+    cancelled: tokio::sync::oneshot::Receiver<()>,
+) -> WorkerResult {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .map_err(|_| "Could not start the AI connection.".to_owned())?;
     let result = runtime
-        .block_on(client.suggest(&request))
+        .block_on(async {
+            tokio::select! {
+                biased;
+                _ = cancelled => Err(sivgo_agent::AgentError::Input("Request stopped.")),
+                result = client.suggest(&request) => result,
+            }
+        })
         .map_err(|error| error.to_string())?;
     let candidate = result
         .svg
         .map(|svg| {
-            let document = sivgo_dom::parse_svg(&svg)
-                .map_err(|_| "Could not open the proposed SVG.".to_owned())?;
-            if serialize_svg(&document) == request.svg {
+            let document = if result.operations.is_empty() {
+                sivgo_dom::parse_svg(&svg)
+                    .map_err(|_| "Could not open the proposed SVG.".to_owned())?
+            } else {
+                sivgo_agent::apply_object_edits(&original, &request.svg, &result.operations)
+                    .map_err(|error| error.to_string())?
+            };
+            if serialize_svg(&document) == request.svg
+                || serialize_svg(&document) == serialize_svg(&original)
+            {
                 return Ok(None);
             }
             let thumbnail = render_thumbnail(&document)?;
+            let review = proposal_review(&request.svg, &result.operations);
             Ok::<_, String>(Some(Candidate {
                 document,
                 thumbnail,
+                review,
             }))
         })
         .transpose()?
         .flatten();
     Ok((result.message, candidate))
+}
+
+fn proposal_review(source: &str, operations: &[sivgo_agent::ObjectEdit]) -> Vec<String> {
+    if operations.is_empty() {
+        return vec!["Full drawing replacement. Review the preview before applying.".into()];
+    }
+    sivgo_agent::review_object_edits(source, operations)
 }
 
 fn render_thumbnail(document: &SvgDocument) -> Result<String, String> {
@@ -389,10 +439,21 @@ pub(super) fn panel(state: AppState) -> impl Widget {
                         .left_section(EditorIcon::Send.widget())
                         .enabled(can_send)
                         .on_press(move || agent.send(state)),
+                    glory::ui::when(
+                        agent.session.map(|session| session.pending.is_some()),
+                        move || {
+                            sapid::action_icon("Stop AI request")
+                                .theme(sapid::Theme::dark())
+                                .size(sapid::Size::ExtraSmall)
+                                .icon(EditorIcon::Stop.widget())
+                                .on_press(move || agent.cancel())
+                        },
+                    ),
                     sapid::button()
                         .theme(sapid::Theme::dark())
                         .size(sapid::Size::ExtraSmall)
                         .label("New chat")
+                        .left_section(EditorIcon::NewChat.widget())
                         .variant(sapid::ButtonVariant::Secondary)
                         .enabled(can_reset)
                         .on_press(move || agent.reset()),
@@ -512,6 +573,15 @@ fn proposal_card(state: AppState) -> impl Widget {
         })
         .fill((
             text().class("agent-section").content("Proposed drawing"),
+            glory::ui::each(agent.session.map(|session| {
+                session
+                    .proposal
+                    .as_ref()
+                    .map(|proposal| proposal.candidate.review.clone())
+                    .unwrap_or_default()
+            }))
+            .key(|line| line.clone())
+            .seed(|line| text().class("agent-message agent-muted").content(line)),
             row()
                 .style(UiStyle {
                     justify: Some(glory::style::Justify::Center),
@@ -532,12 +602,14 @@ fn proposal_card(state: AppState) -> impl Widget {
                     .theme(sapid::Theme::dark())
                     .size(sapid::Size::ExtraSmall)
                     .label("Apply edit")
+                    .left_section(EditorIcon::Check.widget())
                     .on_press(move || agent.apply(state)),
                 sapid::button()
                     .theme(sapid::Theme::dark())
                     .size(sapid::Size::ExtraSmall)
                     .variant(sapid::ButtonVariant::Secondary)
                     .label("Discard")
+                    .left_section(EditorIcon::Trash.widget())
                     .on_press(move || {
                         let mut session = agent.session.write();
                         session.proposal = None;
@@ -574,11 +646,89 @@ mod tests {
     };
 
     #[test]
+    fn stop_aborts_the_provider_connection_and_preserves_the_drawing_and_prompt() {
+        let server = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = server.local_addr().unwrap();
+        let (accepted, received) = mpsc::channel();
+        let upstream = std::thread::spawn(move || {
+            let (mut connection, _) = server.accept().unwrap();
+            connection
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut input = BufReader::new(&mut connection);
+            let mut line = String::new();
+            let mut length = 0;
+            loop {
+                line.clear();
+                input.read_line(&mut line).unwrap();
+                assert!(!line.is_empty());
+                if line == "\r\n" {
+                    break;
+                }
+                if let Some((name, value)) = line.split_once(':') {
+                    if name.eq_ignore_ascii_case("content-length") {
+                        length = value.trim().parse().unwrap();
+                    }
+                }
+            }
+            input.read_exact(&mut vec![0; length]).unwrap();
+            accepted.send(()).unwrap();
+            // The provider deliberately never responds. Cancellation must drop
+            // the actual HTTP future rather than just hide its eventual answer.
+            let mut byte = [0];
+            match input.read(&mut byte) {
+                Ok(0) => {}
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted
+                    ) => {}
+                other => panic!("provider connection was not cancelled: {other:?}"),
+            }
+        });
+        let app = glory::App::memory();
+        let state = AppState::new(app.scope(), DesktopContext::new());
+        let agent = state.agent;
+        agent
+            .base_url
+            .revise(|url| *url = format!("http://{address}/v1"));
+        agent.model.revise(|model| *model = "test-model".into());
+        agent
+            .prompt
+            .revise(|prompt| *prompt = "Make the drawing blue".into());
+        app.mount(editor_app(state)).unwrap();
+        agent.toggle(state);
+        app.settle(8).unwrap();
+        let original = serialize_svg(&state.engine.peek().document);
+        app.dispatch(
+            crate::usability_tests::find_button(&app, "Send"),
+            UiEvent::Activate,
+        )
+        .unwrap();
+        app.settle(8).unwrap();
+        received.recv_timeout(Duration::from_secs(5)).unwrap();
+        app.dispatch(
+            crate::usability_tests::find_button(&app, "Stop AI request"),
+            UiEvent::Activate,
+        )
+        .unwrap();
+        app.settle(8).unwrap();
+        assert!(agent.session.peek().pending.is_none());
+        assert_eq!(agent.prompt.get_untracked(), "Make the drawing blue");
+        assert!(agent.session.peek().history.is_empty());
+        assert_eq!(serialize_svg(&state.engine.peek().document), original);
+        assert!(!state.engine.peek().is_dirty());
+        upstream.join().unwrap();
+        assert!(!agent.poll(state));
+        assert!(agent.session.peek().proposal.is_none());
+    }
+
+    #[test]
     fn agent_preview_requires_apply_and_supports_a_follow_up_and_undo() {
         let server = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = server.local_addr().unwrap();
         let upstream = std::thread::spawn(move || {
-            for turn in 0..2 {
+            for turn in 0..3 {
                 let (mut connection, _) = server.accept().unwrap();
                 connection
                     .set_read_timeout(Some(Duration::from_secs(4)))
@@ -623,11 +773,14 @@ mod tests {
                         "message": "Added the circle.",
                         "svg": source.replace("</svg>", "<circle id='dot' cx='400' cy='300' r='80' fill='blue'/></svg>")
                     })
+                } else if turn == 1 {
+                    serde_json::json!({"message":"Changed circle color.", "svg":null,
+                        "operations":[{"id":"dot","attributes":{"fill":"red"}}]})
                 } else {
                     assert!(source.contains("circle"));
                     assert_eq!(messages[1]["content"], "Add a blue circle");
                     assert_eq!(messages[2]["content"], "Added the circle.");
-                    serde_json::json!({"message": "The circle is blue.", "svg": null})
+                    serde_json::json!({"message": "The circle is red.", "svg": null})
                 };
                 let response = serde_json::json!({
                     "choices": [{"message": {"content": answer.to_string()}, "finish_reason": "stop"}],
@@ -730,9 +883,45 @@ mod tests {
         }
         press("Apply edit");
         assert!(state.engine.peek().is_dirty());
+        let blue = serialize_svg(&state.engine.peek().document);
+        let circle_id = state.engine.peek().document.find_by_xml_id("dot").unwrap();
+        state.engine.write().selection.select(circle_id);
+        run_turn("Make the circle red");
+        assert_eq!(serialize_svg(&state.engine.peek().document), blue);
+        assert!(agent
+            .session
+            .peek()
+            .proposal
+            .as_ref()
+            .unwrap()
+            .candidate
+            .review
+            .iter()
+            .any(|line| line.contains("fill: #0000ff → red")));
+        if let Some(path) = std::env::var_os("SIVGO_TEST_SNAPSHOT") {
+            app.observe(&context).unwrap();
+            raster.draw(app.renderer()).unwrap();
+            let file = std::fs::File::create(path).unwrap();
+            let mut encoder = png::Encoder::new(file, width, height);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder
+                .write_header()
+                .unwrap()
+                .write_image_data(raster.pixels())
+                .unwrap();
+        }
+        press("Apply edit");
+        assert_eq!(
+            state.engine.peek().document.find_by_xml_id("dot"),
+            Some(circle_id)
+        );
+        assert!(state.engine.peek().selection.is_selected(circle_id));
         run_turn("What color is it?");
         assert!(agent.session.peek().proposal.is_none());
-        assert_eq!(agent.session.peek().history.len(), 4);
+        assert_eq!(agent.session.peek().history.len(), 6);
+        state.engine.write().undo();
+        assert_eq!(serialize_svg(&state.engine.peek().document), blue);
         state.engine.write().undo();
         assert_eq!(serialize_svg(&state.engine.peek().document), original);
         assert!(!state.engine.peek().is_dirty());

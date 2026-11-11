@@ -250,7 +250,7 @@ impl Widget for Toolbar {
     }
 }
 
-fn tool_icon_uri(id: ToolId) -> String {
+pub(crate) fn tool_icon_uri(id: ToolId) -> String {
     static ICONS: std::sync::OnceLock<std::collections::HashMap<ToolId, String>> =
         std::sync::OnceLock::new();
     ICONS

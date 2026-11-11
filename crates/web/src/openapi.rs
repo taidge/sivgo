@@ -57,7 +57,20 @@ pub fn generate_openapi_spec() -> String {
                                 "required": ["message", "svg"],
                                 "properties": {
                                     "message": { "type": "string" },
-                                    "svg": { "type": "string", "nullable": true }
+                                    "svg": { "type": "string", "nullable": true },
+                                    "operations": {
+                                        "type": "array", "maxItems": 100,
+                                        "description": "Optional object edits already resolved into svg. Apply svg once, or use operations to preserve native node identities; do not apply both.",
+                                        "items": {
+                                            "type": "object", "additionalProperties": false,
+                                            "required": ["id", "attributes"],
+                                            "properties": {
+                                                "id": { "type": "string", "maxLength": 256 },
+                                                "attributes": { "type": "object", "minProperties": 1, "maxProperties": 32,
+                                                    "additionalProperties": { "type": "string", "nullable": true, "maxLength": 16384 } }
+                                            }
+                                        }
+                                    }
                                 }
                             } } }
                         },
